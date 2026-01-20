@@ -3,10 +3,20 @@ import path from "node:path";
 import { openai } from "@ai-sdk/openai";
 import { sequentialize } from "@grammyjs/runner";
 import { apiThrottler } from "@grammyjs/transformer-throttler";
-import { stepCountIs, ToolLoopAgent, tool } from "ai";
+import {
+	stepCountIs,
+	ToolLoopAgent,
+	type TypedToolCall,
+	type TypedToolResult,
+	tool,
+} from "ai";
 import dotenv from "dotenv";
 import { API_CONSTANTS, Bot, InlineKeyboard } from "grammy";
-import { createRuntime } from "mcporter";
+import {
+	type ConnectionIssue,
+	createRuntime,
+	describeConnectionIssue,
+} from "mcporter";
 import { z } from "zod";
 import {
 	createIssueAgent,
@@ -212,6 +222,304 @@ async function getCachedMcpTools() {
 	}
 }
 
+function createAgentTools(options?: {
+	onCandidates?: (candidates: CandidateIssue[]) => void;
+	recentCandidates?: CandidateIssue[];
+	history?: string;
+}) {
+	return {
+		tracker_search: tool({
+			description: `Search Yandex Tracker issues in queue ${DEFAULT_TRACKER_QUEUE} using keywords from the question.`,
+			inputSchema: z.object({
+				question: z.string().describe("User question or keywords"),
+				queue: z
+					.string()
+					.optional()
+					.describe(`Queue key, defaults to ${DEFAULT_TRACKER_QUEUE}`),
+			}),
+			execute: async ({ question, queue }) => {
+				const startedAt = Date.now();
+				const commentStats = { fetched: 0, cacheHits: 0 };
+				let queueScanPages = 0;
+				const queueKey = queue ?? DEFAULT_TRACKER_QUEUE;
+				const query = buildIssuesQuery(question, queueKey);
+				const payload = {
+					query,
+					fields: [
+						"key",
+						"summary",
+						"description",
+						"created_at",
+						"updated_at",
+						"status",
+						"tags",
+						"priority",
+						"estimation",
+						"spent",
+					],
+					per_page: 100,
+					include_description: true,
+				};
+				logDebug("tracker_search", payload);
+				try {
+					const result = await mcpCallToolOnServer(
+						"yandex-tracker",
+						"issues_find",
+						payload,
+						30_000,
+					);
+					const normalized = normalizeIssuesResult(result);
+					const keywords = extractKeywords(question, 12).map((item) =>
+						item.toLowerCase(),
+					);
+					const mustInclude = extractMustIncludeKeywords(question).map((item) =>
+						item.toLowerCase(),
+					);
+					const haveKeywords = keywords.length > 0;
+
+					const issues = normalized.issues;
+					const ranked = rankIssues(issues, question);
+					const top = ranked.slice(0, 20);
+					const commentsByIssue: Record<
+						string,
+						{ text: string; truncated: boolean }
+					> = {};
+					const commentDeadline = startedAt + COMMENTS_FETCH_BUDGET_MS;
+					await fetchCommentsWithBudget(
+						top.map((entry) => entry.key ?? ""),
+						commentsByIssue,
+						commentDeadline,
+						commentStats,
+					);
+
+					let selected = top;
+					if (haveKeywords) {
+						const matches = top.filter((entry) => {
+							const summary = getIssueField(entry.issue, ["summary", "title"]);
+							const description = getIssueField(entry.issue, ["description"]);
+							const comments = entry.key
+								? (commentsByIssue[entry.key]?.text ?? "")
+								: "";
+							const haystack = `${summary} ${description} ${comments}`;
+							return matchesKeywords(haystack, keywords, mustInclude);
+						});
+						if (matches.length) {
+							selected = matches;
+							logDebug("tracker_search filtered", {
+								total: top.length,
+								matches: matches.length,
+							});
+						}
+					}
+
+					const needQueueScan =
+						mustInclude.length > 0 &&
+						!selected.some((entry) => {
+							const summary = getIssueField(entry.issue, ["summary", "title"]);
+							const description = getIssueField(entry.issue, ["description"]);
+							const comments = entry.key
+								? (commentsByIssue[entry.key]?.text ?? "")
+								: "";
+							const haystack = `${summary} ${description} ${comments}`;
+							return matchesKeywords(haystack, mustInclude, mustInclude);
+						});
+
+					const queueScanMatches: RankedIssue[] = [];
+					if (needQueueScan) {
+						const fallbackPayload = {
+							...payload,
+							query: `Queue:${queueKey}`,
+						};
+						const maxPages = Number.isFinite(QUEUE_SCAN_MAX_PAGES)
+							? Math.max(1, QUEUE_SCAN_MAX_PAGES)
+							: 5;
+
+						for (let page = 1; page <= maxPages; page += 1) {
+							const pagedPayload = { ...fallbackPayload, page };
+							logDebug("tracker_search queue_scan", pagedPayload);
+							const pageResult = await mcpCallToolOnServer(
+								"yandex-tracker",
+								"issues_find",
+								pagedPayload,
+								30_000,
+							);
+							queueScanPages = page;
+							const pageNormalized = normalizeIssuesResult(pageResult);
+							const pageIssues = pageNormalized.issues;
+							if (!pageIssues.length) break;
+							const pageRanked = rankIssues(pageIssues, question);
+							for (const entry of pageRanked) {
+								if (!entry.key) continue;
+								let commentText = commentsByIssue[entry.key]?.text ?? "";
+								if (!commentText) {
+									await fetchCommentsWithBudget(
+										[entry.key],
+										commentsByIssue,
+										commentDeadline,
+										commentStats,
+									);
+									commentText = commentsByIssue[entry.key]?.text ?? "";
+								}
+								const summary = getIssueField(entry.issue, [
+									"summary",
+									"title",
+								]);
+								const description = getIssueField(entry.issue, ["description"]);
+								const haystack = `${summary} ${description} ${commentText}`;
+								if (matchesKeywords(haystack, keywords, mustInclude)) {
+									queueScanMatches.push(entry);
+								}
+							}
+							if (queueScanMatches.length) break;
+						}
+					}
+
+					if (queueScanMatches.length) {
+						const seen = new Set(
+							selected.map((item) => item.key).filter((key) => key),
+						);
+						if (mustInclude.length > 0) {
+							selected = queueScanMatches;
+						} else {
+							selected = [
+								...selected,
+								...queueScanMatches.filter((item) => {
+									if (!item.key) return false;
+									if (seen.has(item.key)) return false;
+									seen.add(item.key);
+									return true;
+								}),
+							];
+						}
+						logDebug("tracker_search queue_matches", {
+							matches: queueScanMatches.length,
+							total: selected.length,
+							keys: queueScanMatches
+								.map((item) => item.key)
+								.filter((key) => key),
+						});
+					}
+
+					const topCandidates = selected.slice(0, 5).map((entry) => ({
+						key: entry.key,
+						summary: getIssueField(entry.issue, ["summary", "title"]),
+						score: entry.score,
+					}));
+					const topScore = selected[0]?.score ?? 0;
+					const secondScore = selected[1]?.score ?? 0;
+					const ambiguous =
+						selected.length > 1 &&
+						(topScore <= 3 || topScore - secondScore < 3);
+
+					if (options?.onCandidates) {
+						options.onCandidates(topCandidates);
+					}
+
+					logDebug("tracker_search result", {
+						count: issues.length,
+						top: selected.map((item) => item.key).filter((key) => key),
+						commentsFetched: commentStats.fetched,
+						commentsCacheHits: commentStats.cacheHits,
+						queueScanPages,
+						durationMs: Date.now() - startedAt,
+						ambiguous,
+					});
+					return {
+						issues: selected.map((item) => item.issue),
+						scores: selected.map((item) => ({
+							key: item.key,
+							score: item.score,
+						})),
+						comments: commentsByIssue,
+						ambiguous,
+						candidates: topCandidates,
+					};
+				} catch (error) {
+					logDebug("tracker_search error", { error: String(error) });
+					return { error: String(error) };
+				}
+			},
+		}),
+		mcp_call: tool({
+			description: "Call a Yandex Tracker MCP tool by name with JSON args.",
+			inputSchema: z.object({
+				tool: z.string().describe("Tool name, e.g. issues_find"),
+				args: z.record(z.unknown()).optional().describe("Tool arguments"),
+				server: z
+					.string()
+					.optional()
+					.describe("Optional MCP server name, defaults to yandex-tracker"),
+			}),
+			execute: async ({ tool: toolName, args, server }) => {
+				const toolRef = server ? `${server}.${toolName}` : toolName;
+				const { server: resolvedServer, tool: resolvedTool } =
+					resolveToolRef(toolRef);
+				const requiredArgs: Record<string, string[]> = {
+					issues_find: ["query"],
+					issues_count: ["query"],
+					issue_get: ["issue_id"],
+					issue_get_comments: ["issue_id"],
+					issue_get_links: ["issue_id"],
+					issue_get_attachments: ["issue_id"],
+					issue_get_checklist: ["issue_id"],
+					issue_get_transitions: ["issue_id"],
+					issue_execute_transition: ["issue_id", "transition_id"],
+					issue_close: ["issue_id", "resolution_id"],
+					issue_get_url: ["issue_id"],
+					queue_get_tags: ["queue_id"],
+					queue_get_versions: ["queue_id"],
+					queue_get_fields: ["queue_id"],
+					queue_get_metadata: ["queue_id"],
+					user_get: ["user_id"],
+				};
+				const needed = requiredArgs[resolvedTool];
+				const payload = (args ?? {}) as Record<string, unknown>;
+				if (needed) {
+					const missing = needed.filter(
+						(key) => payload[key] === undefined || payload[key] === "",
+					);
+					if (missing.length) {
+						return {
+							error: "missing_required_params",
+							tool: resolvedTool,
+							missing,
+						};
+					}
+				}
+				logDebug("mcp_call", {
+					server: resolvedServer,
+					tool: resolvedTool,
+					args: payload,
+				});
+				try {
+					const result = await mcpCallToolOnServer(
+						resolvedServer,
+						resolvedTool,
+						payload,
+						30_000,
+					);
+					logDebug("mcp_call result", {
+						server: resolvedServer,
+						tool: resolvedTool,
+					});
+					return result;
+				} catch (error) {
+					logDebug("mcp_call error", { error: String(error) });
+					return {
+						error: String(error),
+						server: resolvedServer,
+						tool: resolvedTool,
+					};
+				}
+			},
+		}),
+	};
+}
+
+type AgentToolSet = ReturnType<typeof createAgentTools>;
+type AgentToolCall = TypedToolCall<AgentToolSet>;
+type AgentToolResult = TypedToolResult<AgentToolSet>;
+
 async function createAgent(
 	question: string,
 	modelRef: string,
@@ -238,304 +546,11 @@ async function createAgent(
 		recentCandidates: options?.recentCandidates,
 		history: options?.history,
 	});
+	const agentTools = createAgentTools(options);
 	return new ToolLoopAgent({
 		model: openai(modelConfig.id),
 		instructions,
-		tools: {
-			tracker_search: tool({
-				description: `Search Yandex Tracker issues in queue ${DEFAULT_TRACKER_QUEUE} using keywords from the question.`,
-				inputSchema: z.object({
-					question: z.string().describe("User question or keywords"),
-					queue: z
-						.string()
-						.optional()
-						.describe(`Queue key, defaults to ${DEFAULT_TRACKER_QUEUE}`),
-				}),
-				execute: async ({ question, queue }) => {
-					const startedAt = Date.now();
-					const commentStats = { fetched: 0, cacheHits: 0 };
-					let queueScanPages = 0;
-					const queueKey = queue ?? DEFAULT_TRACKER_QUEUE;
-					const query = buildIssuesQuery(question, queueKey);
-					const payload = {
-						query,
-						fields: [
-							"key",
-							"summary",
-							"description",
-							"created_at",
-							"updated_at",
-							"status",
-							"tags",
-							"priority",
-							"estimation",
-							"spent",
-						],
-						per_page: 100,
-						include_description: true,
-					};
-					logDebug("tracker_search", payload);
-					try {
-						const result = await mcpCallToolOnServer(
-							"yandex-tracker",
-							"issues_find",
-							payload,
-							30_000,
-						);
-						const normalized = normalizeIssuesResult(result);
-						const keywords = extractKeywords(question, 12).map((item) =>
-							item.toLowerCase(),
-						);
-						const mustInclude = extractMustIncludeKeywords(question).map(
-							(item) => item.toLowerCase(),
-						);
-						const haveKeywords = keywords.length > 0;
-
-						const issues = normalized.issues;
-						const ranked = rankIssues(issues, question);
-						const top = ranked.slice(0, 20);
-						const commentsByIssue: Record<
-							string,
-							{ text: string; truncated: boolean }
-						> = {};
-						const commentDeadline = startedAt + COMMENTS_FETCH_BUDGET_MS;
-						await fetchCommentsWithBudget(
-							top.map((entry) => entry.key ?? ""),
-							commentsByIssue,
-							commentDeadline,
-							commentStats,
-						);
-
-						let selected = top;
-						if (haveKeywords) {
-							const matches = top.filter((entry) => {
-								const summary = getIssueField(entry.issue, [
-									"summary",
-									"title",
-								]);
-								const description = getIssueField(entry.issue, ["description"]);
-								const comments = entry.key
-									? (commentsByIssue[entry.key]?.text ?? "")
-									: "";
-								const haystack = `${summary} ${description} ${comments}`;
-								return matchesKeywords(haystack, keywords, mustInclude);
-							});
-							if (matches.length) {
-								selected = matches;
-								logDebug("tracker_search filtered", {
-									total: top.length,
-									matches: matches.length,
-								});
-							}
-						}
-
-						const needQueueScan =
-							mustInclude.length > 0 &&
-							!selected.some((entry) => {
-								const summary = getIssueField(entry.issue, [
-									"summary",
-									"title",
-								]);
-								const description = getIssueField(entry.issue, ["description"]);
-								const comments = entry.key
-									? (commentsByIssue[entry.key]?.text ?? "")
-									: "";
-								const haystack = `${summary} ${description} ${comments}`;
-								return matchesKeywords(haystack, mustInclude, mustInclude);
-							});
-
-						const queueScanMatches: RankedIssue[] = [];
-						if (needQueueScan) {
-							const fallbackPayload = {
-								...payload,
-								query: `Queue:${queueKey}`,
-							};
-							const maxPages = Number.isFinite(QUEUE_SCAN_MAX_PAGES)
-								? Math.max(1, QUEUE_SCAN_MAX_PAGES)
-								: 5;
-
-							for (let page = 1; page <= maxPages; page += 1) {
-								const pagedPayload = { ...fallbackPayload, page };
-								logDebug("tracker_search queue_scan", pagedPayload);
-								const pageResult = await mcpCallToolOnServer(
-									"yandex-tracker",
-									"issues_find",
-									pagedPayload,
-									30_000,
-								);
-								queueScanPages = page;
-								const pageNormalized = normalizeIssuesResult(pageResult);
-								const pageIssues = pageNormalized.issues;
-								if (!pageIssues.length) break;
-								const pageRanked = rankIssues(pageIssues, question);
-								for (const entry of pageRanked) {
-									if (!entry.key) continue;
-									let commentText = commentsByIssue[entry.key]?.text ?? "";
-									if (!commentText) {
-										await fetchCommentsWithBudget(
-											[entry.key],
-											commentsByIssue,
-											commentDeadline,
-											commentStats,
-										);
-										commentText = commentsByIssue[entry.key]?.text ?? "";
-									}
-									const summary = getIssueField(entry.issue, [
-										"summary",
-										"title",
-									]);
-									const description = getIssueField(entry.issue, [
-										"description",
-									]);
-									const haystack = `${summary} ${description} ${commentText}`;
-									if (matchesKeywords(haystack, keywords, mustInclude)) {
-										queueScanMatches.push(entry);
-									}
-								}
-								if (queueScanMatches.length) break;
-							}
-						}
-
-						if (queueScanMatches.length) {
-							const seen = new Set(
-								selected.map((item) => item.key).filter((key) => key),
-							);
-							if (mustInclude.length > 0) {
-								selected = queueScanMatches;
-							} else {
-								selected = [
-									...selected,
-									...queueScanMatches.filter((item) => {
-										if (!item.key) return false;
-										if (seen.has(item.key)) return false;
-										seen.add(item.key);
-										return true;
-									}),
-								];
-							}
-							logDebug("tracker_search queue_matches", {
-								matches: queueScanMatches.length,
-								total: selected.length,
-								keys: queueScanMatches
-									.map((item) => item.key)
-									.filter((key) => key),
-							});
-						}
-
-						const topCandidates = selected.slice(0, 5).map((entry) => ({
-							key: entry.key,
-							summary: getIssueField(entry.issue, ["summary", "title"]),
-							score: entry.score,
-						}));
-						const topScore = selected[0]?.score ?? 0;
-						const secondScore = selected[1]?.score ?? 0;
-						const ambiguous =
-							selected.length > 1 &&
-							(topScore <= 3 || topScore - secondScore < 3);
-
-						if (options?.onCandidates) {
-							options.onCandidates(topCandidates);
-						}
-
-						logDebug("tracker_search result", {
-							count: issues.length,
-							top: selected.map((item) => item.key).filter((key) => key),
-							commentsFetched: commentStats.fetched,
-							commentsCacheHits: commentStats.cacheHits,
-							queueScanPages,
-							durationMs: Date.now() - startedAt,
-							ambiguous,
-						});
-						return {
-							issues: selected.map((item) => item.issue),
-							scores: selected.map((item) => ({
-								key: item.key,
-								score: item.score,
-							})),
-							comments: commentsByIssue,
-							ambiguous,
-							candidates: topCandidates,
-						};
-					} catch (error) {
-						logDebug("tracker_search error", { error: String(error) });
-						return { error: String(error) };
-					}
-				},
-			}),
-			mcp_call: tool({
-				description: "Call a Yandex Tracker MCP tool by name with JSON args.",
-				inputSchema: z.object({
-					tool: z.string().describe("Tool name, e.g. issues_find"),
-					args: z.record(z.unknown()).optional().describe("Tool arguments"),
-					server: z
-						.string()
-						.optional()
-						.describe("Optional MCP server name, defaults to yandex-tracker"),
-				}),
-				execute: async ({ tool: toolName, args, server }) => {
-					const toolRef = server ? `${server}.${toolName}` : toolName;
-					const { server: resolvedServer, tool: resolvedTool } =
-						resolveToolRef(toolRef);
-					const requiredArgs: Record<string, string[]> = {
-						issues_find: ["query"],
-						issues_count: ["query"],
-						issue_get: ["issue_id"],
-						issue_get_comments: ["issue_id"],
-						issue_get_links: ["issue_id"],
-						issue_get_attachments: ["issue_id"],
-						issue_get_checklist: ["issue_id"],
-						issue_get_transitions: ["issue_id"],
-						issue_execute_transition: ["issue_id", "transition_id"],
-						issue_close: ["issue_id", "resolution_id"],
-						issue_get_url: ["issue_id"],
-						queue_get_tags: ["queue_id"],
-						queue_get_versions: ["queue_id"],
-						queue_get_fields: ["queue_id"],
-						queue_get_metadata: ["queue_id"],
-						user_get: ["user_id"],
-					};
-					const needed = requiredArgs[resolvedTool];
-					const payload = (args ?? {}) as Record<string, unknown>;
-					if (needed) {
-						const missing = needed.filter(
-							(key) => payload[key] === undefined || payload[key] === "",
-						);
-						if (missing.length) {
-							return {
-								error: "missing_required_params",
-								tool: resolvedTool,
-								missing,
-							};
-						}
-					}
-					logDebug("mcp_call", {
-						server: resolvedServer,
-						tool: resolvedTool,
-						args: payload,
-					});
-					try {
-						const result = await mcpCallToolOnServer(
-							resolvedServer,
-							resolvedTool,
-							payload,
-							30_000,
-						);
-						logDebug("mcp_call result", {
-							server: resolvedServer,
-							tool: resolvedTool,
-						});
-						return result;
-					} catch (error) {
-						logDebug("mcp_call error", { error: String(error) });
-						return {
-							error: String(error),
-							server: resolvedServer,
-							tool: resolvedTool,
-						};
-					}
-				},
-			}),
-		},
+		tools: agentTools,
 		stopWhen: stepCountIs(6),
 	});
 }
@@ -879,10 +894,33 @@ async function mcpCallToolOnServer<T = McpToolResult>(
 	timeoutMs: number,
 ): Promise<T> {
 	lastMcpCallAt = Date.now();
-	return runtime.callTool(server, toolName, {
-		args,
-		timeoutMs,
-	}) as Promise<T>;
+	try {
+		return (await runtime.callTool(server, toolName, {
+			args,
+			timeoutMs,
+		})) as T;
+	} catch (error) {
+		const issue =
+			(error as { connectionIssue?: ConnectionIssue })?.connectionIssue ??
+			describeConnectionIssue(error);
+		if (issue) {
+			const details: string[] = [];
+			if (issue.statusCode) details.push(`status=${issue.statusCode}`);
+			if (issue.stdioExitCode !== undefined) {
+				details.push(`exit=${issue.stdioExitCode}`);
+			}
+			if (issue.stdioSignal) details.push(`signal=${issue.stdioSignal}`);
+			const suffix = details.length ? ` (${details.join(", ")})` : "";
+			const message = `[${issue.kind}] ${issue.rawMessage}${suffix}`;
+			logDebug("mcp_call connection_issue", {
+				server,
+				tool: toolName,
+				issue: message,
+			});
+			throw new Error(message);
+		}
+		throw error;
+	}
 }
 
 async function mcpListTools(): Promise<
@@ -1453,15 +1491,24 @@ bot.on("message:text", async (ctx) => {
 					const steps =
 						(
 							result as {
-								steps?: Array<{ toolCalls?: Array<{ toolName?: string }> }>;
+								steps?: Array<{
+									toolCalls?: Array<AgentToolCall>;
+									toolResults?: Array<AgentToolResult>;
+								}>;
 							}
 						).steps ?? [];
 					const toolCalls = steps.flatMap((step) =>
-						(step.toolCalls ?? [])
-							.map((call) => call.toolName)
-							.filter((name): name is string => Boolean(name)),
+						(step.toolCalls ?? []).map((call) => call.toolName),
 					);
-					logDebug("agent steps", { count: steps.length, toolCalls, ref });
+					const toolResults = steps.flatMap((step) =>
+						(step.toolResults ?? []).map((result) => result.toolName),
+					);
+					logDebug("agent steps", {
+						count: steps.length,
+						toolCalls,
+						toolResults,
+						ref,
+					});
 				}
 				const reply = result.text?.trim();
 				if (!reply) {
