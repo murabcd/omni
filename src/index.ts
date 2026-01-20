@@ -5,7 +5,7 @@ import { sequentialize } from "@grammyjs/runner";
 import { apiThrottler } from "@grammyjs/transformer-throttler";
 import { stepCountIs, ToolLoopAgent, tool } from "ai";
 import dotenv from "dotenv";
-import { API_CONSTANTS, Bot } from "grammy";
+import { API_CONSTANTS, Bot, InlineKeyboard } from "grammy";
 import { createRuntime } from "mcporter";
 import { z } from "zod";
 import {
@@ -924,17 +924,22 @@ function formatUptime(seconds: number): string {
 	return `${secs}s`;
 }
 
+const startKeyboard = new InlineKeyboard()
+	.text("Помощь", "cmd:help")
+	.text("Статус", "cmd:status");
+
+const START_GREETING =
+	"Привет!\n\n" +
+	"Я ассистент по Yandex Tracker\n\n" +
+	"Задайте вопрос обычным текстом — отвечу по задаче, статусу или итогам\n\n" +
+	"Если есть номер задачи, укажите его, например PROJ-1234";
+
 bot.command("start", (ctx) =>
-	sendText(
-		ctx,
-		"Привет! Я бот для работы с Yandex Tracker.\n" +
-			"Команды: /help, /tools, /skills, /skill <name> <json>, /model, /status.\n" +
-			"Можно просто задать вопрос обычным текстом.",
-	),
+	sendText(ctx, START_GREETING, { reply_markup: startKeyboard }),
 );
 
-bot.command("help", (ctx) =>
-	sendText(
+async function handleHelp(ctx: { reply: (text: string) => Promise<unknown> }) {
+	await sendText(
 		ctx,
 		"Команды:\n" +
 			"/tools - список MCP инструментов Yandex Tracker\n" +
@@ -943,10 +948,12 @@ bot.command("help", (ctx) =>
 			'"Делали интеграцию с ЦИАН?"\n\n' +
 			"Пример:\n" +
 			'/tracker issues.search {"query":"Assignee: me"}',
-	),
-);
+	);
+}
 
-bot.command("tools", async (ctx) => {
+bot.command("help", (ctx) => handleHelp(ctx));
+
+async function handleTools(ctx: { reply: (text: string) => Promise<unknown> }) {
 	try {
 		const tools = await mcpListTools();
 		if (!tools.length) {
@@ -963,7 +970,9 @@ bot.command("tools", async (ctx) => {
 	} catch (error) {
 		await sendText(ctx, `Ошибка списка инструментов: ${String(error)}`);
 	}
-});
+}
+
+bot.command("tools", (ctx) => handleTools(ctx));
 
 bot.command("model", async (ctx) => {
 	const text = ctx.message?.text ?? "";
@@ -1042,7 +1051,9 @@ bot.command("model", async (ctx) => {
 	await sendText(ctx, "Команды: /model, /model list, /model set <ref>");
 });
 
-bot.command("skills", async (ctx) => {
+async function handleSkills(ctx: {
+	reply: (text: string) => Promise<unknown>;
+}) {
 	if (!runtimeSkills.length) {
 		await sendText(ctx, "Нет доступных runtime-skills.");
 		return;
@@ -1052,7 +1063,9 @@ bot.command("skills", async (ctx) => {
 		return `${skill.name}${desc}`;
 	});
 	await sendText(ctx, `Доступные runtime-skills:\n${lines.join("\n")}`);
-});
+}
+
+bot.command("skills", (ctx) => handleSkills(ctx));
 
 bot.command("skill", async (ctx) => {
 	const text = ctx.message?.text ?? "";
@@ -1113,7 +1126,9 @@ bot.command("skill", async (ctx) => {
 	}
 });
 
-bot.command("status", async (ctx) => {
+async function handleStatus(ctx: {
+	reply: (text: string) => Promise<unknown>;
+}) {
 	const uptime = formatUptime(process.uptime());
 	let mcpStatus = "ok";
 	let mcpInfo = "";
@@ -1138,6 +1153,20 @@ bot.command("status", async (ctx) => {
 			`last_mcp_call: ${lastCall}`,
 		].join("\n"),
 	);
+}
+
+bot.command("status", (ctx) => handleStatus(ctx));
+
+bot.callbackQuery(/^cmd:(help|status)$/, async (ctx) => {
+	await ctx.answerCallbackQuery();
+	const command = ctx.match?.[1];
+	if (command === "help") {
+		await handleHelp(ctx);
+		return;
+	}
+	if (command === "status") {
+		await handleStatus(ctx);
+	}
 });
 
 bot.command("tracker", async (ctx) => {
@@ -1183,20 +1212,26 @@ bot.command("tracker", async (ctx) => {
 });
 
 async function sendText(
-	ctx: { reply: (text: string) => Promise<unknown> },
+	ctx: {
+		reply: (
+			text: string,
+			options?: Record<string, unknown>,
+		) => Promise<unknown>;
+	},
 	text: string,
+	options?: Record<string, unknown>,
 ) {
 	const limit =
 		Number.isFinite(TELEGRAM_TEXT_CHUNK_LIMIT) && TELEGRAM_TEXT_CHUNK_LIMIT > 0
 			? TELEGRAM_TEXT_CHUNK_LIMIT
 			: 4000;
 	if (text.length <= limit) {
-		await ctx.reply(text);
+		await ctx.reply(text, options);
 		return;
 	}
 	for (let i = 0; i < text.length; i += limit) {
 		const chunk = text.slice(i, i + limit);
-		await ctx.reply(chunk);
+		await ctx.reply(chunk, options);
 	}
 }
 

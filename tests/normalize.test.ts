@@ -15,8 +15,8 @@ describe("extractIssueKeysFromText", () => {
 	});
 
 	it("extracts multiple keys", () => {
-		expect(
-			extractIssueKeysFromText("по проектам 2657 и 3576", PREFIX),
-		).toEqual(["PROJ-2657", "PROJ-3576"]);
+		expect(extractIssueKeysFromText("по проектам 2657 и 3576", PREFIX)).toEqual(
+			["PROJ-2657", "PROJ-3576"],
+		);
 	});
 });
