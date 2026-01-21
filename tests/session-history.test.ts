@@ -20,24 +20,36 @@ beforeEach(() => {
 });
 
 describe("session history", () => {
-	it("appends and loads messages in order", () => {
-		appendHistoryMessage(baseDir, chatId, {
+	it("returns empty history without supermemory config", async () => {
+		await appendHistoryMessage(baseDir, chatId, {
 			timestamp: "2026-01-20T00:00:00.000Z",
 			role: "user",
 			text: "hello",
 		});
-		appendHistoryMessage(baseDir, chatId, {
+		await appendHistoryMessage(baseDir, chatId, {
 			timestamp: "2026-01-20T00:00:01.000Z",
 			role: "assistant",
 			text: "hi",
 		});
 
-		const messages = loadHistoryMessages(baseDir, chatId, 20);
-		expect(messages).toHaveLength(2);
-		expect(messages[0]?.text).toBe("hello");
-		expect(messages[1]?.text).toBe("hi");
+		const messages = await loadHistoryMessages(baseDir, chatId, 20, "hello");
+		expect(messages).toHaveLength(0);
+		expect(formatHistoryForPrompt(messages)).toBe("");
+	});
 
-		const formatted = formatHistoryForPrompt(messages);
+	it("formats history messages for prompt", () => {
+		const formatted = formatHistoryForPrompt([
+			{
+				timestamp: "2026-01-20T00:00:00.000Z",
+				role: "user",
+				text: "hello",
+			},
+			{
+				timestamp: "2026-01-20T00:00:01.000Z",
+				role: "assistant",
+				text: "hi",
+			},
+		]);
 		expect(formatted).toContain("User: hello");
 		expect(formatted).toContain("Assistant: hi");
 	});
