@@ -1,38 +1,9 @@
 import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-
-export type RuntimeSkill = {
-	name: string;
-	description?: string;
-	tool: string;
-	args?: Record<string, unknown>;
-	timeoutMs?: number;
-};
+import { type RuntimeSkill, resolveToolRef } from "./skills-core.js";
 
 type RawSkill = Partial<RuntimeSkill>;
-
-export type ToolRef = {
-	server: string;
-	tool: string;
-};
-
-export function resolveToolRef(
-	toolRef: string,
-	defaultServer = "yandex-tracker",
-): ToolRef {
-	const trimmed = toolRef.trim();
-	if (!trimmed) {
-		return { server: defaultServer, tool: "" };
-	}
-	const dotIndex = trimmed.indexOf(".");
-	if (dotIndex === -1) {
-		return { server: defaultServer, tool: trimmed };
-	}
-	const server = trimmed.slice(0, dotIndex);
-	const tool = trimmed.slice(dotIndex + 1);
-	return { server, tool };
-}
 
 export async function loadSkills(baseDir = "skills"): Promise<RuntimeSkill[]> {
 	const skillsDir = path.resolve(baseDir);
@@ -117,3 +88,5 @@ export async function loadSkills(baseDir = "skills"): Promise<RuntimeSkill[]> {
 
 	return skills.sort((a, b) => a.name.localeCompare(b.name));
 }
+
+export { resolveToolRef, type RuntimeSkill };
