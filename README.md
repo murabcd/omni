@@ -1,50 +1,108 @@
-# Sales Bot (grammY + Yandex Tracker API)
+# Sales Bot
 
-Telegram bot using grammY and the Yandex Tracker HTTP API.
+<p align="center">
+  Telegram assistant for Yandex Tracker with AI search + summaries.
+</p>
 
-## Prereqs
-- Node.js 18+
-- `uvx` available in your PATH
+<div align="center">
 
-## Setup
+> **warning:** this project is production-facing. deploy with allowlist enabled.
 
-```bash
-npm install
+</div>
+
+<p align="center">
+  <a href="#features"><strong>features</strong></a> ·
+  <a href="#built-with"><strong>built with</strong></a> ·
+  <a href="#deploy-your-own"><strong>deploy your own</strong></a> ·
+  <a href="#running-locally"><strong>running locally</strong></a>
+</p>
+<br/>
+
+- Yandex Tracker search, issue lookup, and comments context
+- Natural-language answers in Russian with model fallback
+- Supermemory-backed long-term history per user
+- Runtime skills for shortcut commands
+- Telegram allowlist for safe access
+
+## Features
+
+- [GrammY](https://grammy.dev)
+  - Telegram bot runtime and webhook handling
+- [AI SDK](https://sdk.vercel.ai/docs)
+  - Model orchestration and tool calls
+  - Reference: provider-agnostic LLM interface (OpenAI used here)
+- [OpenAI](https://openai.com)
+  - Primary LLM provider for responses
+- [Yandex Tracker API](https://yandex.ru/support/tracker/en/)
+  - Issue search, status, and comments data
+- [Supermemory](https://supermemory.ai)
+  - Persistent, per-user memory
+- [Cloudflare Workers](https://developers.cloudflare.com/workers/)
+  - Webhook deployment target
+
+## Model Providers
+
+This app ships with [Openai](https://openai.com/) provider as the default. However, with the [AI SDK](https://sdk.vercel.ai/docs), you can switch LLM providers to [Ollama](https://ollama.com), [Anthropic](https://anthropic.com), [Cohere](https://cohere.com/), and [many more](https://sdk.vercel.ai/providers/ai-sdk-providers) with just a few lines of code.
+
+- Mini model (`gpt-4o-mini`): A fast and efficient model suitable for simple tasks
+- Large model (`gpt-4o`): A powerful model designed for complex tasks
+- Reasoning model (`o4-mini`): An advanced model configured for multi-step reasoning tasks
+
+## Deploy your own
+
+Cloudflare Workers is the recommended deployment target (webhook mode).
+
+1) Login
+
+```
+npx wrangler login
 ```
 
-Create a `.env` file, or export env vars:
+2) Configure secrets (do not commit these)
 
-```bash
-BOT_TOKEN=your_telegram_bot_token
-TRACKER_TOKEN=your_oauth_token_here
-TRACKER_CLOUD_ORG_ID=your_cloud_org_id_here
-ALLOWED_TG_IDS=187873791
-TELEGRAM_TIMEOUT_SECONDS=60
-TELEGRAM_TEXT_CHUNK_LIMIT=4000
-DEBUG_LOGS=0
-OPENAI_API_KEY=your_openai_api_key
-OPENAI_MODEL=openai/gpt-5.2
-SUPERMEMORY_API_KEY=your_supermemory_api_key
-DEFAULT_TRACKER_QUEUE=PROJ
-DEFAULT_ISSUE_PREFIX=PROJ
-SESSION_DIR=data/sessions
-HISTORY_MAX_MESSAGES=20
+```
+npx wrangler secret put BOT_TOKEN --config worker/wrangler.toml
+npx wrangler secret put TRACKER_TOKEN --config worker/wrangler.toml
+npx wrangler secret put OPENAI_API_KEY --config worker/wrangler.toml
+npx wrangler secret put SUPERMEMORY_API_KEY --config worker/wrangler.toml
 ```
 
-Note: `ALLOWED_TG_IDS` is required. The bot refuses to start if the allowlist is empty.
+3) Configure vars
 
-## Models
+```
+ALLOWED_TG_IDS = 
+TRACKER_CLOUD_ORG_ID = 
+OPENAI_MODEL = "openai/gpt-5.2"
+```
 
-Model catalog is defined in `config/models.json` with a primary model and fallbacks.
-Override the primary model at runtime with `OPENAI_MODEL` (use either `openai/<id>` or just `<id>`).
+These live in `worker/wrangler.toml` under `[vars]`, or can be set in the
+Cloudflare dashboard.
 
-## Run
+4) Deploy
 
-```bash
-npm run dev
+```
+npx wrangler deploy --config worker/wrangler.toml
+```
+
+5) Set Telegram webhook
+
+```
+https://api.telegram.org/bot<YOUR_TOKEN>/setWebhook?url=https://<your-worker>.workers.dev/telegram
+```
+
+## Running locally
+
+You will need to use the environment variables [defined in `.env.example`](.env.example) to run OpenChat.
+
+> Note: You should not commit your `.env` file or it will expose secrets that will allow others to control access to your various OpenAI and authentication provider accounts.
+
+```
+bun install
+bun dev
 ```
 
 ## Commands
+
 - `/start` - intro
 - `/help` - usage
 - `/tools` - list Yandex Tracker tools
@@ -56,17 +114,9 @@ npm run dev
 - `/skills` - list runtime skills
 - `/skill <name> <json>` - run a runtime skill
 - `/tracker <tool> <json>` - call a tool with JSON arguments
-- Ask plain-text questions about integrations to trigger the AI flow
-
-Example:
-
-```
-/tracker issues.search {"query":"Assignee: me"}
-```
 
 ## Skills
 
-This repo uses clawdbot-style skill docs (structured knowledge + tooling notes).
 Runtime skills are loaded from `skills/**/skill.json` at startup.
 
 - `skills/yandex-tracker/SKILL.md` - tool map and usage notes
