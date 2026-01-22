@@ -1,4 +1,14 @@
+import type {
+	DurableObject,
+	DurableObjectNamespace,
+	DurableObjectState,
+	ExecutionContext,
+	Request as WorkerRequest,
+	Response as WorkerResponse,
+} from "@cloudflare/workers-types";
+import type { Update } from "grammy/types";
 import modelsConfig from "../config/models.json";
+import runtimeSkills from "../config/runtime-skills.json";
 import { createBot } from "../src/bot.js";
 
 const startTime = Date.now();
@@ -20,7 +30,7 @@ async function getBot(env: Record<string, string | undefined>) {
 			const { bot } = await createBot({
 				env,
 				modelsConfig,
-				runtimeSkills: [],
+				runtimeSkills,
 				getUptimeSeconds,
 			});
 			await bot.init();
@@ -31,15 +41,24 @@ async function getBot(env: Record<string, string | undefined>) {
 }
 
 export default {
-	async fetch(request: Request, env: Env, _ctx: ExecutionContext) {
+	async fetch(
+		request: WorkerRequest,
+		env: Env,
+		_ctx: ExecutionContext,
+	): Promise<WorkerResponse> {
 		const url = new URL(request.url);
 		if (url.pathname !== "/telegram") {
-			return new Response("Not found", { status: 404 });
+			return toWorkerResponse(new Response("Not found", { status: 404 }));
 		}
 		if (request.method !== "POST") {
-			return new Response("Method Not Allowed", { status: 405 });
+			return toWorkerResponse(
+				new Response("Method Not Allowed", { status: 405 }),
+			);
 		}
 		const update = await request.json();
+		if (!isTelegramUpdate(update)) {
+			return toWorkerResponse(new Response("Bad Request", { status: 400 }));
+		}
 		const id = env.UPDATES_DO.idFromName("telegram-updates");
 		const stub = env.UPDATES_DO.get(id);
 		await stub.fetch("https://do/enqueue", {
@@ -47,13 +66,13 @@ export default {
 			headers: { "Content-Type": "application/json" },
 			body: JSON.stringify(update),
 		});
-		return new Response("OK", { status: 200 });
+		return toWorkerResponse(new Response("OK", { status: 200 }));
 	},
 };
 
 type QueueItem = {
 	id: string;
-	update: unknown;
+	update: Update;
 	attempt: number;
 	nextAt: number;
 };
@@ -78,26 +97,31 @@ export class TelegramUpdatesDO implements DurableObject {
 		this.env = env;
 	}
 
-	async fetch(request: Request): Promise<Response> {
+	async fetch(request: WorkerRequest): Promise<WorkerResponse> {
 		const url = new URL(request.url);
 		if (url.pathname !== "/enqueue") {
-			return new Response("Not found", { status: 404 });
+			return toWorkerResponse(new Response("Not found", { status: 404 }));
 		}
 		if (request.method !== "POST") {
-			return new Response("Method Not Allowed", { status: 405 });
+			return toWorkerResponse(
+				new Response("Method Not Allowed", { status: 405 }),
+			);
 		}
 		const update = await request.json();
+		if (!isTelegramUpdate(update)) {
+			return toWorkerResponse(new Response("Bad Request", { status: 400 }));
+		}
 		if (isCallbackUpdate(update)) {
 			const handled = await this.tryHandleCallback(update);
 			if (handled) {
 				logUpdateHandled("callback_fastpath", update);
-				return new Response("OK", { status: 200 });
+				return toWorkerResponse(new Response("OK", { status: 200 }));
 			}
 		}
 		await this.enqueueUpdate(update);
 		logUpdateHandled("queued", update);
 		this.state.waitUntil(this.processQueue());
-		return new Response("OK", { status: 200 });
+		return toWorkerResponse(new Response("OK", { status: 200 }));
 	}
 
 	async alarm(): Promise<void> {
@@ -120,10 +144,10 @@ export class TelegramUpdatesDO implements DurableObject {
 		await this.state.storage.put("state", state);
 	}
 
-	private async enqueueUpdate(update: Record<string, unknown>) {
+	private async enqueueUpdate(update: Update) {
 		const state = await this.loadState();
 		const updateId =
-			typeof update?.update_id === "number"
+			typeof update.update_id === "number"
 				? String(update.update_id)
 				: `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 		if (state.processedIds.includes(updateId)) return;
@@ -137,9 +161,9 @@ export class TelegramUpdatesDO implements DurableObject {
 		await this.saveState(state);
 	}
 
-	private async tryHandleCallback(update: Record<string, unknown>) {
+	private async tryHandleCallback(update: Update) {
 		const updateId =
-			typeof update?.update_id === "number" ? String(update.update_id) : null;
+			typeof update.update_id === "number" ? String(update.update_id) : null;
 		const state = await this.loadState();
 		if (updateId) {
 			if (state.processedIds.includes(updateId)) return true;
@@ -217,9 +241,8 @@ export class TelegramUpdatesDO implements DurableObject {
 }
 
 function isCallbackUpdate(
-	update: unknown,
-): update is Record<string, unknown> & { callback_query: unknown } {
-	if (!update || typeof update !== "object") return false;
+	update: Update,
+): update is Update & { callback_query: unknown } {
 	return "callback_query" in update;
 }
 
@@ -246,4 +269,16 @@ function logUpdateHandled(
 			update_type: updateType,
 		}),
 	);
+}
+
+function isTelegramUpdate(update: unknown): update is Update {
+	if (!update || typeof update !== "object") return false;
+	return (
+		"update_id" in update &&
+		typeof (update as { update_id?: unknown }).update_id === "number"
+	);
+}
+
+function toWorkerResponse(response: Response): WorkerResponse {
+	return response as unknown as WorkerResponse;
 }

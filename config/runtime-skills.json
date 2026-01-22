@@ -1,0 +1,150 @@
+[
+	{
+		"name": "get_global_fields",
+		"description": "Get all global fields available in Yandex Tracker.",
+		"tool": "yandex-tracker.get_global_fields"
+	},
+	{
+		"name": "get_issue_types",
+		"description": "Get all available issue types.",
+		"tool": "yandex-tracker.get_issue_types"
+	},
+	{
+		"name": "get_priorities",
+		"description": "Get all available issue priorities.",
+		"tool": "yandex-tracker.get_priorities"
+	},
+	{
+		"name": "get_resolutions",
+		"description": "Get all available issue resolutions.",
+		"tool": "yandex-tracker.get_resolutions"
+	},
+	{
+		"name": "get_statuses",
+		"description": "Get all available issue statuses.",
+		"tool": "yandex-tracker.get_statuses"
+	},
+	{
+		"name": "issue_close",
+		"description": "Close an issue with a resolution.",
+		"tool": "yandex-tracker.issue_close"
+	},
+	{
+		"name": "issue_create",
+		"description": "Create a new issue in a queue.",
+		"tool": "yandex-tracker.issue_create"
+	},
+	{
+		"name": "issue_execute_transition",
+		"description": "Execute a status transition for an issue.",
+		"tool": "yandex-tracker.issue_execute_transition"
+	},
+	{
+		"name": "issue_get",
+		"description": "Retrieve detailed issue information by ID.",
+		"tool": "yandex-tracker.issue_get"
+	},
+	{
+		"name": "issue_get_attachments",
+		"description": "Get attachments for an issue.",
+		"tool": "yandex-tracker.issue_get_attachments"
+	},
+	{
+		"name": "issue_get_checklist",
+		"description": "Get checklist items of an issue.",
+		"tool": "yandex-tracker.issue_get_checklist"
+	},
+	{
+		"name": "issue_get_comments",
+		"description": "Fetch all comments for an issue.",
+		"tool": "yandex-tracker.issue_get_comments"
+	},
+	{
+		"name": "issue_get_links",
+		"description": "Get related issue links.",
+		"tool": "yandex-tracker.issue_get_links"
+	},
+	{
+		"name": "issue_get_transitions",
+		"description": "Get possible status transitions for an issue.",
+		"tool": "yandex-tracker.issue_get_transitions"
+	},
+	{
+		"name": "issue_get_url",
+		"description": "Generate web URL for an issue.",
+		"tool": "yandex-tracker.issue_get_url"
+	},
+	{
+		"name": "issue_get_worklogs",
+		"description": "Retrieve worklog entries for issues.",
+		"tool": "yandex-tracker.issue_get_worklogs"
+	},
+	{
+		"name": "issue_update",
+		"description": "Update an existing issue.",
+		"tool": "yandex-tracker.issue_update"
+	},
+	{
+		"name": "issues_count",
+		"description": "Count issues matching a query.",
+		"tool": "yandex-tracker.issues_count"
+	},
+	{
+		"name": "issues_find",
+		"description": "Search issues using Yandex Tracker Query Language.",
+		"tool": "yandex-tracker.issues_find",
+		"args": {
+			"fields": ["key", "summary", "created_at"],
+			"per_page": 100
+		}
+	},
+	{
+		"name": "queue_get_fields",
+		"description": "Get fields for a specific queue.",
+		"tool": "yandex-tracker.queue_get_fields"
+	},
+	{
+		"name": "queue_get_metadata",
+		"description": "Get detailed metadata about a specific queue.",
+		"tool": "yandex-tracker.queue_get_metadata"
+	},
+	{
+		"name": "queue_get_tags",
+		"description": "Get all tags for a specific queue.",
+		"tool": "yandex-tracker.queue_get_tags"
+	},
+	{
+		"name": "queue_get_versions",
+		"description": "Get all versions for a specific queue.",
+		"tool": "yandex-tracker.queue_get_versions"
+	},
+	{
+		"name": "queues_get_all",
+		"description": "List all available Yandex Tracker queues.",
+		"tool": "yandex-tracker.queues_get_all",
+		"args": {
+			"fields": ["key", "name"],
+			"per_page": 100
+		}
+	},
+	{
+		"name": "user_get",
+		"description": "Get information about a specific user by login or UID.",
+		"tool": "yandex-tracker.user_get"
+	},
+	{
+		"name": "user_get_current",
+		"description": "Get information about the current authenticated user.",
+		"tool": "yandex-tracker.user_get_current"
+	},
+	{
+		"name": "users_get_all",
+		"description": "Get information about user accounts registered in the organization.",
+		"tool": "yandex-tracker.users_get_all"
+	},
+	{
+		"name": "users_search",
+		"description": "Search user by login, email, or real name.",
+		"tool": "yandex-tracker.users_search"
+	}
+]

@@ -6,7 +6,8 @@
 	"scripts": {
 		"dev": "tsx src/index.ts",
 		"start": "node --enable-source-maps dist/index.js",
-		"build": "tsc -p tsconfig.json",
+		"build": "tsx scripts/build-runtime-skills.ts && tsc -p tsconfig.json",
+		"build:skills": "tsx scripts/build-runtime-skills.ts",
 		"check": "biome check --write",
 		"type-check": "tsc --noEmit",
 		"test": "vitest run",
@@ -24,6 +25,7 @@
 	},
 	"devDependencies": {
 		"@biomejs/biome": "2.3.11",
+		"@cloudflare/workers-types": "^4.20250101.0",
 		"@types/node": "^22.10.5",
 		"@vitest/coverage-v8": "^4.0.17",
 		"husky": "^9.1.7",
