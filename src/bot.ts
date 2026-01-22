@@ -1598,10 +1598,14 @@ export async function createBot(options: CreateBotOptions) {
 			const issueKey = issueKeys[0] ?? null;
 			if (issueKey) {
 				try {
-				const [issueResult, commentResult] = await Promise.all([
-					trackerCallTool("issue_get", { issue_id: issueKey }, 30_000),
-					trackerCallTool("issue_get_comments", { issue_id: issueKey }, 30_000),
-				]);
+					const [issueResult, commentResult] = await Promise.all([
+						trackerCallTool("issue_get", { issue_id: issueKey }, 30_000),
+						trackerCallTool(
+							"issue_get_comments",
+							{ issue_id: issueKey },
+							30_000,
+						),
+					]);
 					const issueText = formatToolResult(issueResult);
 					const commentsText = extractCommentsText(commentResult).text;
 
