@@ -3,7 +3,7 @@
 </a>
 
 <p align="center">
-  Telegram Bot for Yandex Tracker Built With AI SDK.
+  Telegram Bot for Yandex Tracker Built with AI SDK.
 </p>
 
 <p align="center">
@@ -40,7 +40,6 @@
   - Semantic retrieval for relevant past context
 - [Cloudflare Workers](https://developers.cloudflare.com/workers/)
   - Serverless webhook hosting with global edge execution
-  - Fast deploys and built-in request logging
   - Durable Objects for reliable update processing with retries
 
 ## Model Providers
