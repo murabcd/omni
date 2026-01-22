@@ -19,6 +19,7 @@
 - Supermemory-backed long-term history per user
 - Runtime skills for shortcut commands
 - Telegram allowlist for safe access
+- Optional OpenAI web search tool for up-to-date answers
 
 ## Features
 
@@ -74,6 +75,13 @@ ALLOWED_TG_IDS =
 TRACKER_CLOUD_ORG_ID = 
 OPENAI_MODEL = "openai/gpt-5.2"
 SUPERMEMORY_API_KEY =
+WEB_SEARCH_ENABLED = "0"
+WEB_SEARCH_CONTEXT_SIZE = "low"
+SERVICE_NAME =
+RELEASE_VERSION =
+COMMIT_HASH =
+REGION =
+INSTANCE_ID =
 ```
 
 These live in `worker/wrangler.toml` under `[vars]`, or can be set in the

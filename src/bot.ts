@@ -10,7 +10,8 @@ import {
 	tool,
 	experimental_transcribe as transcribe,
 } from "ai";
-import { API_CONSTANTS, Bot, InlineKeyboard } from "grammy";
+import { API_CONSTANTS, Bot, type Context, InlineKeyboard } from "grammy";
+import type { Update } from "grammy/types";
 import { z } from "zod";
 import {
 	createIssueAgent,
@@ -24,6 +25,7 @@ import {
 	loadHistoryMessages,
 	setSupermemoryConfig,
 } from "./lib/context/session-history.js";
+import { createLogger } from "./lib/logger.js";
 import { buildAgentInstructions } from "./lib/prompts/agent-instructions.js";
 import {
 	expandTermVariants,
@@ -105,6 +107,20 @@ export async function createBot(options: CreateBotOptions) {
 		env.TELEGRAM_TEXT_CHUNK_LIMIT ?? "4000",
 		10,
 	);
+	const WEB_SEARCH_ENABLED = env.WEB_SEARCH_ENABLED === "1";
+	const WEB_SEARCH_CONTEXT_SIZE = env.WEB_SEARCH_CONTEXT_SIZE ?? "low";
+	const SERVICE_NAME = env.SERVICE_NAME ?? "omni";
+	const RELEASE_VERSION = env.RELEASE_VERSION ?? env.APP_VERSION ?? undefined;
+	const COMMIT_HASH = env.COMMIT_HASH ?? env.GIT_COMMIT ?? undefined;
+	const REGION = env.REGION ?? undefined;
+	const INSTANCE_ID = env.INSTANCE_ID ?? undefined;
+	const logger = createLogger({
+		service: SERVICE_NAME,
+		version: RELEASE_VERSION,
+		commit_hash: COMMIT_HASH,
+		region: REGION,
+		instance_id: INSTANCE_ID,
+	});
 
 	if (!BOT_TOKEN) throw new Error("BOT_TOKEN is unset");
 	if (!TRACKER_TOKEN) throw new Error("TRACKER_TOKEN is unset");
@@ -122,7 +138,7 @@ export async function createBot(options: CreateBotOptions) {
 		tagPrefix: SUPERMEMORY_TAG_PREFIX,
 	});
 
-	const bot = new Bot(BOT_TOKEN, {
+	const bot = new Bot<BotContext>(BOT_TOKEN, {
 		client: {
 			timeoutSeconds: Number.isFinite(TELEGRAM_TIMEOUT_SECONDS)
 				? TELEGRAM_TIMEOUT_SECONDS
@@ -156,6 +172,15 @@ export async function createBot(options: CreateBotOptions) {
 			name: "tracker_search",
 			description: `Search Yandex Tracker issues in queue ${DEFAULT_TRACKER_QUEUE} using keywords from the question.`,
 		},
+		...(WEB_SEARCH_ENABLED
+			? [
+					{
+						name: "web_search",
+						description:
+							"Search the web for up-to-date information (OpenAI web_search).",
+					},
+				]
+			: []),
 	];
 	const COMMAND_TOOL_LIST = [
 		...AGENT_TOOL_LIST,
@@ -172,18 +197,63 @@ export async function createBot(options: CreateBotOptions) {
 	];
 	let lastTrackerCallAt: number | null = null;
 
+	type LogContext = {
+		request_id?: string;
+		update_id?: number;
+		update_type?: string;
+		chat_id?: number | string;
+		user_id?: number | string;
+		username?: string;
+		message_type?: "command" | "text" | "voice" | "callback" | "other";
+		command?: string;
+		command_sub?: string;
+		tool?: string;
+		model_ref?: string;
+		model_id?: string;
+		issue_key?: string;
+		issue_key_count?: number;
+		outcome?: "success" | "error" | "blocked";
+		status_code?: number;
+		error?: { message: string; type?: string };
+	};
+
+	type BotContext = Context & { state: { logContext?: LogContext } };
+
+	function getLogContext(ctx: BotContext) {
+		return ctx.state.logContext ?? {};
+	}
+
+	function setLogContext(ctx: BotContext, update: Partial<LogContext>) {
+		ctx.state.logContext = { ...ctx.state.logContext, ...update };
+	}
+
+	function setLogError(ctx: BotContext, error: unknown) {
+		const message = error instanceof Error ? error.message : String(error);
+		const type = error instanceof Error ? error.name : undefined;
+		setLogContext(ctx, {
+			outcome: "error",
+			status_code: 500,
+			error: { message, type },
+		});
+	}
+
+	function getUpdateType(update?: Update) {
+		if (!update) return "unknown";
+		const keys = Object.keys(
+			update as unknown as Record<string, unknown>,
+		).filter((key) => key !== "update_id");
+		return keys[0] ?? "unknown";
+	}
+
 	function logDebug(message: string, data?: unknown) {
 		if (!DEBUG_LOGS) return;
-		if (data === undefined) {
-			const line = `[debug] ${message}`;
-			console.log(line);
-			options.onDebugLog?.(line);
-			return;
-		}
-		const pretty =
-			typeof data === "string" ? data : JSON.stringify(data, null, 2);
-		const line = `[debug] ${message}\n${pretty}`;
-		console.log(line);
+		const payload = {
+			event: "debug",
+			message,
+			data,
+		};
+		const line = JSON.stringify(payload);
+		logger.info(payload);
 		options.onDebugLog?.(line);
 	}
 
@@ -196,6 +266,56 @@ export async function createBot(options: CreateBotOptions) {
 		}),
 	);
 
+	bot.use(async (ctx, next) => {
+		ctx.state ??= {};
+		const startedAt = Date.now();
+		const updateId = ctx.update?.update_id;
+		const chatId = ctx.chat?.id;
+		const userId = ctx.from?.id;
+		const username = ctx.from?.username;
+		const updateType = getUpdateType(ctx.update);
+		const requestId = `tg:${updateId ?? "unknown"}:${chatId ?? userId ?? "unknown"}`;
+		setLogContext(ctx, {
+			request_id: requestId,
+			update_id: updateId,
+			chat_id: chatId,
+			user_id: userId,
+			username,
+			update_type: updateType,
+		});
+
+		try {
+			await next();
+			const context = getLogContext(ctx);
+			if (!context.outcome) {
+				setLogContext(ctx, { outcome: "success" });
+			}
+		} catch (error) {
+			setLogError(ctx, error);
+			throw error;
+		} finally {
+			const durationMs = Date.now() - startedAt;
+			const context = getLogContext(ctx);
+			const statusCode =
+				context.status_code ??
+				(context.outcome === "blocked"
+					? 403
+					: context.outcome === "error"
+						? 500
+						: 200);
+			if (!context.status_code) {
+				setLogContext(ctx, { status_code: statusCode });
+			}
+			const finalContext = getLogContext(ctx);
+			const level = finalContext.outcome === "error" ? "error" : "info";
+			logger[level]({
+				event: "telegram_update",
+				...finalContext,
+				duration_ms: durationMs,
+			});
+		}
+	});
+
 	const allowedIds = new Set(
 		ALLOWED_TG_IDS.split(",")
 			.map((value: string) => value.trim())
@@ -206,6 +326,10 @@ export async function createBot(options: CreateBotOptions) {
 		if (allowedIds.size === 0) return next();
 		const userId = ctx.from?.id?.toString() ?? "";
 		if (!allowedIds.has(userId)) {
+			setLogContext(ctx, {
+				outcome: "blocked",
+				status_code: 403,
+			});
 			return sendText(ctx, "Доступ запрещен.");
 		}
 		return next();
@@ -244,8 +368,18 @@ export async function createBot(options: CreateBotOptions) {
 		chatId?: string;
 	}) {
 		const memoryTools = buildMemoryTools(options?.chatId);
+		const webSearchContextSize = resolveWebSearchContextSize(
+			WEB_SEARCH_CONTEXT_SIZE.trim().toLowerCase(),
+		);
 		return {
 			...memoryTools,
+			...(WEB_SEARCH_ENABLED
+				? {
+						web_search: openai.tools.webSearch({
+							searchContextSize: webSearchContextSize,
+						}),
+					}
+				: {}),
 			tracker_search: tool({
 				description: `Search Yandex Tracker issues in queue ${DEFAULT_TRACKER_QUEUE} using keywords from the question.`,
 				inputSchema: z.object({
@@ -457,6 +591,13 @@ export async function createBot(options: CreateBotOptions) {
 		return supermemoryTools(SUPERMEMORY_API_KEY, options);
 	}
 
+	function resolveWebSearchContextSize(
+		value: string,
+	): "low" | "medium" | "high" {
+		if (value === "medium" || value === "high") return value;
+		return "low";
+	}
+
 	async function createAgent(
 		question: string,
 		modelRef: string,
@@ -466,6 +607,7 @@ export async function createBot(options: CreateBotOptions) {
 			recentCandidates?: CandidateIssue[];
 			history?: string;
 			chatId?: string;
+			userName?: string;
 		},
 	) {
 		const tools = await getAgentTools();
@@ -483,6 +625,7 @@ export async function createBot(options: CreateBotOptions) {
 			toolLines,
 			recentCandidates: options?.recentCandidates,
 			history: options?.history,
+			userName: options?.userName,
 		});
 		const agentTools = createAgentTools(options);
 		return new ToolLoopAgent({
@@ -930,6 +1073,7 @@ export async function createBot(options: CreateBotOptions) {
 		"Если есть номер задачи, укажите его, например PROJ-1234";
 
 	bot.command("start", (ctx) => {
+		setLogContext(ctx, { command: "/start", message_type: "command" });
 		const memoryId = ctx.from?.id?.toString() ?? "";
 		if (memoryId) {
 			clearHistoryMessages(SESSION_DIR, memoryId);
@@ -952,7 +1096,10 @@ export async function createBot(options: CreateBotOptions) {
 		);
 	}
 
-	bot.command("help", (ctx) => handleHelp(ctx));
+	bot.command("help", (ctx) => {
+		setLogContext(ctx, { command: "/help", message_type: "command" });
+		return handleHelp(ctx);
+	});
 
 	async function handleTools(ctx: {
 		reply: (text: string) => Promise<unknown>;
@@ -975,11 +1122,16 @@ export async function createBot(options: CreateBotOptions) {
 		}
 	}
 
-	bot.command("tools", (ctx) => handleTools(ctx));
+	bot.command("tools", (ctx) => {
+		setLogContext(ctx, { command: "/tools", message_type: "command" });
+		return handleTools(ctx);
+	});
 
 	bot.command("model", async (ctx) => {
+		setLogContext(ctx, { command: "/model", message_type: "command" });
 		const text = ctx.message?.text ?? "";
 		const [, sub, ...rest] = text.split(" ");
+		if (sub) setLogContext(ctx, { command_sub: sub });
 
 		if (!sub) {
 			const fallbacks = activeModelFallbacks.length
@@ -1033,6 +1185,7 @@ export async function createBot(options: CreateBotOptions) {
 	});
 
 	bot.command("skills", async (ctx) => {
+		setLogContext(ctx, { command: "/skills", message_type: "command" });
 		if (!runtimeSkills.length) {
 			await sendText(ctx, "Нет доступных runtime-skills.");
 			return;
@@ -1045,6 +1198,7 @@ export async function createBot(options: CreateBotOptions) {
 	});
 
 	bot.command("skill", async (ctx) => {
+		setLogContext(ctx, { command: "/skill", message_type: "command" });
 		const text = ctx.message?.text ?? "";
 		const [, skillName, ...rest] = text.split(" ");
 		if (!skillName) {
@@ -1126,27 +1280,35 @@ export async function createBot(options: CreateBotOptions) {
 		);
 	}
 
-	bot.command("status", (ctx) => handleStatus(ctx));
+	bot.command("status", (ctx) => {
+		setLogContext(ctx, { command: "/status", message_type: "command" });
+		return handleStatus(ctx);
+	});
 
 	bot.callbackQuery(/^cmd:(help|status)$/, async (ctx) => {
+		setLogContext(ctx, { message_type: "callback" });
 		await ctx.answerCallbackQuery();
 		const command = ctx.match?.[1];
 		if (command === "help") {
+			setLogContext(ctx, { command: "cmd:help" });
 			await handleHelp(ctx);
 			return;
 		}
 		if (command === "status") {
+			setLogContext(ctx, { command: "cmd:status" });
 			await handleStatus(ctx);
 		}
 	});
 
 	bot.command("tracker", async (ctx) => {
+		setLogContext(ctx, { command: "/tracker", message_type: "command" });
 		const text = ctx.message?.text ?? "";
 		const [, toolName, ...rest] = text.split(" ");
 		if (!toolName) {
 			await sendText(ctx, "Использование: /tracker <tool> <json>");
 			return;
 		}
+		setLogContext(ctx, { tool: toolName });
 
 		const rawArgs = rest.join(" ").trim();
 		let args: Record<string, unknown> = {};
@@ -1182,7 +1344,6 @@ export async function createBot(options: CreateBotOptions) {
 		text: string,
 		options?: Record<string, unknown>,
 	) {
-		const formatted = formatTelegram(text);
 		const limit =
 			Number.isFinite(TELEGRAM_TEXT_CHUNK_LIMIT) &&
 			TELEGRAM_TEXT_CHUNK_LIMIT > 0
@@ -1191,13 +1352,33 @@ export async function createBot(options: CreateBotOptions) {
 		const replyOptions = options?.parse_mode
 			? options
 			: { ...(options ?? {}), parse_mode: "HTML" };
-		if (formatted.length <= limit) {
-			await ctx.reply(formatted, replyOptions);
+		const formatted = formatTelegram(text);
+
+		try {
+			if (formatted.length <= limit) {
+				await ctx.reply(formatted, replyOptions);
+				return;
+			}
+			for (let i = 0; i < formatted.length; i += limit) {
+				const chunk = formatted.slice(i, i + limit);
+				await ctx.reply(chunk, replyOptions);
+			}
+			return;
+		} catch (error) {
+			logDebug("telegram html reply failed, retrying as plain text", {
+				error: String(error),
+			});
+		}
+
+		const plainOptions = { ...(options ?? {}) };
+		delete (plainOptions as { parse_mode?: string }).parse_mode;
+		if (text.length <= limit) {
+			await ctx.reply(text, plainOptions);
 			return;
 		}
-		for (let i = 0; i < formatted.length; i += limit) {
-			const chunk = formatted.slice(i, i + limit);
-			await ctx.reply(chunk, replyOptions);
+		for (let i = 0; i < text.length; i += limit) {
+			const chunk = text.slice(i, i + limit);
+			await ctx.reply(chunk, plainOptions);
 		}
 	}
 
@@ -1209,23 +1390,69 @@ export async function createBot(options: CreateBotOptions) {
 	}
 
 	function formatTelegram(input: string) {
-		if (!input.includes("**")) return escapeHtml(input);
-		const parts = input.split("**");
-		return parts
-			.map((part, index) => {
-				const escaped = escapeHtml(part);
-				if (index % 2 === 1) return `<b>${escaped}</b>`;
-				return escaped;
-			})
-			.join("");
+		if (!input) return "";
+
+		const codeBlocks: string[] = [];
+		const inlineCodes: string[] = [];
+		let text = input;
+
+		text = text.replace(/```([\s\S]*?)```/g, (_match, code) => {
+			const escaped = escapeHtml(String(code).trimEnd());
+			const html = `<pre><code>${escaped}</code></pre>`;
+			const token = `@@CODEBLOCK_${codeBlocks.length}@@`;
+			codeBlocks.push(html);
+			return token;
+		});
+
+		text = text.replace(/`([^`]+?)`/g, (_match, code) => {
+			const escaped = escapeHtml(String(code));
+			const html = `<code>${escaped}</code>`;
+			const token = `@@INLINECODE_${inlineCodes.length}@@`;
+			inlineCodes.push(html);
+			return token;
+		});
+
+		text = escapeHtml(text);
+
+		text = text.replace(
+			/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g,
+			(_match, label, url) => `<a href="${url}">${label}</a>`,
+		);
+		text = text.replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>");
+		text = text.replace(/\*([^*]+)\*/g, "<i>$1</i>");
+		text = text.replace(/_([^_]+)_/g, "<i>$1</i>");
+		text = text.replace(/~~([^~]+)~~/g, "<s>$1</s>");
+
+		text = text.replace(/@@INLINECODE_(\d+)@@/g, (_match, index) => {
+			const entry = inlineCodes[Number(index)];
+			return entry ?? "";
+		});
+		text = text.replace(/@@CODEBLOCK_(\d+)@@/g, (_match, index) => {
+			const entry = codeBlocks[Number(index)];
+			return entry ?? "";
+		});
+
+		return text;
+	}
+
+	function appendSources(text: string, sources: Array<{ url?: string }> = []) {
+		const urls = sources
+			.map((source) => source.url)
+			.filter((url): url is string => Boolean(url));
+		if (!urls.length) return text;
+		const unique = Array.from(new Set(urls));
+		const lines = unique.map((url) => `- ${url}`);
+		return `${text}\n\nИсточники:\n${lines.join("\n")}`;
 	}
 
 	bot.on("message:text", async (ctx) => {
+		setLogContext(ctx, { message_type: "text" });
 		const text = ctx.message.text.trim();
 		await handleIncomingText(ctx, text);
 	});
 
 	bot.on("message:voice", async (ctx) => {
+		setLogContext(ctx, { message_type: "voice" });
 		const voice = ctx.message.voice;
 		if (!voice?.file_id) {
 			await sendText(ctx, "Не удалось прочитать голосовое сообщение.");
@@ -1257,22 +1484,12 @@ export async function createBot(options: CreateBotOptions) {
 			await handleIncomingText(ctx, text);
 		} catch (error) {
 			logDebug("voice transcription error", { error: String(error) });
+			setLogError(ctx, error);
 			await sendText(ctx, `Ошибка: ${String(error)}`);
 		}
 	});
 
-	async function handleIncomingText(
-		ctx: {
-			reply: (
-				text: string,
-				options?: Record<string, unknown>,
-			) => Promise<unknown>;
-			replyWithChatAction: (action: "typing") => Promise<unknown>;
-			chat?: { id?: number | string };
-			from?: { id?: number | string };
-		},
-		rawText: string,
-	) {
+	async function handleIncomingText(ctx: BotContext, rawText: string) {
 		const text = rawText.trim();
 		if (!text || text.startsWith("/")) {
 			return;
@@ -1282,6 +1499,7 @@ export async function createBot(options: CreateBotOptions) {
 			await ctx.replyWithChatAction("typing");
 			const chatId = ctx.chat?.id?.toString() ?? "";
 			const memoryId = ctx.from?.id?.toString() ?? chatId;
+			const userName = ctx.from?.first_name?.trim() || undefined;
 			const chatState = chatId ? getChatState(chatId) : null;
 			const historyMessages =
 				memoryId && Number.isFinite(HISTORY_MAX_MESSAGES)
@@ -1296,6 +1514,10 @@ export async function createBot(options: CreateBotOptions) {
 				? formatHistoryForPrompt(historyMessages)
 				: "";
 			const issueKeys = extractIssueKeysFromText(text, DEFAULT_ISSUE_PREFIX);
+			setLogContext(ctx, {
+				issue_key_count: issueKeys.length,
+				issue_key: issueKeys[0],
+			});
 			if (issueKeys.length > 1) {
 				try {
 					const issuesData: Array<{
@@ -1329,6 +1551,7 @@ export async function createBot(options: CreateBotOptions) {
 						const config = getModelConfig(ref);
 						if (!config) continue;
 						try {
+							setLogContext(ctx, { model_ref: ref, model_id: config.id });
 							const agent = await createMultiIssueAgent({
 								question: text,
 								modelRef: ref,
@@ -1336,9 +1559,15 @@ export async function createBot(options: CreateBotOptions) {
 								reasoning: resolveReasoningFor(config),
 								modelId: config.id,
 								issues: issuesData,
+								userName,
 							});
 							const result = await agent.generate({ prompt: text });
-							const reply = result.text?.trim();
+							const replyText = result.text?.trim();
+							const sources = (result as { sources?: Array<{ url?: string }> })
+								.sources;
+							const reply = replyText
+								? appendSources(replyText, sources)
+								: replyText;
 							if (!reply) {
 								lastError = new Error("empty_response");
 								continue;
@@ -1374,9 +1603,11 @@ export async function createBot(options: CreateBotOptions) {
 							});
 						}
 					}
+					setLogError(ctx, lastError ?? "unknown_error");
 					await sendText(ctx, `Ошибка: ${String(lastError ?? "unknown")}`);
 					return;
 				} catch (error) {
+					setLogError(ctx, error);
 					await sendText(ctx, `Ошибка: ${String(error)}`);
 					return;
 				}
@@ -1410,6 +1641,7 @@ export async function createBot(options: CreateBotOptions) {
 							continue;
 						}
 						try {
+							setLogContext(ctx, { model_ref: ref, model_id: config.id });
 							const agent = await createIssueAgent({
 								question: text,
 								modelRef: ref,
@@ -1419,9 +1651,15 @@ export async function createBot(options: CreateBotOptions) {
 								issueKey,
 								issueText,
 								commentsText,
+								userName,
 							});
 							const result = await agent.generate({ prompt: text });
-							const reply = result.text?.trim();
+							const replyText = result.text?.trim();
+							const sources = (result as { sources?: Array<{ url?: string }> })
+								.sources;
+							const reply = replyText
+								? appendSources(replyText, sources)
+								: replyText;
 							if (!reply) {
 								lastError = new Error("empty_response");
 								continue;
@@ -1452,9 +1690,11 @@ export async function createBot(options: CreateBotOptions) {
 							logDebug("issue agent error", { ref, error: String(error) });
 						}
 					}
+					setLogError(ctx, lastError ?? "unknown_error");
 					await sendText(ctx, `Ошибка: ${String(lastError ?? "unknown")}`);
 					return;
 				} catch (error) {
+					setLogError(ctx, error);
 					await sendText(ctx, `Ошибка: ${String(error)}`);
 					return;
 				}
@@ -1472,6 +1712,7 @@ export async function createBot(options: CreateBotOptions) {
 					continue;
 				}
 				try {
+					setLogContext(ctx, { model_ref: ref, model_id: config.id });
 					const agent = await createAgent(text, ref, config, {
 						onCandidates: (candidates) => {
 							if (!chatState) return;
@@ -1482,6 +1723,7 @@ export async function createBot(options: CreateBotOptions) {
 						recentCandidates: chatState?.lastCandidates,
 						history: historyText,
 						chatId: memoryId,
+						userName,
 					});
 					const result = await agent.generate({ prompt: text });
 					if (DEBUG_LOGS) {
@@ -1495,10 +1737,14 @@ export async function createBot(options: CreateBotOptions) {
 								}
 							).steps ?? [];
 						const toolCalls = steps.flatMap((step) =>
-							(step.toolCalls ?? []).map((call) => call.toolName),
+							(step.toolCalls ?? [])
+								.map((call) => call?.toolName)
+								.filter((name): name is string => Boolean(name)),
 						);
 						const toolResults = steps.flatMap((step) =>
-							(step.toolResults ?? []).map((result) => result.toolName),
+							(step.toolResults ?? [])
+								.map((result) => result?.toolName)
+								.filter((name): name is string => Boolean(name)),
 						);
 						logDebug("agent steps", {
 							count: steps.length,
@@ -1507,7 +1753,12 @@ export async function createBot(options: CreateBotOptions) {
 							ref,
 						});
 					}
-					const reply = result.text?.trim();
+					const replyText = result.text?.trim();
+					const sources = (result as { sources?: Array<{ url?: string }> })
+						.sources;
+					const reply = replyText
+						? appendSources(replyText, sources)
+						: replyText;
 					if (!reply) {
 						lastError = new Error("empty_response");
 						continue;
@@ -1531,18 +1782,21 @@ export async function createBot(options: CreateBotOptions) {
 					logDebug("agent error", { ref, error: String(error) });
 				}
 			}
+			setLogError(ctx, lastError ?? "unknown_error");
 			await sendText(ctx, `Ошибка: ${String(lastError ?? "unknown")}`);
 		} catch (error) {
+			setLogError(ctx, error);
 			await sendText(ctx, `Ошибка: ${String(error)}`);
 		}
 	}
 
-	bot.on("message", (ctx) =>
-		sendText(
+	bot.on("message", (ctx) => {
+		setLogContext(ctx, { message_type: "other" });
+		return sendText(
 			ctx,
 			"Попробуйте /tools, чтобы увидеть доступные инструменты Tracker.",
-		),
-	);
+		);
+	});
 
 	const allowedUpdates = [...API_CONSTANTS.DEFAULT_UPDATE_TYPES];
 
