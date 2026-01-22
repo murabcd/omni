@@ -75,10 +75,6 @@ export async function createBot(options: CreateBotOptions) {
 		env.HISTORY_MAX_MESSAGES ?? "20",
 		10,
 	);
-	const QUEUE_SCAN_MAX_PAGES = Number.parseInt(
-		env.QUEUE_SCAN_MAX_PAGES ?? "5",
-		10,
-	);
 	const COMMENTS_CACHE_TTL_MS = Number.parseInt(
 		env.COMMENTS_CACHE_TTL_MS ?? "300000",
 		10,
@@ -418,7 +414,6 @@ export async function createBot(options: CreateBotOptions) {
 				execute: async ({ question, queue }) => {
 					const startedAt = Date.now();
 					const commentStats = { fetched: 0, cacheHits: 0 };
-					let queueScanPages = 0;
 					const queueKey = queue ?? DEFAULT_TRACKER_QUEUE;
 					const query = buildIssuesQuery(question, queueKey);
 					const payload = {
@@ -449,9 +444,6 @@ export async function createBot(options: CreateBotOptions) {
 						const keywords = extractKeywords(question, 12).map((item) =>
 							item.toLowerCase(),
 						);
-						const mustInclude = extractMustIncludeKeywords(question).map(
-							(item) => item.toLowerCase(),
-						);
 						const haveKeywords = keywords.length > 0;
 
 						const issues = normalized.issues;
@@ -481,7 +473,7 @@ export async function createBot(options: CreateBotOptions) {
 									? (commentsByIssue[entry.key]?.text ?? "")
 									: "";
 								const haystack = `${summary} ${description} ${comments}`;
-								return matchesKeywords(haystack, keywords, mustInclude);
+								return matchesKeywords(haystack, keywords);
 							});
 							if (matches.length) {
 								selected = matches;
@@ -490,75 +482,6 @@ export async function createBot(options: CreateBotOptions) {
 									matches: matches.length,
 								});
 							}
-						}
-
-						const needQueueScan =
-							mustInclude.length > 0 &&
-							!selected.some((entry) => {
-								const summary = getIssueField(entry.issue, [
-									"summary",
-									"title",
-								]);
-								const description = getIssueField(entry.issue, ["description"]);
-								const comments = entry.key
-									? (commentsByIssue[entry.key]?.text ?? "")
-									: "";
-								const haystack = `${summary} ${description} ${comments}`;
-								return matchesKeywords(haystack, mustInclude, mustInclude);
-							});
-
-						const queueScanMatches: RankedIssue[] = [];
-						if (needQueueScan) {
-							const fallbackPayload = {
-								...payload,
-								query: `Queue:${queueKey}`,
-							};
-							const maxPages = Number.isFinite(QUEUE_SCAN_MAX_PAGES)
-								? Math.max(1, QUEUE_SCAN_MAX_PAGES)
-								: 5;
-
-							for (let page = 1; page <= maxPages; page += 1) {
-								const pagedPayload = { ...fallbackPayload, page };
-								logDebug("tracker_search queue_scan", pagedPayload);
-								const pageResult = await trackerCallTool(
-									"issues_find",
-									pagedPayload,
-									30_000,
-								);
-								queueScanPages = page;
-								const pageNormalized = normalizeIssuesResult(pageResult);
-								const pageIssues = pageNormalized.issues;
-								if (!pageIssues.length) break;
-								const pageRanked = rankIssues(pageIssues, question);
-								for (const entry of pageRanked) {
-									if (!entry.key) continue;
-									let commentText = commentsByIssue[entry.key]?.text ?? "";
-									if (!commentText) {
-										await fetchCommentsWithBudget(
-											[entry.key],
-											commentsByIssue,
-											commentDeadline,
-											commentStats,
-										);
-										commentText = commentsByIssue[entry.key]?.text ?? "";
-									}
-									const summary = getIssueField(entry.issue, [
-										"summary",
-										"title",
-									]);
-									const description = getIssueField(entry.issue, [
-										"description",
-									]);
-									const haystack = `${summary} ${description} ${commentText}`;
-									if (matchesKeywords(haystack, mustInclude, mustInclude)) {
-										queueScanMatches.push(entry);
-									}
-								}
-							}
-						}
-
-						if (queueScanMatches.length) {
-							selected = queueScanMatches;
 						}
 
 						const topCandidates = selected.slice(0, 5).map((entry) => ({
@@ -581,7 +504,6 @@ export async function createBot(options: CreateBotOptions) {
 							top: selected.map((item) => item.key).filter((key) => key),
 							commentsFetched: commentStats.fetched,
 							commentsCacheHits: commentStats.cacheHits,
-							queueScanPages,
 							durationMs: Date.now() - startedAt,
 							ambiguous,
 						});
@@ -672,26 +594,12 @@ export async function createBot(options: CreateBotOptions) {
 		});
 	}
 
-	function extractMustIncludeKeywords(text: string): string[] {
-		void text;
-		return [];
-	}
-
-	function matchesKeywords(
-		text: string,
-		keywords: string[],
-		mustInclude: string[],
-	): boolean {
+	function matchesKeywords(text: string, keywords: string[]): boolean {
 		const normalizedText = normalizeForMatch(text);
-		const keywordMatch =
+		return (
 			keywords.length === 0 ||
-			keywords.some((word) => normalizedText.includes(normalizeForMatch(word)));
-		const requiredMatch =
-			mustInclude.length === 0 ||
-			mustInclude.every((word) =>
-				normalizedText.includes(normalizeForMatch(word)),
-			);
-		return keywordMatch && requiredMatch;
+			keywords.some((word) => normalizedText.includes(normalizeForMatch(word)))
+		);
 	}
 
 	function getCachedComments(

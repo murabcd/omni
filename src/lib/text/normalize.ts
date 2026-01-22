@@ -220,14 +220,6 @@ export function extractIssueKeysFromText(
 	return keys;
 }
 
-export function extractIssueKeyFromText(
-	text: string,
-	defaultPrefix: string,
-): string | null {
-	const keys = extractIssueKeysFromText(text, defaultPrefix);
-	return keys[0] ?? null;
-}
-
 export function truncateText(input: string, limit: number): string {
 	if (input.length <= limit) return input;
 	return `${input.slice(0, limit)}…`;

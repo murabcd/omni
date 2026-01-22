@@ -19,7 +19,7 @@ Example `skill.json`:
 
 ```json
 {
-  "name": "tracker-issues-find",
+  "name": "issues_find",
   "description": "Search Tracker issues",
   "tool": "yandex-tracker.issues_find",
   "args": { "query": "Assignee: me" }
@@ -34,5 +34,5 @@ Example `skill.json`:
 Example:
 
 ```
-/skill tracker-issues-find {"query":"Assignee: me"}
+/skill issues_find {"query":"Assignee: me"}
 ```
