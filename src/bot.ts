@@ -1012,7 +1012,7 @@ export async function createBot(options: CreateBotOptions) {
 
 	const START_GREETING =
 		"Привет!\n\n" +
-		"Я Omni, ассистент по Yandex Tracker.\n" +
+		"Я Омни, ассистент по Yandex Tracker.\n" +
 		"Отвечаю по задачам, статусам и итогам, могу искать в интернете.\n" +
 		"Можно писать текстом или голосом.\n" +
 		"Если есть номер задачи — укажите его, например PROJ-1234.";
@@ -1506,28 +1506,23 @@ export async function createBot(options: CreateBotOptions) {
 			});
 			if (issueKeys.length > 1) {
 				try {
-					const issuesData: Array<{
-						key: string;
-						issueText: string;
-						commentsText: string;
-					}> = [];
-					for (const key of issueKeys.slice(0, 5)) {
-						const issueResult = await trackerCallTool(
-							"issue_get",
-							{ issue_id: key },
-							30_000,
-						);
-						const commentResult = await trackerCallTool(
-							"issue_get_comments",
-							{ issue_id: key },
-							30_000,
-						);
-						issuesData.push({
-							key,
-							issueText: formatToolResult(issueResult),
-							commentsText: extractCommentsText(commentResult).text,
-						});
-					}
+					const issuesData = await Promise.all(
+						issueKeys.slice(0, 5).map(async (key) => {
+							const [issueResult, commentResult] = await Promise.all([
+								trackerCallTool("issue_get", { issue_id: key }, 30_000),
+								trackerCallTool(
+									"issue_get_comments",
+									{ issue_id: key },
+									30_000,
+								),
+							]);
+							return {
+								key,
+								issueText: formatToolResult(issueResult),
+								commentsText: extractCommentsText(commentResult).text,
+							};
+						}),
+					);
 					const modelRefs = [
 						activeModelRef,
 						...activeModelFallbacks.filter((ref) => ref !== activeModelRef),
@@ -1603,16 +1598,10 @@ export async function createBot(options: CreateBotOptions) {
 			const issueKey = issueKeys[0] ?? null;
 			if (issueKey) {
 				try {
-					const issueResult = await trackerCallTool(
-						"issue_get",
-						{ issue_id: issueKey },
-						30_000,
-					);
-					const commentResult = await trackerCallTool(
-						"issue_get_comments",
-						{ issue_id: issueKey },
-						30_000,
-					);
+				const [issueResult, commentResult] = await Promise.all([
+					trackerCallTool("issue_get", { issue_id: issueKey }, 30_000),
+					trackerCallTool("issue_get_comments", { issue_id: issueKey }, 30_000),
+				]);
 					const issueText = formatToolResult(issueResult);
 					const commentsText = extractCommentsText(commentResult).text;
 
