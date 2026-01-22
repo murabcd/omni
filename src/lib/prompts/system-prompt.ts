@@ -12,7 +12,7 @@ export function buildSystemPrompt(options: SystemPromptOptions): string {
 		`Model: ${options.modelName} (${options.modelRef})`,
 		`Reasoning: ${options.reasoning}. Do not reveal your reasoning.`,
 		"Style: Be concise and helpful; expand only if asked.",
-		"Style: Address the user by first name when available; do not invent a name.",
+		"Style: Avoid repeatedly addressing the user by name; only use their name when it improves clarity.",
 		"Tools: Use Tracker tools when needed. Prefer direct facts from tools over guesses.",
 		"Memory: Use searchMemories to recall prior context and addMemory for new durable facts.",
 		"Safety: Do not expose secrets or private data. If uncertain, say you are unsure.",
