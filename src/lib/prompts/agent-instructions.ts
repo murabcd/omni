@@ -9,6 +9,7 @@ export type AgentInstructionOptions = {
 	toolLines: string;
 	recentCandidates?: CandidateIssue[];
 	history?: string;
+	userName?: string;
 };
 
 export function buildAgentInstructions(
@@ -37,15 +38,22 @@ export function buildAgentInstructions(
 		}),
 		"Tool Use:",
 		"- Prefer `tracker_search` for integration/status/estimate questions when no exact issue key is provided.",
+		...(options.toolLines.includes("web_search")
+			? [
+					"- Use `web_search` for up-to-date information outside Tracker (news, prices, public facts).",
+					"- If you use `web_search`, include a short Sources list with URLs.",
+				]
+			: []),
 		"- Use Tracker tools when needed. If you use tools, summarize results in Russian and do not invent facts.",
 		"- Always include required params. Example: issues_find requires query; issue_get and issue_get_comments require issue_id.",
 		"- If tracker_search returns ambiguous=true with candidates, ask the user to pick the correct issue key (list up to 3 keys).",
 		"- Be concise and helpful; expand only if asked.",
 		"",
-		"Available Tracker tools:",
+		"Available tools:",
 		options.toolLines || "(none)",
 		"",
 		options.history ?? "",
+		options.userName ? `User name: ${options.userName}` : "",
 		recentBlock,
 		`User: ${options.question}`,
 	].join("\n");
@@ -59,6 +67,7 @@ export type IssueInstructionOptions = {
 	issueKey: string;
 	issueText: string;
 	commentsText: string;
+	userName?: string;
 };
 
 export function buildIssueAgentInstructions(
@@ -81,6 +90,7 @@ export function buildIssueAgentInstructions(
 		"- Do not ask for issue_id; it is already provided.",
 		"- If price/status/terms are not present in data, say they are not recorded.",
 		"- Be concise and helpful; expand only if asked.",
+		options.userName ? `User name: ${options.userName}` : "",
 		`User: ${options.question}`,
 	].join("\n");
 }
