@@ -1,20 +1,16 @@
-# Sales Bot
+<a>
+  <h1 align="center">Omni</h1>
+</a>
 
 <p align="center">
-  Telegram assistant for Yandex Tracker with AI search + summaries.
+  Telegram Bot for Yandex Tracker Built With AI SDK.
 </p>
 
-<div align="center">
-
-> **warning:** this project is production-facing. deploy with allowlist enabled.
-
-</div>
-
 <p align="center">
-  <a href="#features"><strong>features</strong></a> ·
-  <a href="#built-with"><strong>built with</strong></a> ·
-  <a href="#deploy-your-own"><strong>deploy your own</strong></a> ·
-  <a href="#running-locally"><strong>running locally</strong></a>
+  <a href="#features"><strong>Features</strong></a> ·
+  <a href="#model-providers"><strong>Model Providers</strong></a> ·
+  <a href="#deploy-your-own"><strong>Deploy Your Own</strong></a> ·
+  <a href="#running-locally"><strong>Running locally</strong></a>
 </p>
 <br/>
 
@@ -27,30 +23,34 @@
 ## Features
 
 - [GrammY](https://grammy.dev)
-  - Telegram bot runtime and webhook handling
+  - Telegram bot runtime with middleware, commands, and context helpers
+  - Webhook adapter used for Cloudflare Workers deployments
 - [AI SDK](https://sdk.vercel.ai/docs)
-  - Model orchestration and tool calls
-  - Reference: provider-agnostic LLM interface (OpenAI used here)
+  - Unified API for generating text, structured objects, and tool calls with LLMs
+  - Hooks for building dynamic chat and generative user interfaces
 - [OpenAI](https://openai.com)
   - Primary LLM provider for responses
+  - Supports model switching via `OPENAI_MODEL`
 - [Yandex Tracker API](https://yandex.ru/support/tracker/en/)
   - Issue search, status, and comments data
+  - Direct HTTP integration with OAuth token auth
 - [Supermemory](https://supermemory.ai)
   - Persistent, per-user memory
+  - Semantic retrieval for relevant past context
 - [Cloudflare Workers](https://developers.cloudflare.com/workers/)
-  - Webhook deployment target
+  - Serverless webhook hosting with global edge execution
+  - Fast deploys and built-in request logging
 
 ## Model Providers
 
 This app ships with [Openai](https://openai.com/) provider as the default. However, with the [AI SDK](https://sdk.vercel.ai/docs), you can switch LLM providers to [Ollama](https://ollama.com), [Anthropic](https://anthropic.com), [Cohere](https://cohere.com/), and [many more](https://sdk.vercel.ai/providers/ai-sdk-providers) with just a few lines of code.
 
-- Mini model (`gpt-4o-mini`): A fast and efficient model suitable for simple tasks
-- Large model (`gpt-4o`): A powerful model designed for complex tasks
-- Reasoning model (`o4-mini`): An advanced model configured for multi-step reasoning tasks
+- Primary model (`gpt-5.2`): default model for production responses
+- Fallback model (`gpt-4.1`): used if the primary model is unavailable
 
 ## Deploy your own
 
-Cloudflare Workers is the recommended deployment target (webhook mode).
+You can deploy your own version of the Omni to Cloudflare Workers:
 
 1) Login
 
@@ -73,6 +73,7 @@ npx wrangler secret put SUPERMEMORY_API_KEY --config worker/wrangler.toml
 ALLOWED_TG_IDS = 
 TRACKER_CLOUD_ORG_ID = 
 OPENAI_MODEL = "openai/gpt-5.2"
+SUPERMEMORY_API_KEY =
 ```
 
 These live in `worker/wrangler.toml` under `[vars]`, or can be set in the
@@ -101,24 +102,4 @@ bun install
 bun dev
 ```
 
-## Commands
-
-- `/start` - intro
-- `/help` - usage
-- `/tools` - list Yandex Tracker tools
-- `/status` - Tracker health check + uptime
-- `/model` - show current model and fallbacks
-- `/model list` - list available models
-- `/model set <ref>` - switch model for this session
-- `/model reasoning <level>` - set reasoning level (off|low|standard|high)
-- `/skills` - list runtime skills
-- `/skill <name> <json>` - run a runtime skill
-- `/tracker <tool> <json>` - call a tool with JSON arguments
-
-## Skills
-
-Runtime skills are loaded from `skills/**/skill.json` at startup.
-
-- `skills/yandex-tracker/SKILL.md` - tool map and usage notes
-- `skills/yandex-tracker/tracker-issues-find/skill.json` - runtime skill example
-- `skills/yandex-tracker/tracker-issues-find/SKILL.md` - runtime skill docs and usage
+Your bot should now be running via Cloudflare Workers.

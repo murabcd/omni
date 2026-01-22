@@ -1,0 +1,38 @@
+---
+summary: "Runtime skills for Omni"
+read_when:
+  - Adding or using runtime skills
+---
+# Skills
+
+Omni loads runtime skills from `skills/**/skill.json` at startup. These are
+shortcuts for calling Tracker tools with predefined arguments.
+
+## Format
+
+Each skill lives in its own folder with:
+
+- `skill.json` — name, tool, args, timeout
+- `SKILL.md` — human‑readable docs
+
+Example `skill.json`:
+
+```json
+{
+  "name": "tracker-issues-find",
+  "description": "Search Tracker issues",
+  "tool": "yandex-tracker.issues_find",
+  "args": { "query": "Assignee: me" }
+}
+```
+
+## Usage in Telegram
+
+- `/skills` — list available runtime skills
+- `/skill <name> <json>` — run a skill with optional JSON overrides
+
+Example:
+
+```
+/skill tracker-issues-find {"query":"Assignee: me"}
+```
