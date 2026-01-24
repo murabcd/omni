@@ -3,7 +3,7 @@
 </a>
 
 <p align="center">
-  Personal AI Assistant for Telegram with Tools, Memory, and Orchestration Build with AI SDK.
+  Personal AI Assistant for Telegram with Tools, Memory, and Orchestration Built with AI SDK.
 </p>
 
 <p align="center">
@@ -21,6 +21,7 @@
 - Runtime skills for shortcut commands
 - Telegram allowlist + group mention gating
 - Optional OpenAI web search tool for up-to-date answers
+- Docs: see [`docs/`](docs) for setup and tool policies
 
 ## Features
 
