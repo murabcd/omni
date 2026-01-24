@@ -39,3 +39,7 @@
 
 - Local configuration lives in `.env` (see `.env.example`). Never commit secrets.
 - Cloudflare Workers secrets should be set via `wrangler secret put` and referenced in `worker/wrangler.toml`.
+
+## ExecPlans
+
+When writing complex features or significant refactors, use an ExecPlan (as described in `.agent/PLANS.md`) from design to implementation

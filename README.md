@@ -3,7 +3,7 @@
 </a>
 
 <p align="center">
-  Telegram Bot for Yandex Tracker Built with AI SDK.
+  Personal AI Assistant for Telegram with Tools, Memory, and Orchestration Build with AI SDK.
 </p>
 
 <p align="center">
@@ -14,11 +14,12 @@
 </p>
 <br/>
 
-- Yandex Tracker search, issue lookup, and comments context
-- Natural-language answers in Russian with model fallback
+- Jira and Yandex Tracker issue search, lookup, and comments
+- PostHog analytics queries
+- Orchestrated subagents for tool routing and safer tool usage
 - Supermemory-backed long-term history per user
 - Runtime skills for shortcut commands
-- Telegram allowlist for safe access
+- Telegram allowlist + group mention gating
 - Optional OpenAI web search tool for up-to-date answers
 
 ## Features
@@ -35,6 +36,12 @@
 - [Yandex Tracker API](https://yandex.ru/support/tracker/en/)
   - Issue search, status, and comments data
   - Direct HTTP integration with OAuth token auth
+- [Jira Cloud API](https://developer.atlassian.com/cloud/jira/platform/rest/v3/intro/)
+  - Issue search, sprint issues, and comments data
+  - Direct HTTP integration with API token auth
+- [PostHog](https://posthog.com)
+  - Read-only analytics queries via the Agent Toolkit
+  - Trends, insights, and event/property lookups
 - [Supermemory](https://supermemory.ai)
   - Persistent, per-user memory
   - Semantic retrieval for relevant past context
@@ -64,32 +71,18 @@ npx wrangler login
 ```
 npx wrangler secret put BOT_TOKEN --config worker/wrangler.toml
 npx wrangler secret put TRACKER_TOKEN --config worker/wrangler.toml
+npx wrangler secret put JIRA_API_TOKEN --config worker/wrangler.toml
+npx wrangler secret put POSTHOG_PERSONAL_API_KEY --config worker/wrangler.toml
 npx wrangler secret put OPENAI_API_KEY --config worker/wrangler.toml
 npx wrangler secret put SUPERMEMORY_API_KEY --config worker/wrangler.toml
 ```
 
 3) Configure vars
 
-```
-ALLOWED_TG_IDS = 
-ALLOWED_TG_GROUPS = ""
-TELEGRAM_GROUP_REQUIRE_MENTION = "1"
-TRACKER_CLOUD_ORG_ID = 
-OPENAI_MODEL = "openai/gpt-5.2"
-SUPERMEMORY_API_KEY =
-WEB_SEARCH_ENABLED = "0"
-WEB_SEARCH_CONTEXT_SIZE = "low"
-SERVICE_NAME =
-RELEASE_VERSION =
-COMMIT_HASH =
-REGION =
-INSTANCE_ID =
-```
+These can be set in the Cloudflare dashboard. Use `worker/wrangler.toml` only
+for non-secret defaults you want baked into a specific environment.
 
-These live in `worker/wrangler.toml` under `[vars]`, or can be set in the
-Cloudflare dashboard.
-
-4) Durable Object migration (required for Telegram updates)
+4) Deploy (subsequent updates)
 
 ```
 npx wrangler deploy --config worker/wrangler.toml
@@ -97,13 +90,7 @@ npx wrangler deploy --config worker/wrangler.toml
 
 This first deploy creates the SQLite-backed Durable Object class for free plans.
 
-5) Deploy (subsequent updates)
-
-```
-npx wrangler deploy --config worker/wrangler.toml
-```
-
-6) Set Telegram webhook
+5) Set Telegram webhook
 
 ```
 https://api.telegram.org/bot<YOUR_TOKEN>/setWebhook?url=https://<your-worker>.workers.dev/telegram

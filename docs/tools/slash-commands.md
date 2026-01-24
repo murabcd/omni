@@ -9,7 +9,7 @@ Supported commands:
 
 - `/start` — intro
 - `/help` — usage
-- `/tools` — list Tracker tools
+- `/tools` — list available tools, conflicts, and policy-suppressed tools
 - `/status` — Tracker health check + uptime
 - `/model` — show current model and fallbacks
 - `/model list` — list available models

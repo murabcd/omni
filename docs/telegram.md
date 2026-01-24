@@ -18,6 +18,25 @@ Behavior:
 To allow all groups, set `ALLOWED_TG_GROUPS=""`.
 To disable mention gating in groups, set `TELEGRAM_GROUP_REQUIRE_MENTION=0`.
 
+## Tool availability by chat type
+
+Omni applies a chat-scoped tool policy:
+
+- 1‑1 chats: all tools are available (web + Supermemory included).
+- Group chats: `web_search`, `searchMemories`, and `addMemory` are disabled.
+
+Use `/tools` to see the active tool list for the current chat.
+
+You can further restrict tools by chat type with:
+
+```
+TOOL_ALLOWLIST_DM=
+TOOL_DENYLIST_DM=
+TOOL_ALLOWLIST_GROUP=
+TOOL_DENYLIST_GROUP=
+TOOL_RATE_LIMITS=web_search:10/60
+```
+
 ## Reply threading
 
 The bot replies to the triggering message in Telegram (uses `reply_to_message_id`)

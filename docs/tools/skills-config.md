@@ -18,3 +18,8 @@ There is no separate global config file. Each skill defines:
 - `tool` — `yandex-tracker.<tool_name>`
 - `args` — optional default arguments
 - `timeoutMs` — optional per-skill timeout
+
+Notes:
+
+- Skill names are normalized (trim + lowercase). Duplicates are skipped.
+- Tool references are normalized and de-duplicated by `server:tool`.

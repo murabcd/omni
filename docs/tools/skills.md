@@ -8,6 +8,11 @@ read_when:
 Omni loads runtime skills from `skills/**/skill.json` at startup. These are
 shortcuts for calling Tracker tools with predefined arguments.
 
+Notes:
+
+- Skill names are normalized (trim + lowercase). Duplicate names are skipped.
+- Duplicate tool references are skipped (same `server:tool` after normalization).
+
 ## Format
 
 Each skill lives in its own folder with:
