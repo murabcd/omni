@@ -1,6 +1,7 @@
 import "../styles/globals.css";
 import { Geist, Geist_Mono } from "next/font/google";
 import { ThemeProvider } from "@/components/theme-provider";
+import { TooltipProvider } from "@/components/ui/tooltip";
 
 const geistSans = Geist({
 	subsets: ["latin"],
@@ -32,7 +33,7 @@ export default function RootLayout({
 					disableTransitionOnChange
 					enableSystem
 				>
-					{children}
+					<TooltipProvider delayDuration={0}>{children}</TooltipProvider>
 				</ThemeProvider>
 			</body>
 		</html>

@@ -1,11 +1,14 @@
 "use client";
 
-import { LayoutDashboard, Settings } from "lucide-react";
+import { LayoutDashboard, Moon, Settings, Sun } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useTheme } from "next-themes";
+import { useEffect, useState } from "react";
 import {
 	Sidebar,
 	SidebarContent,
+	SidebarFooter,
 	SidebarGroup,
 	SidebarGroupContent,
 	SidebarHeader,
@@ -41,6 +44,15 @@ const navItems = [
 
 export function AppSidebar() {
 	const pathname = usePathname();
+	const { setTheme, theme, resolvedTheme } = useTheme();
+	const [mounted, setMounted] = useState(false);
+
+	useEffect(() => {
+		setMounted(true);
+	}, []);
+
+	const activeTheme = mounted ? (resolvedTheme ?? theme) : undefined;
+	const isDark = activeTheme === "dark";
 
 	return (
 		<Sidebar collapsible="icon">
@@ -100,6 +112,34 @@ export function AppSidebar() {
 					</SidebarGroupContent>
 				</SidebarGroup>
 			</SidebarContent>
+
+			<SidebarFooter>
+				<SidebarMenu>
+					<SidebarMenuItem>
+						<SidebarMenuButton
+							onClick={() => setTheme(isDark ? "light" : "dark")}
+							tooltip={isDark ? "Light mode" : "Dark mode"}
+							className={cn(
+								"border border-transparent",
+								"hover:text-primary hover:bg-transparent",
+								"text-[#666666]",
+							)}
+							disabled={!mounted}
+						>
+							{!mounted ? (
+								<Moon className="size-4" />
+							) : isDark ? (
+								<Sun className="size-4" />
+							) : (
+								<Moon className="size-4" />
+							)}
+							<span>
+								{!mounted ? "Theme" : isDark ? "Light" : "Dark"} mode
+							</span>
+						</SidebarMenuButton>
+					</SidebarMenuItem>
+				</SidebarMenu>
+			</SidebarFooter>
 
 			<SidebarRail />
 		</Sidebar>
