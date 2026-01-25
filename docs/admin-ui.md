@@ -40,9 +40,22 @@ methods:
 - `connect` (auth + status snapshot)
 - `config.get` / `config.set` (edit settings)
 - `cron.run` (manual daily report)
+- `chat.send` (admin chat, streaming)
+- `chat.abort` (cancel in-flight admin chat)
 
 HTTP endpoints (`GET /admin/status`, `POST /admin/cron/run`) remain available for
 fallback and debugging, but the UI uses WebSocket by default.
 
 Auth is required via `ADMIN_API_TOKEN` (entered in the UI). The gateway checks
 `ADMIN_ALLOWLIST` if it is set.
+
+## Admin chat
+
+The chat panel streams responses from the bot pipeline (same tools, prompts, and
+policies as Telegram). It is meant for debugging and does not persist history.
+
+- Streaming: UI uses AI SDK `useChat` with a gateway transport.
+- Markdown: assistant messages render via Streamdown.
+- Tool visibility: tool calls are surfaced as `Tools: ...` hints during streams.
+
+Stopping a response uses `chat.abort`, which cancels the in-flight stream.

@@ -35,9 +35,31 @@ type Env = Record<string, string | undefined> & {
 	GATEWAY_CONFIG_DO: DurableObjectNamespace;
 };
 
-let botPromise: Promise<Awaited<ReturnType<typeof createBot>>["bot"]> | null =
-	null;
+type BotRuntime = Awaited<ReturnType<typeof createBot>>;
+
+let botPromise: Promise<BotRuntime> | null = null;
 let gatewayHooks: ReturnType<typeof loadGatewayPlugins> | null = null;
+const streamAbortControllers = new Map<string, AbortController>();
+
+export function registerStreamAbort(
+	registry: Map<string, AbortController>,
+	streamId: string,
+) {
+	const controller = new AbortController();
+	registry.set(streamId, controller);
+	return controller;
+}
+
+export function abortStream(
+	registry: Map<string, AbortController>,
+	streamId: string,
+) {
+	const controller = registry.get(streamId);
+	if (!controller) return false;
+	controller.abort();
+	registry.delete(streamId);
+	return true;
+}
 
 function getUptimeSeconds() {
 	return (Date.now() - startTime) / 1000;
@@ -46,14 +68,14 @@ function getUptimeSeconds() {
 async function getBot(env: Record<string, string | undefined>) {
 	if (!botPromise) {
 		botPromise = (async () => {
-			const { bot } = await createBot({
+			const runtime = await createBot({
 				env,
 				modelsConfig,
 				runtimeSkills,
 				getUptimeSeconds,
 			});
-			await bot.init();
-			return bot;
+			await runtime.bot.init();
+			return runtime;
 		})();
 	}
 	return botPromise;
@@ -398,8 +420,8 @@ export class TelegramUpdatesDO implements DurableObject {
 		}
 
 		try {
-			const bot = await getBot(this.env);
-			await bot.handleUpdate(update);
+			const runtime = await getBot(this.env);
+			await runtime.bot.handleUpdate(update);
 			if (updateId) {
 				state.processedIds.push(updateId);
 				if (state.processedIds.length > PROCESSED_IDS_MAX) {
@@ -420,7 +442,7 @@ export class TelegramUpdatesDO implements DurableObject {
 		if (this.processing) return;
 		this.processing = true;
 		try {
-			const bot = await getBot(this.env);
+			const runtime = await getBot(this.env);
 			const state = await this.loadState();
 
 			while (state.queue.length > 0) {
@@ -434,7 +456,7 @@ export class TelegramUpdatesDO implements DurableObject {
 
 				state.queue.shift();
 				try {
-					await bot.handleUpdate(item.update);
+					await runtime.bot.handleUpdate(item.update);
 					state.processedIds.push(item.id);
 					if (state.processedIds.length > PROCESSED_IDS_MAX) {
 						state.processedIds = state.processedIds.slice(
@@ -587,6 +609,9 @@ function handleGatewayWebSocket(request: WorkerRequest, env: Env): WorkerRespons
 	) => {
 		send({ type: "res", id, ok, payload, error });
 	};
+	const sendEvent = (streamId: string, payload: Record<string, unknown>) => {
+		send({ type: "event", streamId, ...payload });
+	};
 
 	server.addEventListener("message", async (event) => {
 		const raw = typeof event.data === "string" ? event.data : "";
@@ -675,6 +700,102 @@ function handleGatewayWebSocket(request: WorkerRequest, env: Env): WorkerRespons
 			} catch (error) {
 				sendResponse(id, false, { ok: false }, toGatewayError(String(error)));
 			}
+			return;
+		}
+
+		if (method === "chat.send") {
+			const text = typeof params?.text === "string" ? params.text.trim() : "";
+			if (!text) {
+				sendResponse(id, false, undefined, toGatewayError("empty_text"));
+				return;
+			}
+			const chatId =
+				typeof params?.chatId === "string" && params.chatId.trim()
+					? params.chatId.trim()
+					: "admin";
+			const userId =
+				typeof params?.userId === "string" && params.userId.trim()
+					? params.userId.trim()
+					: "admin";
+			const userName =
+				typeof params?.userName === "string" && params.userName.trim()
+					? params.userName.trim()
+					: undefined;
+			const chatType =
+				params?.chatType === "group" ||
+				params?.chatType === "supergroup" ||
+				params?.chatType === "channel"
+					? params.chatType
+					: "private";
+			const stream = params?.stream === true;
+			if (!stream) {
+				try {
+					const runtime = await getBot(env);
+					const result = await runtime.runLocalChat({
+						text,
+						chatId,
+						userId,
+						userName,
+						chatType,
+					});
+					sendResponse(id, true, { messages: result.messages });
+				} catch (error) {
+					sendResponse(id, false, undefined, toGatewayError(String(error)));
+				}
+				return;
+			}
+			const streamId = crypto.randomUUID();
+			const abortController = registerStreamAbort(
+				streamAbortControllers,
+				streamId,
+			);
+			sendResponse(id, true, { streamId });
+			void (async () => {
+				try {
+					const runtime = await getBot(env);
+					const result = await runtime.runLocalChatStream({
+						text,
+						chatId,
+						userId,
+						userName,
+						chatType,
+					}, abortController.signal);
+					const reader = result.stream.getReader();
+					while (true) {
+						const { value, done } = await reader.read();
+						if (done) break;
+						if (value) {
+							sendEvent(streamId, { chunk: value as Record<string, unknown> });
+						}
+					}
+					sendEvent(streamId, { done: true });
+				} catch (error) {
+					sendEvent(streamId, {
+						chunk: { type: "error", errorText: String(error) },
+					});
+					sendEvent(streamId, { done: true });
+				} finally {
+					streamAbortControllers.delete(streamId);
+				}
+			})();
+			return;
+		}
+
+		if (method === "chat.abort") {
+			const streamId =
+				typeof params?.streamId === "string" ? params.streamId : "";
+			if (!streamId) {
+				sendResponse(id, false, undefined, toGatewayError("missing_stream_id"));
+				return;
+			}
+			const aborted = abortStream(streamAbortControllers, streamId);
+			if (!aborted) {
+				sendResponse(id, false, undefined, toGatewayError("stream_not_found"));
+				return;
+			}
+			sendEvent(streamId, { chunk: { type: "abort", reason: "aborted" } });
+			sendEvent(streamId, { done: true });
+			sendResponse(id, true, { ok: true });
 			return;
 		}
 

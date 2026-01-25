@@ -26,21 +26,30 @@ export function normalizeModelRef(input: string): string {
 	return `openai/${trimmed}`;
 }
 
+function resolveModelRef(models: ModelsFile, input: string): string {
+	const trimmed = input.trim();
+	if (!trimmed) return trimmed;
+	if (models.models[trimmed]) return trimmed;
+	const normalized = normalizeModelRef(trimmed);
+	if (models.models[normalized]) return normalized;
+	return normalized;
+}
+
 export function selectModel(
 	models: ModelsFile,
 	overrideRef?: string | null,
 ): SelectedModel {
-	const primary = normalizeModelRef(
+	const source =
 		overrideRef && overrideRef.trim().length > 0
 			? overrideRef
-			: models.defaults.primary,
-	);
+			: models.defaults.primary;
+	const primary = resolveModelRef(models, source);
 	const config = models.models[primary];
 	if (!config) {
 		throw new Error(`Unknown model: ${primary}`);
 	}
 	const fallbacks = (models.defaults.fallbacks ?? [])
-		.map(normalizeModelRef)
+		.map((ref) => resolveModelRef(models, ref))
 		.filter((ref) => ref !== primary);
 	return { ref: primary, config, fallbacks };
 }
