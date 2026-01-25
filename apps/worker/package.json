@@ -3,8 +3,8 @@
   "private": true,
   "version": "0.1.0",
   "scripts": {
-    "dev": "wrangler dev --config ../../worker/wrangler.toml",
-    "deploy": "wrangler deploy --config ../../worker/wrangler.toml",
+    "dev": "bunx wrangler dev --config ../../worker/wrangler.toml",
+    "deploy": "bunx wrangler deploy --config ../../worker/wrangler.toml",
     "test": "vitest run --config vitest.config.ts"
   },
   "devDependencies": {
