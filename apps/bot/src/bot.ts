@@ -5,6 +5,8 @@ import { PostHogAgentToolkit } from "@posthog/agent-toolkit/integrations/ai-sdk"
 import { supermemoryTools } from "@supermemory/tools/ai-sdk";
 import {
 	type ModelMessage,
+	createAgentUIStream,
+	createUIMessageStream,
 	stepCountIs,
 	ToolLoopAgent,
 	type ToolSet,
@@ -12,6 +14,8 @@ import {
 	type TypedToolResult,
 	tool,
 	experimental_transcribe as transcribe,
+	type UIMessage,
+	type UIMessageChunk,
 } from "ai";
 import {
 	API_CONSTANTS,
@@ -3081,6 +3085,173 @@ export async function createBot(options: CreateBotOptions) {
 		return `${text}\n\nИсточники:\n${lines.join("\n")}`;
 	}
 
+	function chunkText(text: string, size = 64) {
+		const chunks: string[] = [];
+		for (let i = 0; i < text.length; i += size) {
+			chunks.push(text.slice(i, i + size));
+		}
+		return chunks;
+	}
+
+	function createTextStream(text: string): ReadableStream<UIMessageChunk> {
+		const messageId = crypto.randomUUID();
+		return new ReadableStream<UIMessageChunk>({
+			start(controller) {
+				controller.enqueue({ type: "start", messageId });
+				controller.enqueue({ type: "text-start", id: messageId });
+				for (const delta of chunkText(text)) {
+					controller.enqueue({ type: "text-delta", id: messageId, delta });
+				}
+				controller.enqueue({ type: "text-end", id: messageId });
+				controller.enqueue({ type: "finish", finishReason: "stop" });
+				controller.close();
+			},
+		});
+	}
+
+	function buildUserUIMessage(text: string): UIMessage {
+		return {
+			id: crypto.randomUUID(),
+			role: "user",
+			parts: [{ type: "text", text }],
+		};
+	}
+
+	function createAgentStreamWithTools(
+		agent: ToolLoopAgent,
+		text: string,
+		onToolStep?: (toolNames: string[]) => Promise<void> | void,
+		abortSignal?: AbortSignal,
+	): ReadableStream<UIMessageChunk> {
+		const uiMessages = [buildUserUIMessage(text)];
+		return createUIMessageStream<UIMessage>({
+			execute: async ({ writer }) => {
+				const stream = await createAgentUIStream({
+					agent,
+					uiMessages,
+					abortSignal,
+					onStepFinish: ({ toolCalls }) => {
+						const names = (toolCalls ?? [])
+							.map((call) => call?.toolName)
+							.filter((name): name is string => Boolean(name));
+						if (names.length > 0) {
+							writer.write({ type: "data-tools", data: { tools: names } });
+							onToolStep?.(names);
+						}
+					},
+				});
+				writer.merge(stream);
+			},
+		});
+	}
+
+	type LocalChatOptions = {
+		text: string;
+		chatId?: string;
+		userId?: string;
+		userName?: string;
+		chatType?: "private" | "group" | "supergroup" | "channel";
+	};
+
+	type LocalChatResult = {
+		messages: string[];
+	};
+
+	type LocalChatStreamResult = {
+		stream: ReadableStream<UIMessageChunk>;
+	};
+
+	async function runLocalChat(options: LocalChatOptions): Promise<LocalChatResult> {
+		const messages: string[] = [];
+		const chatId = options.chatId ?? "admin";
+		const userId = options.userId ?? "admin";
+		const chatType = options.chatType ?? "private";
+		const userName = options.userName ?? "Admin";
+		const text = options.text.trim();
+		if (!text) return { messages };
+
+		const ctx = {
+			state: {},
+			message: {
+				text,
+				message_id: 1,
+			},
+			chat: {
+				id: chatId,
+				type: chatType,
+			},
+			from: {
+				id: userId,
+				first_name: userName,
+			},
+			me: {
+				id: "omni",
+			},
+			reply: async (replyText: string) => {
+				messages.push(replyText);
+			},
+			replyWithChatAction: async () => {},
+		} as unknown as BotContext;
+
+		setLogContext(ctx, {
+			request_id: `admin:${chatId}:${userId}:${Date.now()}`,
+			chat_id: chatId,
+			user_id: userId,
+			username: userName,
+			update_type: "admin",
+			message_type: "text",
+		});
+
+		await handleIncomingText(ctx, text);
+		return { messages };
+	}
+
+	async function runLocalChatStream(
+		options: LocalChatOptions,
+		abortSignal?: AbortSignal,
+	): Promise<LocalChatStreamResult> {
+		const chatId = options.chatId ?? "admin";
+		const userId = options.userId ?? "admin";
+		const chatType = options.chatType ?? "private";
+		const userName = options.userName ?? "Admin";
+		const text = options.text.trim();
+		if (!text) {
+			return { stream: createTextStream("Empty message.") };
+		}
+
+		const ctx = {
+			state: {},
+			message: {
+				text,
+				message_id: 1,
+			},
+			chat: {
+				id: chatId,
+				type: chatType,
+			},
+			from: {
+				id: userId,
+				first_name: userName,
+			},
+			me: {
+				id: "omni",
+			},
+			replyWithChatAction: async () => {},
+		} as unknown as BotContext;
+
+		setLogContext(ctx, {
+			request_id: `admin:${chatId}:${userId}:${Date.now()}`,
+			chat_id: chatId,
+			user_id: userId,
+			username: userName,
+			update_type: "admin",
+			message_type: "text",
+		});
+
+		const stream = await handleIncomingTextStream(ctx, text, abortSignal);
+		return { stream };
+	}
+
 	bot.on("message:text", async (ctx) => {
 		setLogContext(ctx, { message_type: "text" });
 		const text = ctx.message.text.trim();
@@ -3679,6 +3850,309 @@ export async function createBot(options: CreateBotOptions) {
 		}
 	}
 
+	async function handleIncomingTextStream(
+		ctx: BotContext,
+		rawText: string,
+		abortSignal?: AbortSignal,
+	): Promise<ReadableStream<UIMessageChunk>> {
+		const text = rawText.trim();
+		if (!text || text.startsWith("/")) {
+			return createTextStream("Commands are not supported here.");
+		}
+
+		try {
+			await ctx.replyWithChatAction("typing");
+			if (!isGroupAllowed(ctx)) {
+				setLogContext(ctx, { outcome: "blocked", status_code: 403 });
+				return createTextStream("Доступ запрещен.");
+			}
+			if (isGroupChat(ctx) && TELEGRAM_GROUP_REQUIRE_MENTION) {
+				const allowReply =
+					ctx.message?.reply_to_message?.from?.id !== undefined &&
+					ctx.me?.id !== undefined &&
+					ctx.message.reply_to_message.from.id === ctx.me.id;
+				if (!allowReply && !isBotMentioned(ctx)) {
+					setLogContext(ctx, { outcome: "blocked", status_code: 403 });
+					return createTextStream("Mention required.");
+				}
+			}
+			const chatId = ctx.chat?.id?.toString() ?? "";
+			const memoryId = ctx.from?.id?.toString() ?? chatId;
+			const userName = ctx.from?.first_name?.trim() || undefined;
+			const chatState = chatId ? getChatState(chatId) : null;
+			const historyMessages =
+				memoryId && Number.isFinite(HISTORY_MAX_MESSAGES)
+					? await loadHistoryMessages(memoryId, HISTORY_MAX_MESSAGES, text)
+					: [];
+			const historyText = historyMessages.length
+				? formatHistoryForPrompt(historyMessages)
+				: "";
+			const sprintQuery = isSprintQuery(text);
+			const issueKeys = sprintQuery
+				? extractExplicitIssueKeys(text)
+				: extractIssueKeysFromText(text, DEFAULT_ISSUE_PREFIX);
+			setLogContext(ctx, {
+				issue_key_count: issueKeys.length,
+				issue_key: issueKeys[0],
+			});
+			const jiraKeys = issueKeys.filter((key) => isJiraIssueKey(key));
+			const trackerKeys = issueKeys.filter((key) => !isJiraIssueKey(key));
+
+			if (issueKeys.length > 1 && jiraKeys.length === issueKeys.length) {
+				const issuesData = await Promise.all(
+					jiraKeys.slice(0, 5).map(async (key) => {
+						const [issueResult, commentResult] = await Promise.all([
+							jiraIssueGet(key, 30_000),
+							jiraIssueGetComments({ issueKey: key }, 30_000),
+						]);
+						return {
+							key,
+							issueText: JSON.stringify(normalizeJiraIssue(issueResult), null, 2),
+							commentsText: commentResult.text,
+						};
+					}),
+				);
+				const config = getModelConfig(activeModelRef);
+				if (!config) {
+					return createTextStream("Model not configured.");
+				}
+				setLogContext(ctx, { model_ref: activeModelRef, model_id: config.id });
+				const agent = await createMultiIssueAgent({
+					question: text,
+					modelRef: activeModelRef,
+					modelName: config.label ?? config.id,
+					reasoning: resolveReasoningFor(config),
+					modelId: config.id,
+					issues: issuesData,
+					userName,
+				});
+				if (chatState) {
+					chatState.lastCandidates = issuesData.map((issue) => ({
+						key: issue.key,
+						summary: "",
+						score: 0,
+					}));
+					chatState.lastPrimaryKey = issuesData[0]?.key ?? null;
+					chatState.lastUpdatedAt = Date.now();
+				}
+				if (memoryId) {
+					void appendHistoryMessage(memoryId, {
+						timestamp: new Date().toISOString(),
+						role: "user",
+						text,
+					});
+				}
+				return createAgentStreamWithTools(agent, text, undefined, abortSignal);
+			}
+
+			if (issueKeys.length > 1 && trackerKeys.length === issueKeys.length) {
+				const issuesData = await Promise.all(
+					issueKeys.slice(0, 5).map(async (key) => {
+						const [issueResult, commentResult] = await Promise.all([
+							trackerCallTool("issue_get", { issue_id: key }, 30_000, ctx),
+							trackerCallTool(
+								"issue_get_comments",
+								{ issue_id: key },
+								30_000,
+								ctx,
+							),
+						]);
+						return {
+							key,
+							issueText: formatToolResult(issueResult),
+							commentsText: extractCommentsText(commentResult).text,
+						};
+					}),
+				);
+				const config = getModelConfig(activeModelRef);
+				if (!config) {
+					return createTextStream("Model not configured.");
+				}
+				setLogContext(ctx, { model_ref: activeModelRef, model_id: config.id });
+				const agent = await createMultiIssueAgent({
+					question: text,
+					modelRef: activeModelRef,
+					modelName: config.label ?? config.id,
+					reasoning: resolveReasoningFor(config),
+					modelId: config.id,
+					issues: issuesData,
+					userName,
+				});
+				if (chatState) {
+					chatState.lastCandidates = issuesData.map((issue) => ({
+						key: issue.key,
+						summary: "",
+						score: 0,
+					}));
+					chatState.lastPrimaryKey = issuesData[0]?.key ?? null;
+					chatState.lastUpdatedAt = Date.now();
+				}
+				if (memoryId) {
+					void appendHistoryMessage(memoryId, {
+						timestamp: new Date().toISOString(),
+						role: "user",
+						text,
+					});
+				}
+				return createAgentStreamWithTools(agent, text, undefined, abortSignal);
+			}
+
+			const issueKey = issueKeys[0] ?? null;
+			if (issueKey && isJiraIssueKey(issueKey)) {
+				const [issueResult, commentResult] = await Promise.all([
+					jiraIssueGet(issueKey, 30_000),
+					jiraIssueGetComments({ issueKey }, 30_000),
+				]);
+				const issueText = JSON.stringify(
+					normalizeJiraIssue(issueResult),
+					null,
+					2,
+				);
+				const commentsText = commentResult.text;
+				const config = getModelConfig(activeModelRef);
+				if (!config) {
+					return createTextStream("Model not configured.");
+				}
+				setLogContext(ctx, { model_ref: activeModelRef, model_id: config.id });
+				const agent = await createIssueAgent({
+					question: text,
+					modelRef: activeModelRef,
+					modelName: config.label ?? config.id,
+					reasoning: resolveReasoningFor(config),
+					modelId: config.id,
+					issueKey,
+					issueText,
+					commentsText,
+					userName,
+				});
+				if (chatState) {
+					chatState.lastCandidates = [{ key: issueKey, summary: "", score: 0 }];
+					chatState.lastPrimaryKey = issueKey;
+					chatState.lastUpdatedAt = Date.now();
+				}
+				if (memoryId) {
+					void appendHistoryMessage(memoryId, {
+						timestamp: new Date().toISOString(),
+						role: "user",
+						text,
+					});
+				}
+				return createAgentStreamWithTools(agent, text, undefined, abortSignal);
+			}
+
+			if (issueKey && trackerKeys.length === issueKeys.length) {
+				const [issueResult, commentResult] = await Promise.all([
+					trackerCallTool("issue_get", { issue_id: issueKey }, 30_000, ctx),
+					trackerCallTool(
+						"issue_get_comments",
+						{ issue_id: issueKey },
+						30_000,
+						ctx,
+					),
+				]);
+				const issueText = formatToolResult(issueResult);
+				const commentsText = extractCommentsText(commentResult).text;
+				const config = getModelConfig(activeModelRef);
+				if (!config) {
+					return createTextStream("Model not configured.");
+				}
+				setLogContext(ctx, { model_ref: activeModelRef, model_id: config.id });
+				const agent = await createIssueAgent({
+					question: text,
+					modelRef: activeModelRef,
+					modelName: config.label ?? config.id,
+					reasoning: resolveReasoningFor(config),
+					modelId: config.id,
+					issueKey,
+					issueText,
+					commentsText,
+					userName,
+				});
+				if (chatState) {
+					chatState.lastCandidates = [{ key: issueKey, summary: "", score: 0 }];
+					chatState.lastPrimaryKey = issueKey;
+					chatState.lastUpdatedAt = Date.now();
+				}
+				if (memoryId) {
+					void appendHistoryMessage(memoryId, {
+						timestamp: new Date().toISOString(),
+						role: "user",
+						text,
+					});
+				}
+				return createAgentStreamWithTools(agent, text, undefined, abortSignal);
+			}
+
+			const config = getModelConfig(activeModelRef);
+			if (!config) {
+				return createTextStream("Model not configured.");
+			}
+			setLogContext(ctx, { model_ref: activeModelRef, model_id: config.id });
+			const plan = await buildOrchestrationPlan(text, ctx);
+			const orchestrationPolicy = resolveOrchestrationPolicy(ctx);
+			let orchestrationSummary = "";
+			if (plan.agents.length > 0) {
+				const allTools = await createAgentTools({
+					history: historyText,
+					chatId: memoryId,
+					ctx,
+				});
+				const toolsByAgent = {
+					tracker: buildTrackerTools(allTools),
+					jira: buildJiraTools(allTools),
+					posthog: buildPosthogTools(allTools),
+					web: buildWebTools(allTools),
+					memory: buildMemorySubagentTools(allTools),
+				};
+				const orchestrationResult = await runOrchestration(plan, {
+					prompt: text,
+					modelId: config.id,
+					toolsByAgent,
+					isGroupChat: isGroupChat(ctx),
+					log: logger.info,
+					allowAgents: orchestrationPolicy.allowAgents,
+					denyAgents: orchestrationPolicy.denyAgents,
+					budgets: orchestrationPolicy.budgets,
+					parallelism: orchestrationPolicy.parallelism,
+					agentOverrides: orchestrationPolicy.agentOverrides,
+					defaultMaxSteps: orchestrationPolicy.defaultMaxSteps,
+					defaultTimeoutMs: orchestrationPolicy.defaultTimeoutMs,
+					hooks: orchestrationPolicy.hooks,
+				});
+				orchestrationSummary =
+					buildOrchestrationSummary(orchestrationResult);
+			}
+			const mergedHistory = mergeHistoryBlocks(
+				historyText,
+				orchestrationSummary,
+			);
+			const agent = await createAgent(text, activeModelRef, config, {
+				onCandidates: (candidates) => {
+					if (!chatState) return;
+					chatState.lastCandidates = candidates;
+					chatState.lastPrimaryKey = candidates[0]?.key ?? null;
+					chatState.lastUpdatedAt = Date.now();
+				},
+				recentCandidates: chatState?.lastCandidates,
+				history: mergedHistory,
+				chatId: memoryId,
+				userName,
+				ctx,
+			});
+			if (memoryId) {
+				void appendHistoryMessage(memoryId, {
+					timestamp: new Date().toISOString(),
+					role: "user",
+					text,
+				});
+			}
+			return createAgentStreamWithTools(agent, text, undefined, abortSignal);
+		} catch (error) {
+			setLogError(ctx, error);
+			return createTextStream(`Ошибка: ${String(error)}`);
+		}
+	}
+
 	bot.on("message", (ctx) => {
 		setLogContext(ctx, { message_type: "other" });
 		return sendText(
@@ -3689,5 +4163,5 @@ export async function createBot(options: CreateBotOptions) {
 
 	const allowedUpdates = [...API_CONSTANTS.DEFAULT_UPDATE_TYPES];
 
-	return { bot, allowedUpdates };
+	return { bot, allowedUpdates, runLocalChat, runLocalChatStream };
 }

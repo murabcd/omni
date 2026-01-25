@@ -4,6 +4,7 @@ import {
 	authorizeGatewayToken,
 	buildAdminStatusPayload,
 } from "../lib/gateway.js";
+import { abortStream, registerStreamAbort } from "../index.js";
 
 describe("gateway helpers", () => {
 	it("denies when token missing", () => {
@@ -55,5 +56,14 @@ describe("gateway helpers", () => {
 		expect(payload.serviceName).toBe("omni");
 		expect(payload.uptimeSeconds).toBe(12);
 		expect(payload.summary.model).toBe("gpt-5.2");
+	});
+
+	it("aborts streaming runs", () => {
+		const registry = new Map<string, AbortController>();
+		const controller = registerStreamAbort(registry, "stream-1");
+		expect(controller.signal.aborted).toBe(false);
+		expect(abortStream(registry, "stream-1")).toBe(true);
+		expect(controller.signal.aborted).toBe(true);
+		expect(abortStream(registry, "stream-1")).toBe(false);
 	});
 });
