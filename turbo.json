@@ -3,7 +3,8 @@
   "tasks": {
     "build": {
       "dependsOn": ["^build"],
-      "outputs": ["dist/**", ".next/**", "!.next/cache/**"]
+      "outputs": ["dist/**", ".next/**", "!.next/cache/**"],
+      "inputs": ["$TURBO_DEFAULT$", ".env", ".env.*"]
     },
     "build:skills": {
       "dependsOn": ["^build:skills"]
@@ -17,6 +18,9 @@
     },
     "lint": {},
     "type-check": {},
-    "test": {}
+    "test": {
+      "dependsOn": ["build"],
+      "inputs": ["$TURBO_DEFAULT$", ".env", ".env.*"]
+    }
   }
 }
