@@ -18,6 +18,11 @@ import {
 	buildGatewayConfigSnapshot,
 	sanitizeGatewayConfig,
 } from "../apps/bot/src/lib/gateway/config.js";
+import {
+	authorizeGatewayToken,
+	buildAdminStatusPayload,
+	parseList,
+} from "./lib/gateway.js";
 import { loadGatewayPlugins } from "../apps/bot/src/lib/gateway/plugins.js";
 import { allowTelegramUpdate } from "../apps/bot/src/lib/gateway/telegram-allowlist.js";
 import { buildDailyStatusReportParts } from "../apps/bot/src/lib/reports/daily-status.js";
@@ -61,34 +66,12 @@ function getGatewayHooks(env: Record<string, string | undefined>) {
 	return gatewayHooks;
 }
 
-function parseList(raw: string | undefined) {
-	if (!raw) return [];
-	return raw
-		.split(",")
-		.map((entry) => entry.trim())
-		.filter(Boolean);
-}
-
 function extractClientIp(request: WorkerRequest) {
 	return (
 		request.headers.get("cf-connecting-ip") ??
 		request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ??
 		""
 	);
-}
-
-function authorizeGatewayToken(
-	token: string | undefined,
-	request: WorkerRequest,
-	env: Env,
-) {
-	const expected = env.ADMIN_API_TOKEN?.trim() ?? "";
-	if (!expected) return false;
-	if (!token || token !== expected) return false;
-	const allowlist = parseList(env.ADMIN_ALLOWLIST);
-	if (allowlist.length === 0) return true;
-	const ip = extractClientIp(request);
-	return Boolean(ip && allowlist.includes(ip));
 }
 
 async function readGatewayConfig(env: Env): Promise<GatewayConfig> {
@@ -527,50 +510,6 @@ function toWorkerResponse(response: Response): WorkerResponse {
 	return response as unknown as WorkerResponse;
 }
 
-function buildAdminStatusPayload(env: Env) {
-	const pluginIds = parseList(env.GATEWAY_PLUGINS).map((id) => id.toLowerCase());
-	const allowlist = parseList(env.GATEWAY_PLUGINS_ALLOWLIST).map((id) =>
-		id.toLowerCase(),
-	);
-	const denylist = parseList(env.GATEWAY_PLUGINS_DENYLIST).map((id) =>
-		id.toLowerCase(),
-	);
-	const activePlugins =
-		allowlist.length > 0
-			? pluginIds.filter((id) => allowlist.includes(id))
-			: pluginIds.filter((id) => !denylist.includes(id));
-	return {
-		serviceName: env.SERVICE_NAME ?? "omni",
-		version: env.RELEASE_VERSION ?? "dev",
-		commit: env.COMMIT_HASH ?? "local",
-		region: env.REGION ?? "local",
-		instanceId: env.INSTANCE_ID ?? "local",
-		uptimeSeconds: getUptimeSeconds(),
-		admin: {
-			authRequired: Boolean(env.ADMIN_API_TOKEN?.trim()),
-			allowlist: parseList(env.ADMIN_ALLOWLIST),
-		},
-		gateway: {
-			plugins: {
-				configured: pluginIds,
-				allowlist,
-				denylist,
-				active: activePlugins,
-			},
-		},
-		cron: {
-			enabled: env.CRON_STATUS_ENABLED === "1",
-			chatId: env.CRON_STATUS_CHAT_ID ?? "",
-			timezone: env.CRON_STATUS_TIMEZONE ?? "Europe/Moscow",
-			sprintFilter: env.CRON_STATUS_SPRINT_FILTER ?? "open",
-		},
-		summary: {
-			enabled: env.CRON_STATUS_SUMMARY_ENABLED === "1",
-			model: env.CRON_STATUS_SUMMARY_MODEL ?? env.OPENAI_MODEL ?? "gpt-5.2",
-		},
-	};
-}
-
 async function handleAdminRequest(request: WorkerRequest, env: Env) {
 	const url = new URL(request.url);
 	const path = url.pathname;
@@ -578,7 +517,12 @@ async function handleAdminRequest(request: WorkerRequest, env: Env) {
 		return withCors(new Response(null, { status: 204 }));
 	}
 	if (path === "/admin/status" && request.method === "GET") {
-		const body = JSON.stringify(buildAdminStatusPayload(env));
+		const body = JSON.stringify(
+			buildAdminStatusPayload({
+				env,
+				uptimeSeconds: getUptimeSeconds(),
+			}),
+		);
 		return withCors(
 			new Response(body, {
 				status: 200,
@@ -669,14 +613,24 @@ function handleGatewayWebSocket(request: WorkerRequest, env: Env): WorkerRespons
 
 		if (method === "connect") {
 			const token = typeof params?.token === "string" ? params.token : "";
-			if (!authorizeGatewayToken(token, request, env)) {
+			if (
+				!authorizeGatewayToken({
+					token,
+					expectedToken: env.ADMIN_API_TOKEN,
+					allowlist: env.ADMIN_ALLOWLIST,
+					clientIp: extractClientIp(request),
+				})
+			) {
 				sendResponse(id, false, undefined, toGatewayError("unauthorized"));
 				return;
 			}
 			authenticated = true;
 			const config = await readGatewayConfig(env);
 			const effectiveEnv = applyGatewayConfig(env, config);
-			const status = buildAdminStatusPayload(effectiveEnv);
+			const status = buildAdminStatusPayload({
+				env: effectiveEnv,
+				uptimeSeconds: getUptimeSeconds(),
+			});
 			const snapshot = buildGatewayConfigSnapshot(env, config);
 			sendResponse(id, true, { status, config: snapshot });
 			return;
