@@ -10,10 +10,21 @@ invocation_logs = true
 [observability.traces]
 enabled = true
 
+[triggers]
+crons = ["0 8 * * 1-5"]
+
 [[durable_objects.bindings]]
 name = "UPDATES_DO"
 class_name = "TelegramUpdatesDO"
 
+[[durable_objects.bindings]]
+name = "GATEWAY_CONFIG_DO"
+class_name = "GatewayConfigDO"
+
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["TelegramUpdatesDO"]
+
+[[migrations]]
+tag = "v2"
+new_sqlite_classes = ["GatewayConfigDO"]

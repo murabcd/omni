@@ -3,22 +3,30 @@ import type {
 	DurableObjectNamespace,
 	DurableObjectState,
 	ExecutionContext,
+	ScheduledEvent,
 	Request as WorkerRequest,
 	Response as WorkerResponse,
 } from "@cloudflare/workers-types";
 import type { Update } from "grammy/types";
-import modelsConfig from "../config/models.json";
-import runtimeSkills from "../config/runtime-skills.json";
-import { createBot } from "../src/bot.js";
+import modelsConfig from "../apps/bot/config/models.json";
+import runtimeSkills from "../apps/bot/config/runtime-skills.json";
+import { createBot } from "../apps/bot/src/bot.js";
+import { authorizeAdminRequest } from "../apps/bot/src/lib/gateway/admin-auth.js";
+import { loadGatewayPlugins } from "../apps/bot/src/lib/gateway/plugins.js";
+import { allowTelegramUpdate } from "../apps/bot/src/lib/gateway/telegram-allowlist.js";
+import { buildDailyStatusReportParts } from "../apps/bot/src/lib/reports/daily-status.js";
+import { markdownToTelegramHtmlChunks } from "../apps/bot/src/lib/telegram/format.js";
 
 const startTime = Date.now();
 
 type Env = Record<string, string | undefined> & {
 	UPDATES_DO: DurableObjectNamespace;
+	GATEWAY_CONFIG_DO: DurableObjectNamespace;
 };
 
 let botPromise: Promise<Awaited<ReturnType<typeof createBot>>["bot"]> | null =
 	null;
+let gatewayHooks: ReturnType<typeof loadGatewayPlugins> | null = null;
 
 function getUptimeSeconds() {
 	return (Date.now() - startTime) / 1000;
@@ -40,6 +48,132 @@ async function getBot(env: Record<string, string | undefined>) {
 	return botPromise;
 }
 
+function getGatewayHooks(env: Record<string, string | undefined>) {
+	if (!gatewayHooks) {
+		gatewayHooks = loadGatewayPlugins(env);
+	}
+	return gatewayHooks;
+}
+
+function parseList(raw: string | undefined) {
+	if (!raw) return [];
+	return raw
+		.split(",")
+		.map((entry) => entry.trim())
+		.filter(Boolean);
+}
+
+function extractClientIp(request: WorkerRequest) {
+	return (
+		request.headers.get("cf-connecting-ip") ??
+		request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ??
+		""
+	);
+}
+
+function authorizeGatewayToken(
+	token: string | undefined,
+	request: WorkerRequest,
+	env: Env,
+) {
+	const expected = env.ADMIN_API_TOKEN?.trim() ?? "";
+	if (!expected) return false;
+	if (!token || token !== expected) return false;
+	const allowlist = parseList(env.ADMIN_ALLOWLIST);
+	if (allowlist.length === 0) return true;
+	const ip = extractClientIp(request);
+	return Boolean(ip && allowlist.includes(ip));
+}
+
+const GATEWAY_CONFIG_KEYS = [
+	"ADMIN_ALLOWLIST",
+	"ALLOWED_TG_IDS",
+	"ALLOWED_TG_GROUPS",
+	"TELEGRAM_GROUP_REQUIRE_MENTION",
+	"TELEGRAM_TIMEOUT_SECONDS",
+	"TELEGRAM_TEXT_CHUNK_LIMIT",
+	"GATEWAY_PLUGINS",
+	"GATEWAY_PLUGINS_ALLOWLIST",
+	"GATEWAY_PLUGINS_DENYLIST",
+	"CRON_STATUS_ENABLED",
+	"CRON_STATUS_CHAT_ID",
+	"CRON_STATUS_TIMEZONE",
+	"CRON_STATUS_SPRINT_FILTER",
+	"CRON_STATUS_MAX_ITEMS_PER_SECTION",
+	"CRON_STATUS_SUMMARY_ENABLED",
+	"CRON_STATUS_SUMMARY_MODEL",
+	"CRON_STATUS_IN_PROGRESS_STATUSES",
+	"CRON_STATUS_BLOCKED_STATUSES",
+	"CRON_TEAM_AI_ASSIGNEES",
+	"CRON_TEAM_CS_ASSIGNEES",
+	"CRON_TEAM_HR_ASSIGNEES",
+] as const;
+
+type GatewayConfigKey = (typeof GATEWAY_CONFIG_KEYS)[number];
+type GatewayConfig = Partial<Record<GatewayConfigKey, string>>;
+
+function sanitizeGatewayConfig(input: unknown): GatewayConfig {
+	const next: GatewayConfig = {};
+	if (!input || typeof input !== "object") return next;
+	for (const key of GATEWAY_CONFIG_KEYS) {
+		const raw = (input as Record<string, unknown>)[key];
+		if (typeof raw === "string") {
+			next[key] = raw;
+		}
+	}
+	return next;
+}
+
+async function readGatewayConfig(env: Env): Promise<GatewayConfig> {
+	const id = env.GATEWAY_CONFIG_DO.idFromName("gateway-config");
+	const stub = env.GATEWAY_CONFIG_DO.get(id);
+	const response = await stub.fetch("https://do/config");
+	if (!response.ok) return {};
+	const payload = (await response.json()) as { config?: GatewayConfig };
+	return payload.config ?? {};
+}
+
+async function writeGatewayConfig(env: Env, config: GatewayConfig) {
+	const id = env.GATEWAY_CONFIG_DO.idFromName("gateway-config");
+	const stub = env.GATEWAY_CONFIG_DO.get(id);
+	const response = await stub.fetch("https://do/config", {
+		method: "POST",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify({ config }),
+	});
+	if (!response.ok) {
+		throw new Error(`gateway_config_write_failed:${response.status}`);
+	}
+	const payload = (await response.json()) as { config?: GatewayConfig };
+	return payload.config ?? {};
+}
+
+function applyGatewayConfig(env: Env, config: GatewayConfig) {
+	const next = { ...env };
+	for (const [key, value] of Object.entries(config)) {
+		const trimmed = typeof value === "string" ? value.trim() : "";
+		if (trimmed) {
+			next[key as GatewayConfigKey] = trimmed;
+		}
+	}
+	return next;
+}
+
+function buildGatewayConfigSnapshot(env: Env, config: GatewayConfig): GatewayConfig {
+	const snapshot: GatewayConfig = {};
+	for (const key of GATEWAY_CONFIG_KEYS) {
+		const stored = config[key];
+		if (typeof stored === "string" && stored.trim()) {
+			snapshot[key] = stored;
+		} else if (env[key] !== undefined) {
+			snapshot[key] = env[key];
+		} else {
+			snapshot[key] = "";
+		}
+	}
+	return snapshot;
+}
+
 export default {
 	async fetch(
 		request: WorkerRequest,
@@ -47,6 +181,69 @@ export default {
 		_ctx: ExecutionContext,
 	): Promise<WorkerResponse> {
 		const url = new URL(request.url);
+		const startMs = Date.now();
+		if (url.pathname === "/gateway" && isWebSocketUpgrade(request)) {
+			return handleGatewayWebSocket(request, env);
+		}
+		const route = url.pathname.startsWith("/admin")
+			? "admin"
+			: url.pathname === "/telegram"
+				? "telegram"
+				: "other";
+		const config = await readGatewayConfig(env);
+		const effectiveEnv = applyGatewayConfig(env, config);
+		const hooks = getGatewayHooks(effectiveEnv);
+
+		if (route === "admin") {
+			if (request.method === "OPTIONS") {
+				return toWorkerResponse(withCors(new Response(null, { status: 204 })));
+			}
+			const adminRequest = request as unknown as Request;
+			const decision = authorizeAdminRequest(adminRequest, effectiveEnv);
+			if (!decision.allowed) {
+				return toWorkerResponse(
+					withCors(
+						new Response("Unauthorized", {
+							status: 401,
+							headers: { "Content-Type": "text/plain" },
+						}),
+					),
+				);
+			}
+			const ctx = {
+				request: adminRequest,
+				env,
+				url,
+				path: url.pathname,
+				route: "admin" as const,
+			};
+			for (const hook of hooks) {
+				const outcome = hook.beforeRequest?.(ctx);
+				if (outcome && outcome.allow === false) {
+					return toWorkerResponse(
+						withCors(new Response("Forbidden", { status: 403 })),
+					);
+				}
+			}
+			try {
+				const response = await handleAdminRequest(request, effectiveEnv);
+				const durationMs = Date.now() - startMs;
+				for (const hook of hooks) {
+					hook.afterRequest?.({ ...ctx, response, durationMs });
+				}
+				return toWorkerResponse(response);
+			} catch (error) {
+				const durationMs = Date.now() - startMs;
+				for (const hook of hooks) {
+					hook.afterRequest?.({
+						...ctx,
+						durationMs,
+						error: String(error),
+					});
+				}
+				throw error;
+			}
+		}
 		if (url.pathname !== "/telegram") {
 			return toWorkerResponse(new Response("Not found", { status: 404 }));
 		}
@@ -59,16 +256,122 @@ export default {
 		if (!isTelegramUpdate(update)) {
 			return toWorkerResponse(new Response("Bad Request", { status: 400 }));
 		}
+		const updateDecision = allowTelegramUpdate(update, effectiveEnv);
+		if (!updateDecision.allowed) {
+			console.log(
+				JSON.stringify({
+					event: "gateway_blocked",
+					reason: updateDecision.reason ?? "not_allowed",
+				}),
+			);
+			return toWorkerResponse(new Response("OK", { status: 200 }));
+		}
+		const telegramRequest = request as unknown as Request;
+		const ctx = {
+			request: telegramRequest,
+			env,
+			url,
+			path: url.pathname,
+			route: "telegram" as const,
+			update,
+		};
+		for (const hook of hooks) {
+			const outcome = hook.beforeRequest?.(ctx);
+			if (outcome && outcome.allow === false) {
+				return toWorkerResponse(new Response("OK", { status: 200 }));
+			}
+		}
 		const id = env.UPDATES_DO.idFromName("telegram-updates");
 		const stub = env.UPDATES_DO.get(id);
-		await stub.fetch("https://do/enqueue", {
-			method: "POST",
-			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify(update),
-		});
-		return toWorkerResponse(new Response("OK", { status: 200 }));
+		try {
+			await stub.fetch("https://do/enqueue", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify(update),
+			});
+			const durationMs = Date.now() - startMs;
+			for (const hook of hooks) {
+				hook.afterRequest?.({
+					...ctx,
+					durationMs,
+					response: new Response("OK", { status: 200 }),
+				});
+			}
+			return toWorkerResponse(new Response("OK", { status: 200 }));
+		} catch (error) {
+			const durationMs = Date.now() - startMs;
+			for (const hook of hooks) {
+				hook.afterRequest?.({
+					...ctx,
+					durationMs,
+					error: String(error),
+				});
+			}
+			throw error;
+		}
+	},
+	async scheduled(
+		_event: ScheduledEvent,
+		env: Env,
+		ctx: ExecutionContext,
+	): Promise<void> {
+		const config = await readGatewayConfig(env);
+		const effectiveEnv = applyGatewayConfig(env, config);
+		if (effectiveEnv.CRON_STATUS_ENABLED !== "1") return;
+		const chatId = effectiveEnv.CRON_STATUS_CHAT_ID?.trim();
+		if (!chatId) return;
+		if (!effectiveEnv.BOT_TOKEN) return;
+		const task = (async () => {
+			try {
+				const reportParts = await buildDailyStatusReportParts({
+					env: effectiveEnv,
+				});
+				await sendDailyStatusMessages(
+					effectiveEnv.BOT_TOKEN as string,
+					chatId,
+					reportParts,
+				);
+			} catch (error) {
+				console.error("cron_daily_status_error", error);
+			}
+		})();
+		ctx.waitUntil(task);
 	},
 };
+
+export class GatewayConfigDO implements DurableObject {
+	private state: DurableObjectState;
+
+	constructor(state: DurableObjectState) {
+		this.state = state;
+	}
+
+	async fetch(request: WorkerRequest): Promise<WorkerResponse> {
+		const url = new URL(request.url);
+		if (request.method === "GET" && url.pathname === "/config") {
+			const config =
+				(await this.state.storage.get<GatewayConfig>("config")) ?? {};
+			return toWorkerResponse(
+				new Response(JSON.stringify({ config }), {
+					status: 200,
+					headers: { "Content-Type": "application/json" },
+				}),
+			);
+		}
+		if (request.method === "POST" && url.pathname === "/config") {
+			const body = (await request.json()) as { config?: unknown };
+			const config = sanitizeGatewayConfig(body?.config);
+			await this.state.storage.put("config", config);
+			return toWorkerResponse(
+				new Response(JSON.stringify({ config }), {
+					status: 200,
+					headers: { "Content-Type": "application/json" },
+				}),
+			);
+		}
+		return toWorkerResponse(new Response("Not found", { status: 404 }));
+	}
+}
 
 type QueueItem = {
 	id: string;
@@ -281,4 +584,262 @@ function isTelegramUpdate(update: unknown): update is Update {
 
 function toWorkerResponse(response: Response): WorkerResponse {
 	return response as unknown as WorkerResponse;
+}
+
+function buildAdminStatusPayload(env: Env) {
+	const pluginIds = parseList(env.GATEWAY_PLUGINS).map((id) => id.toLowerCase());
+	const allowlist = parseList(env.GATEWAY_PLUGINS_ALLOWLIST).map((id) =>
+		id.toLowerCase(),
+	);
+	const denylist = parseList(env.GATEWAY_PLUGINS_DENYLIST).map((id) =>
+		id.toLowerCase(),
+	);
+	const activePlugins =
+		allowlist.length > 0
+			? pluginIds.filter((id) => allowlist.includes(id))
+			: pluginIds.filter((id) => !denylist.includes(id));
+	return {
+		serviceName: env.SERVICE_NAME ?? "omni",
+		version: env.RELEASE_VERSION ?? "dev",
+		commit: env.COMMIT_HASH ?? "local",
+		region: env.REGION ?? "local",
+		instanceId: env.INSTANCE_ID ?? "local",
+		uptimeSeconds: getUptimeSeconds(),
+		admin: {
+			authRequired: Boolean(env.ADMIN_API_TOKEN?.trim()),
+			allowlist: parseList(env.ADMIN_ALLOWLIST),
+		},
+		gateway: {
+			plugins: {
+				configured: pluginIds,
+				allowlist,
+				denylist,
+				active: activePlugins,
+			},
+		},
+		cron: {
+			enabled: env.CRON_STATUS_ENABLED === "1",
+			chatId: env.CRON_STATUS_CHAT_ID ?? "",
+			timezone: env.CRON_STATUS_TIMEZONE ?? "Europe/Moscow",
+			sprintFilter: env.CRON_STATUS_SPRINT_FILTER ?? "open",
+		},
+		summary: {
+			enabled: env.CRON_STATUS_SUMMARY_ENABLED === "1",
+			model: env.CRON_STATUS_SUMMARY_MODEL ?? env.OPENAI_MODEL ?? "gpt-5.2",
+		},
+	};
+}
+
+async function handleAdminRequest(request: WorkerRequest, env: Env) {
+	const url = new URL(request.url);
+	const path = url.pathname;
+	if (request.method === "OPTIONS") {
+		return withCors(new Response(null, { status: 204 }));
+	}
+	if (path === "/admin/status" && request.method === "GET") {
+		const body = JSON.stringify(buildAdminStatusPayload(env));
+		return withCors(
+			new Response(body, {
+				status: 200,
+				headers: { "Content-Type": "application/json" },
+			}),
+		);
+	}
+	if (path === "/admin/cron/run" && request.method === "POST") {
+		try {
+			const reportParts = await buildDailyStatusReportParts({ env });
+			const chatId = env.CRON_STATUS_CHAT_ID?.trim();
+			if (chatId && env.BOT_TOKEN) {
+				await sendDailyStatusMessages(env.BOT_TOKEN as string, chatId, reportParts);
+			}
+			return withCors(
+				new Response(
+					JSON.stringify({
+						ok: true,
+						blocks: reportParts.blocks.length,
+					}),
+					{ status: 200, headers: { "Content-Type": "application/json" } },
+				),
+			);
+		} catch (error) {
+			console.error("cron_admin_run_error", error);
+			return withCors(
+				new Response(
+					JSON.stringify({ ok: false, error: String(error) }),
+					{ status: 500, headers: { "Content-Type": "application/json" } },
+				),
+			);
+		}
+	}
+	return withCors(new Response("Not found", { status: 404 }));
+}
+
+function isWebSocketUpgrade(request: WorkerRequest) {
+	return request.headers.get("Upgrade")?.toLowerCase() === "websocket";
+}
+
+function toGatewayError(message: string) {
+	return { message };
+}
+
+function handleGatewayWebSocket(request: WorkerRequest, env: Env): WorkerResponse {
+	const pair = new WebSocketPair();
+	const client = pair[0];
+	const server = pair[1];
+	let authenticated = false;
+
+	server.accept();
+
+	const send = (frame: unknown) => {
+		server.send(JSON.stringify(frame));
+	};
+
+	const sendResponse = (
+		id: string,
+		ok: boolean,
+		payload?: unknown,
+		error?: { message: string },
+	) => {
+		send({ type: "res", id, ok, payload, error });
+	};
+
+	server.addEventListener("message", async (event) => {
+		const raw = typeof event.data === "string" ? event.data : "";
+		let parsed: unknown;
+		try {
+			parsed = JSON.parse(raw);
+		} catch {
+			send({ type: "error", error: toGatewayError("invalid_json") });
+			return;
+		}
+		const frame = parsed as {
+			type?: unknown;
+			id?: unknown;
+			method?: unknown;
+			params?: unknown;
+		};
+		if (frame.type !== "req" || typeof frame.id !== "string") {
+			send({ type: "error", error: toGatewayError("invalid_frame") });
+			return;
+		}
+		const id = frame.id;
+		const method = typeof frame.method === "string" ? frame.method : "";
+		const params = frame.params as Record<string, unknown> | undefined;
+
+		if (method === "connect") {
+			const token = typeof params?.token === "string" ? params.token : "";
+			if (!authorizeGatewayToken(token, request, env)) {
+				sendResponse(id, false, undefined, toGatewayError("unauthorized"));
+				return;
+			}
+			authenticated = true;
+			const config = await readGatewayConfig(env);
+			const effectiveEnv = applyGatewayConfig(env, config);
+			const status = buildAdminStatusPayload(effectiveEnv);
+			const snapshot = buildGatewayConfigSnapshot(env, config);
+			sendResponse(id, true, { status, config: snapshot });
+			return;
+		}
+
+		if (!authenticated) {
+			sendResponse(id, false, undefined, toGatewayError("not_authenticated"));
+			return;
+		}
+
+		if (method === "config.get") {
+			const config = await readGatewayConfig(env);
+			const snapshot = buildGatewayConfigSnapshot(env, config);
+			sendResponse(id, true, { config: snapshot });
+			return;
+		}
+
+		if (method === "config.set") {
+			const nextConfig = sanitizeGatewayConfig(params?.config);
+			const stored = await writeGatewayConfig(env, nextConfig);
+			const snapshot = buildGatewayConfigSnapshot(env, stored);
+			sendResponse(id, true, { config: snapshot });
+			return;
+		}
+
+		if (method === "cron.run") {
+			try {
+				const config = await readGatewayConfig(env);
+				const effectiveEnv = applyGatewayConfig(env, config);
+				const reportParts = await buildDailyStatusReportParts({
+					env: effectiveEnv,
+				});
+				const chatId = effectiveEnv.CRON_STATUS_CHAT_ID?.trim();
+				if (chatId && effectiveEnv.BOT_TOKEN) {
+					await sendDailyStatusMessages(
+						effectiveEnv.BOT_TOKEN as string,
+						chatId,
+						reportParts,
+					);
+				}
+				sendResponse(id, true, { ok: true, blocks: reportParts.blocks.length });
+			} catch (error) {
+				sendResponse(id, false, { ok: false }, toGatewayError(String(error)));
+			}
+			return;
+		}
+
+		sendResponse(id, false, undefined, toGatewayError("unknown_method"));
+	});
+
+	return new Response(null, {
+		status: 101,
+		webSocket: client,
+	});
+}
+
+function withCors(response: Response) {
+	const headers = new Headers(response.headers);
+	headers.set("Access-Control-Allow-Origin", "*");
+	headers.set("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
+	headers.set(
+		"Access-Control-Allow-Headers",
+		"Content-Type, Authorization, X-Admin-Token",
+	);
+	return new Response(response.body, {
+		status: response.status,
+		statusText: response.statusText,
+		headers,
+	});
+}
+
+async function sendTelegramMessage(
+	token: string,
+	chatId: string,
+	text: string,
+) {
+	const url = `https://api.telegram.org/bot${token}/sendMessage`;
+	const chunks = markdownToTelegramHtmlChunks(text, 4000);
+	for (const chunk of chunks) {
+		const response = await fetch(url, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				chat_id: chatId,
+				text: chunk,
+				parse_mode: "HTML",
+				disable_web_page_preview: true,
+			}),
+		});
+		if (!response.ok) {
+			const body = await response.text();
+			throw new Error(
+				`telegram_send_failed:${response.status}:${response.statusText}:${body}`,
+			);
+		}
+	}
+}
+
+async function sendDailyStatusMessages(
+	token: string,
+	chatId: string,
+	report: { header: string; blocks: string[] },
+) {
+	for (const block of report.blocks) {
+		await sendTelegramMessage(token, chatId, block);
+	}
 }
