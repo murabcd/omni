@@ -22,9 +22,10 @@
 # Production
 /build
 
-# misc
+# Misc
 .DS_Store
 *.pem
+.vscode/
 
 # Debug
 npm-debug.log*
