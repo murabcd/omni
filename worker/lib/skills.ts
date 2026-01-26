@@ -86,11 +86,51 @@ function serializeSkillsConfig(config: SkillsConfig): string {
 
 function resolveSkillRequirements(toolRef: string) {
 	const { server } = resolveToolRef(toolRef);
-	if (server === "yandex-tracker") {
+	if (server === "yandex-tracker" || server === "tracker") {
 		return {
 			requirements: {
 				bins: [],
 				env: ["TRACKER_TOKEN", "TRACKER_CLOUD_ORG_ID", "TRACKER_ORG_ID"],
+				config: [],
+				os: [],
+			},
+		};
+	}
+	if (server === "jira") {
+		return {
+			requirements: {
+				bins: [],
+				env: ["JIRA_BASE_URL", "JIRA_EMAIL", "JIRA_API_TOKEN"],
+				config: [],
+				os: [],
+			},
+		};
+	}
+	if (server === "posthog") {
+		return {
+			requirements: {
+				bins: [],
+				env: ["POSTHOG_PERSONAL_API_KEY"],
+				config: [],
+				os: [],
+			},
+		};
+	}
+	if (server === "memory") {
+		return {
+			requirements: {
+				bins: [],
+				env: ["SUPERMEMORY_API_KEY"],
+				config: [],
+				os: [],
+			},
+		};
+	}
+	if (server === "web") {
+		return {
+			requirements: {
+				bins: [],
+				env: ["OPENAI_API_KEY", "WEB_SEARCH_ENABLED"],
 				config: [],
 				os: [],
 			},
@@ -106,7 +146,7 @@ function buildMissingEnv(params: {
 	effectiveEnv: Record<string, string | undefined>;
 }) {
 	const missing: string[] = [];
-	if (params.server === "yandex-tracker") {
+	if (params.server === "yandex-tracker" || params.server === "tracker") {
 		if (!params.effectiveEnv.TRACKER_TOKEN) {
 			missing.push("TRACKER_TOKEN");
 		}
@@ -115,6 +155,35 @@ function buildMissingEnv(params: {
 			Boolean(params.effectiveEnv.TRACKER_ORG_ID);
 		if (!hasOrg) {
 			missing.push("TRACKER_CLOUD_ORG_ID", "TRACKER_ORG_ID");
+		}
+	}
+	if (params.server === "jira") {
+		if (!params.effectiveEnv.JIRA_BASE_URL) {
+			missing.push("JIRA_BASE_URL");
+		}
+		if (!params.effectiveEnv.JIRA_EMAIL) {
+			missing.push("JIRA_EMAIL");
+		}
+		if (!params.effectiveEnv.JIRA_API_TOKEN) {
+			missing.push("JIRA_API_TOKEN");
+		}
+	}
+	if (params.server === "posthog") {
+		if (!params.effectiveEnv.POSTHOG_PERSONAL_API_KEY) {
+			missing.push("POSTHOG_PERSONAL_API_KEY");
+		}
+	}
+	if (params.server === "memory") {
+		if (!params.effectiveEnv.SUPERMEMORY_API_KEY) {
+			missing.push("SUPERMEMORY_API_KEY");
+		}
+	}
+	if (params.server === "web") {
+		if (!params.effectiveEnv.OPENAI_API_KEY) {
+			missing.push("OPENAI_API_KEY");
+		}
+		if (params.effectiveEnv.WEB_SEARCH_ENABLED !== "1") {
+			missing.push("WEB_SEARCH_ENABLED");
 		}
 	}
 	return missing;
