@@ -22,4 +22,12 @@ describe("recent candidates instructions", () => {
 		expect(instructions).toContain("PROJ-2961");
 		expect(instructions).toContain("do NOT run tracker_search");
 	});
+
+	it("includes custom system prompt content", () => {
+		const instructions = buildAgentInstructions({
+			...instructionsBase,
+			systemPrompt: "Channel override: keep replies brief.",
+		});
+		expect(instructions).toContain("Channel override: keep replies brief.");
+	});
 });

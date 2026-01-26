@@ -59,6 +59,13 @@ import {
 } from "./lib/jira.js";
 import { createLogger } from "./lib/logger.js";
 import {
+	filterSkillsForChannel,
+	isUserAllowedForChannel,
+	parseChannelConfig,
+	shouldRequireMentionForChannel,
+	type ChannelConfig,
+} from "./lib/channels.js";
+import {
 	filterPosthogTools,
 	POSTHOG_READONLY_TOOL_NAMES,
 } from "./lib/posthog-tools.js";
@@ -565,14 +572,6 @@ export async function createBot(options: CreateBotOptions) {
 		error?: { message: string; type?: string };
 	};
 
-	type ChannelConfig = {
-		requireMention?: boolean;
-		allowUserIds?: string[];
-		skillsAllowlist?: string[];
-		skillsDenylist?: string[];
-		systemPrompt?: string;
-	};
-
 	type BotContext = Context & {
 		state: { logContext?: LogContext; channelConfig?: ChannelConfig };
 	};
@@ -687,11 +686,7 @@ export async function createBot(options: CreateBotOptions) {
 
 	bot.use((ctx, next) => {
 		const raw = (ctx.update as { __channelConfig?: unknown }).__channelConfig;
-		if (raw && typeof raw === "object") {
-			ctx.state.channelConfig = raw as ChannelConfig;
-		} else {
-			ctx.state.channelConfig = undefined;
-		}
+		ctx.state.channelConfig = parseChannelConfig(raw);
 		return next();
 	});
 
@@ -699,10 +694,12 @@ export async function createBot(options: CreateBotOptions) {
 		const channelAllowlist = ctx.state.channelConfig?.allowUserIds ?? [];
 		if (allowedIds.size === 0 && channelAllowlist.length === 0) return next();
 		const userId = ctx.from?.id?.toString() ?? "";
-		const allowedByChannel =
-			channelAllowlist.length > 0 ? channelAllowlist.includes(userId) : false;
-		const allowedByGlobal = allowedIds.has(userId);
-		if (!allowedByChannel && !allowedByGlobal) {
+		const allowed = isUserAllowedForChannel({
+			userId,
+			globalAllowlist: allowedIds,
+			channelAllowlist,
+		});
+		if (!allowed) {
 			setLogContext(ctx, {
 				outcome: "blocked",
 				status_code: 403,
@@ -721,13 +718,6 @@ export async function createBot(options: CreateBotOptions) {
 		return type === "group" || type === "supergroup";
 	}
 
-	function shouldRequireMention(ctx: BotContext) {
-		const override = ctx.state.channelConfig?.requireMention;
-		return typeof override === "boolean"
-			? override
-			: TELEGRAM_GROUP_REQUIRE_MENTION;
-	}
-
 	function resolveChatToolPolicy(ctx?: BotContext) {
 		if (!ctx) return undefined;
 		const chatPolicy = isGroupChat(ctx) ? toolPolicyGroup : toolPolicyDm;
@@ -738,25 +728,6 @@ export async function createBot(options: CreateBotOptions) {
 			});
 		}
 		return merged;
-	}
-
-	function filterSkillsForChannel(
-		ctx: BotContext | undefined,
-		skills: RuntimeSkill[],
-	) {
-		const allowlist = ctx?.state.channelConfig?.skillsAllowlist;
-		const denylist = ctx?.state.channelConfig?.skillsDenylist;
-		let next = skills;
-		if (Array.isArray(allowlist)) {
-			if (allowlist.length === 0) return [];
-			const allowed = new Set(allowlist);
-			next = next.filter((skill) => allowed.has(skill.name));
-		}
-		if (Array.isArray(denylist) && denylist.length > 0) {
-			const denied = new Set(denylist);
-			next = next.filter((skill) => !denied.has(skill.name));
-		}
-		return next;
 	}
 
 	function parseOrchestrationAgentList(raw: string): OrchestrationAgentId[] {
@@ -2741,8 +2712,14 @@ export async function createBot(options: CreateBotOptions) {
 
 	bot.command("skills", async (ctx) => {
 		setLogContext(ctx, { command: "/skills", message_type: "command" });
-		const channelSkills = filterSkillsForChannel(ctx, runtimeSkills);
-		const channelSupported = filterSkillsForChannel(ctx, filteredRuntimeSkills);
+		const channelSkills = filterSkillsForChannel({
+			skills: runtimeSkills,
+			channelConfig: ctx.state.channelConfig,
+		});
+		const channelSupported = filterSkillsForChannel({
+			skills: filteredRuntimeSkills,
+			channelConfig: ctx.state.channelConfig,
+		});
 		if (!channelSkills.length) {
 			await sendText(ctx, "Нет доступных runtime-skills.");
 			return;
@@ -2758,7 +2735,13 @@ export async function createBot(options: CreateBotOptions) {
 
 	bot.command("skill", async (ctx) => {
 		setLogContext(ctx, { command: "/skill", message_type: "command" });
-		if (isGroupChat(ctx) && shouldRequireMention(ctx)) {
+		if (
+			isGroupChat(ctx) &&
+			shouldRequireMentionForChannel({
+				channelConfig: ctx.state.channelConfig,
+				defaultRequireMention: TELEGRAM_GROUP_REQUIRE_MENTION,
+			})
+		) {
 			const allowReply =
 				ctx.message?.reply_to_message?.from?.id !== undefined &&
 				ctx.me?.id !== undefined &&
@@ -2774,7 +2757,10 @@ export async function createBot(options: CreateBotOptions) {
 			await sendText(ctx, "Использование: /skill <name> <json>");
 			return;
 		}
-		const channelSupported = filterSkillsForChannel(ctx, filteredRuntimeSkills);
+		const channelSupported = filterSkillsForChannel({
+			skills: filteredRuntimeSkills,
+			channelConfig: ctx.state.channelConfig,
+		});
 		const skill = channelSupported.find((item) => item.name === skillName);
 		if (!skill) {
 			await sendText(ctx, `Неизвестный skill: ${skillName}`);
@@ -2907,7 +2893,13 @@ export async function createBot(options: CreateBotOptions) {
 
 	bot.command("tracker", async (ctx) => {
 		setLogContext(ctx, { command: "/tracker", message_type: "command" });
-		if (isGroupChat(ctx) && shouldRequireMention(ctx)) {
+		if (
+			isGroupChat(ctx) &&
+			shouldRequireMentionForChannel({
+				channelConfig: ctx.state.channelConfig,
+				defaultRequireMention: TELEGRAM_GROUP_REQUIRE_MENTION,
+			})
+		) {
 			const allowReply =
 				ctx.message?.reply_to_message?.from?.id !== undefined &&
 				ctx.me?.id !== undefined &&
@@ -3264,7 +3256,13 @@ export async function createBot(options: CreateBotOptions) {
 				await sendText(ctx, "Доступ запрещен.");
 				return;
 			}
-			if (isGroupChat(ctx) && shouldRequireMention(ctx)) {
+			if (
+				isGroupChat(ctx) &&
+				shouldRequireMentionForChannel({
+					channelConfig: ctx.state.channelConfig,
+					defaultRequireMention: TELEGRAM_GROUP_REQUIRE_MENTION,
+				})
+			) {
 				const allowReply =
 					ctx.message?.reply_to_message?.from?.id !== undefined &&
 					ctx.me?.id !== undefined &&
@@ -3324,7 +3322,13 @@ export async function createBot(options: CreateBotOptions) {
 				await sendText(ctx, "Доступ запрещен.");
 				return;
 			}
-			if (isGroupChat(ctx) && shouldRequireMention(ctx)) {
+			if (
+				isGroupChat(ctx) &&
+				shouldRequireMentionForChannel({
+					channelConfig: ctx.state.channelConfig,
+					defaultRequireMention: TELEGRAM_GROUP_REQUIRE_MENTION,
+				})
+			) {
 				const allowReply =
 					ctx.message?.reply_to_message?.from?.id !== undefined &&
 					ctx.me?.id !== undefined &&
@@ -3858,7 +3862,13 @@ export async function createBot(options: CreateBotOptions) {
 				setLogContext(ctx, { outcome: "blocked", status_code: 403 });
 				return createTextStream("Доступ запрещен.");
 			}
-			if (isGroupChat(ctx) && shouldRequireMention(ctx)) {
+			if (
+				isGroupChat(ctx) &&
+				shouldRequireMentionForChannel({
+					channelConfig: ctx.state.channelConfig,
+					defaultRequireMention: TELEGRAM_GROUP_REQUIRE_MENTION,
+				})
+			) {
 				const allowReply =
 					ctx.message?.reply_to_message?.from?.id !== undefined &&
 					ctx.me?.id !== undefined &&
