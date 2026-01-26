@@ -4,7 +4,7 @@
 	"version": "0.1.0",
 	"type": "module",
 	"scripts": {
-		"dev": "tsx src/index.ts",
+		"dev": "bun run build:skills && tsx src/index.ts",
 		"start": "node --enable-source-maps dist/index.js",
 		"build": "tsx scripts/build-runtime-skills.ts && tsc -p tsconfig.json",
 		"build:skills": "tsx scripts/build-runtime-skills.ts",
