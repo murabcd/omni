@@ -14,6 +14,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useTheme } from "next-themes";
 import { useEffect, useState } from "react";
+import { Icons } from "@/components/icons";
 import {
 	Sidebar,
 	SidebarContent,
@@ -26,24 +27,6 @@ import {
 	SidebarMenuItem,
 	SidebarRail,
 } from "@/components/ui/sidebar";
-
-// Pixel-style "O" logo
-function OmniLogo({ className }: { className?: string }) {
-	return (
-		<svg
-			viewBox="0 0 28 28"
-			fill="currentColor"
-			className={className}
-			role="img"
-			aria-hidden="true"
-		>
-			<rect x="4" y="0" width="20" height="4" />
-			<rect x="0" y="4" width="4" height="20" />
-			<rect x="24" y="4" width="4" height="20" />
-			<rect x="4" y="24" width="20" height="4" />
-		</svg>
-	);
-}
 
 const navItems = [
 	{ href: "/", label: "Overview", icon: LayoutDashboard },
@@ -74,7 +57,7 @@ export function AppSidebar() {
 						<SidebarMenuButton size="lg" asChild className="h-10">
 							<Link href="/">
 								<div className="flex aspect-square size-8 items-center justify-center">
-									<OmniLogo className="size-5" />
+									<Icons.omniLogo className="size-5" />
 								</div>
 								<div className="grid flex-1 text-left text-sm leading-tight">
 									<span className="truncate font-medium">Omni</span>

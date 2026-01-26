@@ -1,7 +1,8 @@
 "use client";
 
 import type { DataUIPart, UIMessage } from "ai";
-import { Bot, User } from "lucide-react";
+import { User } from "lucide-react";
+import { Icons } from "@/components/icons";
 import { Streamdown } from "streamdown";
 import { Shimmer } from "@/components/ai-elements/shimmer";
 import { cn } from "@/lib/utils";
@@ -25,7 +26,7 @@ interface ChatMessagesProps {
 const EmptyState = (
 	<div className="flex flex-1 items-center justify-center p-8">
 		<div className="text-center space-y-2">
-			<Bot className="mx-auto size-8 text-muted-foreground" />
+			<Icons.sparkles className="size-8" />
 			<p className="text-sm text-muted-foreground">
 				Start a conversation with your assistant
 			</p>
@@ -60,42 +61,33 @@ export function ChatMessages({ messages, isLoading }: ChatMessagesProps) {
 					(part): part is DataUIPart<AdminUIData> => part.type === "data-tools",
 				);
 
-				return (
-					<div
-						key={message.id}
-						className={cn(
-							"flex gap-3",
-							message.role === "user" ? "flex-row-reverse" : "flex-row",
-						)}
-					>
+					return (
 						<div
+							key={message.id}
 							className={cn(
-								"flex size-8 shrink-0 items-center justify-center rounded-full",
-								message.role === "user"
-									? "bg-primary text-primary-foreground"
-									: "bg-muted text-muted-foreground",
+								"flex gap-3",
+								message.role === "user" ? "flex-row-reverse" : "flex-row",
 							)}
 						>
-							{message.role === "user" ? (
-								<User className="size-4" />
-							) : (
-								<Bot className="size-4" />
+							{message.role === "assistant" && (
+								<div className="flex size-8 shrink-0 items-center justify-center rounded-full bg-muted text-muted-foreground">
+									<Icons.sparkles className="size-4" />
+								</div>
 							)}
-						</div>
-						<div
-							className={cn(
-								"flex max-w-[80%] flex-col gap-1",
-								message.role === "user" ? "items-end" : "items-start",
-							)}
-						>
 							<div
 								className={cn(
-									"rounded-lg px-3 py-2 text-sm",
-									message.role === "user"
-										? "bg-primary text-primary-foreground"
-										: "bg-muted text-foreground",
+									"flex max-w-[80%] flex-col gap-1",
+									message.role === "user" ? "items-end" : "items-start",
 								)}
 							>
+								<div
+									className={cn(
+										"text-sm",
+										message.role === "user"
+											? "rounded-lg bg-primary text-primary-foreground px-3 py-2"
+											: "bg-transparent text-foreground px-0 py-0",
+									)}
+								>
 								{message.role === "assistant" ? (
 									<Streamdown className="whitespace-pre-wrap">
 										{text}
@@ -125,9 +117,9 @@ export function ChatMessages({ messages, isLoading }: ChatMessagesProps) {
 			{isLoading && !hasAssistantText && (
 				<div className="flex gap-3">
 					<div className="flex size-8 shrink-0 items-center justify-center rounded-full bg-muted text-muted-foreground">
-						<Bot className="size-4" />
+						<Icons.sparkles className="size-4" />
 					</div>
-					<div className="rounded-lg bg-muted px-3 py-2 text-sm text-muted-foreground">
+					<div className="text-sm text-muted-foreground">
 						<Shimmer>Thinking...</Shimmer>
 					</div>
 				</div>
