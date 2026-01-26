@@ -1,7 +1,8 @@
 "use client";
 
-import { Loader2 } from "lucide-react";
+import { AlertCircle, Loader2 } from "lucide-react";
 import { useGateway } from "@/components/gateway-provider";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import {
 	Card,
@@ -39,87 +40,16 @@ function Field({ label, value, placeholder, type, onChange }: FieldProps) {
 }
 
 export default function SettingsPage() {
-	const {
-		baseUrl,
-		token,
-		setBaseUrl,
-		setToken,
-		connect,
-		config,
-		updateConfigField,
-		saveConfig,
-		configSaving,
-		configError,
-	} = useGateway();
+	const { config, updateConfigField, saveConfig, configSaving, configError } =
+		useGateway();
 
 	return (
 		<div className="max-w-[900px] pt-6">
-			<Tabs defaultValue="connection" className="w-full">
+			<Tabs defaultValue="telegram" className="w-full">
 				<TabsList>
-					<TabsTrigger value="connection">General</TabsTrigger>
 					<TabsTrigger value="telegram">Telegram</TabsTrigger>
 					<TabsTrigger value="cron">Cron</TabsTrigger>
-					<TabsTrigger value="plugins">Plugins</TabsTrigger>
 				</TabsList>
-
-				{/* Connection Tab */}
-				<TabsContent value="connection">
-					<div className="space-y-8">
-						<Card>
-							<CardHeader>
-								<CardTitle>Connection</CardTitle>
-								<CardDescription>
-									Configure the gateway URL and authentication token.
-								</CardDescription>
-							</CardHeader>
-							<CardContent>
-								<div className="grid gap-6 md:grid-cols-2">
-									<Field
-										label="Gateway URL"
-										value={baseUrl}
-										placeholder="http://127.0.0.1:8787"
-										onChange={setBaseUrl}
-									/>
-									<Field
-										label="Admin token"
-										value={token}
-										placeholder="Optional for local dev"
-										type="password"
-										onChange={setToken}
-									/>
-								</div>
-							</CardContent>
-							<CardFooter className="flex justify-between">
-								<span>Connect to the gateway to load settings.</span>
-								<Button onClick={connect}>Save</Button>
-							</CardFooter>
-						</Card>
-
-						<Card>
-							<CardHeader>
-								<CardTitle>Admin allowlist</CardTitle>
-								<CardDescription>
-									Restrict admin panel access to specific IP addresses.
-								</CardDescription>
-							</CardHeader>
-							<CardContent>
-								<div className="max-w-md">
-									<Field
-										label="Allowed IPs"
-										value={config.ADMIN_ALLOWLIST ?? ""}
-										placeholder="127.0.0.1"
-										onChange={(value) =>
-											updateConfigField("ADMIN_ALLOWLIST", value)
-										}
-									/>
-								</div>
-							</CardContent>
-							<CardFooter>
-								<span>Comma-separated IP addresses.</span>
-							</CardFooter>
-						</Card>
-					</div>
-				</TabsContent>
 
 				{/* Telegram Tab */}
 				<TabsContent value="telegram">
@@ -250,6 +180,12 @@ export default function SettingsPage() {
 										updateConfigField("CRON_STATUS_SUMMARY_MODEL", value)
 									}
 								/>
+								<Field
+									label="Default model (OPENAI_MODEL)"
+									value={config.OPENAI_MODEL ?? ""}
+									placeholder="gpt-5.2"
+									onChange={(value) => updateConfigField("OPENAI_MODEL", value)}
+								/>
 							</div>
 						</CardContent>
 						<CardFooter>
@@ -257,50 +193,29 @@ export default function SettingsPage() {
 						</CardFooter>
 					</Card>
 				</TabsContent>
-
-				{/* Plugins Tab */}
-				<TabsContent value="plugins">
-					<Card>
-						<CardHeader>
-							<CardTitle>Gateway plugins</CardTitle>
-							<CardDescription>
-								Configure which plugins are loaded and their access rules.
-							</CardDescription>
-						</CardHeader>
-						<CardContent>
-							<div className="grid gap-6 md:grid-cols-2">
-								<Field
-									label="Plugins"
-									value={config.GATEWAY_PLUGINS ?? ""}
-									placeholder="logger"
-									onChange={(value) =>
-										updateConfigField("GATEWAY_PLUGINS", value)
-									}
-								/>
-								<Field
-									label="Allowlist"
-									value={config.GATEWAY_PLUGINS_ALLOWLIST ?? ""}
-									placeholder=""
-									onChange={(value) =>
-										updateConfigField("GATEWAY_PLUGINS_ALLOWLIST", value)
-									}
-								/>
-								<Field
-									label="Denylist"
-									value={config.GATEWAY_PLUGINS_DENYLIST ?? ""}
-									placeholder=""
-									onChange={(value) =>
-										updateConfigField("GATEWAY_PLUGINS_DENYLIST", value)
-									}
-								/>
-							</div>
-						</CardContent>
-						<CardFooter>
-							<span>Comma-separated plugin names.</span>
-						</CardFooter>
-					</Card>
-				</TabsContent>
 			</Tabs>
+
+			<Card className="mt-8">
+				<CardHeader>
+					<CardTitle>Admin allowlist</CardTitle>
+					<CardDescription>
+						Restrict admin panel access to specific IP addresses.
+					</CardDescription>
+				</CardHeader>
+				<CardContent>
+					<div className="max-w-md">
+						<Field
+							label="Allowed IPs"
+							value={config.ADMIN_ALLOWLIST ?? ""}
+							placeholder="127.0.0.1"
+							onChange={(value) => updateConfigField("ADMIN_ALLOWLIST", value)}
+						/>
+					</div>
+				</CardContent>
+				<CardFooter>
+					<span>Comma-separated IP addresses.</span>
+				</CardFooter>
+			</Card>
 
 			{/* Save Button - Always visible */}
 			<div className="mt-8 border-t border-border pt-6">
@@ -323,7 +238,10 @@ export default function SettingsPage() {
 					</Button>
 				</div>
 				{configError ? (
-					<p className="mt-4 text-sm text-rose-500">{configError}</p>
+					<Alert variant="destructive" className="mt-4">
+						<AlertCircle className="size-4" />
+						<AlertDescription>{configError}</AlertDescription>
+					</Alert>
 				) : null}
 			</div>
 		</div>

@@ -1,5 +1,7 @@
 "use client";
 
+import type { SkillStatusReport } from "@/lib/skills-types";
+
 export type GatewayRequestFrame = {
 	type: "req";
 	id: string;
@@ -151,7 +153,101 @@ export class GatewayClient {
 	}
 
 	runCron(): Promise<{ ok: boolean; blocks?: number; error?: string }> {
-		return this.request("cron.run");
+		return this.request("cron.report.run");
+	}
+
+	cronStatus(): Promise<unknown> {
+		return this.request("cron.status");
+	}
+
+	cronList(params?: { includeDisabled?: boolean }): Promise<{ jobs?: unknown[] }> {
+		return this.request("cron.list", params ?? {});
+	}
+
+	cronAdd(params: unknown): Promise<unknown> {
+		return this.request("cron.add", params);
+	}
+
+	cronUpdate(params: { id?: string; jobId?: string; patch: unknown }): Promise<unknown> {
+		return this.request("cron.update", params);
+	}
+
+	cronRemove(params: { id?: string; jobId?: string }): Promise<{ ok?: boolean }> {
+		return this.request("cron.remove", params);
+	}
+
+	cronRun(params: { id?: string; jobId?: string; mode?: "due" | "force" }): Promise<{ ok?: boolean }> {
+		return this.request("cron.run", params);
+	}
+
+	cronRuns(params: { id?: string; jobId?: string; limit?: number }): Promise<{ entries?: unknown[] }> {
+		return this.request("cron.runs", params);
+	}
+
+	channelsList(params?: { includeDisabled?: boolean; limit?: number }): Promise<{ entries?: unknown[] }> {
+		return this.request("channels.list", params ?? {});
+	}
+
+	channelsPatch(params: {
+		key: string;
+		enabled?: boolean;
+		label?: string | null;
+		requireMention?: boolean;
+		allowUserIds?: string[];
+		skillsAllowlist?: string[];
+		skillsDenylist?: string[];
+		systemPrompt?: string | null;
+	}): Promise<unknown> {
+		return this.request("channels.patch", params);
+	}
+
+	sessionsList(params?: {
+		activeMinutes?: number | string;
+		limit?: number | string;
+		includeGlobal?: boolean;
+		includeUnknown?: boolean;
+		label?: string;
+		spawnedBy?: string;
+		agentId?: string;
+	}): Promise<unknown> {
+		return this.request("sessions.list", params ?? {});
+	}
+
+	sessionsPatch(params: {
+		key: string;
+		thinkingLevel?: string | null;
+		verboseLevel?: string | null;
+		reasoningLevel?: string | null;
+		label?: string | null;
+		spawnedBy?: string | null;
+		agentId?: string | null;
+		responseUsage?: "off" | "tokens" | "full" | "on" | null;
+		sendPolicy?: "allow" | "deny" | null;
+		groupActivation?: "mention" | "always" | null;
+		execHost?: string | null;
+		execSecurity?: string | null;
+		execAsk?: string | null;
+		execNode?: string | null;
+		model?: string | null;
+	}): Promise<unknown> {
+		return this.request("sessions.patch", params);
+	}
+
+	sessionsReset(params: { key: string }): Promise<unknown> {
+		return this.request("sessions.reset", params);
+	}
+
+	sessionsDelete(params: { key: string }): Promise<unknown> {
+		return this.request("sessions.delete", params);
+	}
+
+	sessionsResolve(params: {
+		key?: string;
+		label?: string;
+		spawnedBy?: string;
+		agentId?: string;
+	}): Promise<unknown> {
+		return this.request("sessions.resolve", params);
 	}
 
 	chatSend(params: {
@@ -192,6 +288,26 @@ export class GatewayClient {
 
 	abortChat(streamId: string): Promise<{ ok: boolean }> {
 		return this.request("chat.abort", { streamId });
+	}
+
+	skillsStatus(): Promise<SkillStatusReport> {
+		return this.request("skills.status");
+	}
+
+	skillsUpdate(params: {
+		skillKey: string;
+		enabled?: boolean;
+		env?: Record<string, string>;
+	}): Promise<{ ok: boolean; skillKey: string }> {
+		return this.request("skills.update", params);
+	}
+
+	skillsInstall(params: {
+		name: string;
+		installId: string;
+		timeoutMs?: number;
+	}): Promise<{ ok?: boolean; message?: string }> {
+		return this.request("skills.install", params);
 	}
 
 	close() {

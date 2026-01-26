@@ -21,6 +21,21 @@ interface ChatMessagesProps {
 	isLoading?: boolean;
 }
 
+// Hoisted static JSX - avoids recreation on every render
+const EmptyState = (
+	<div className="flex flex-1 items-center justify-center p-8">
+		<div className="text-center space-y-2">
+			<Bot className="mx-auto size-8 text-muted-foreground" />
+			<p className="text-sm text-muted-foreground">
+				Start a conversation with your assistant
+			</p>
+			<p className="text-xs text-muted-foreground/60">
+				Ask about system status, run operations, or get help
+			</p>
+		</div>
+	</div>
+);
+
 export function ChatMessages({ messages, isLoading }: ChatMessagesProps) {
 	const hasAssistantText = messages.some(
 		(message) =>
@@ -31,19 +46,7 @@ export function ChatMessages({ messages, isLoading }: ChatMessagesProps) {
 	);
 
 	if (messages.length === 0) {
-		return (
-			<div className="flex flex-1 items-center justify-center p-8">
-				<div className="text-center space-y-2">
-					<Bot className="mx-auto size-8 text-muted-foreground" />
-					<p className="text-sm text-muted-foreground">
-						Start a conversation with your assistant
-					</p>
-					<p className="text-xs text-muted-foreground/60">
-						Ask about system status, run operations, or get help
-					</p>
-				</div>
-			</div>
-		);
+		return EmptyState;
 	}
 
 	return (
@@ -54,8 +57,7 @@ export function ChatMessages({ messages, isLoading }: ChatMessagesProps) {
 					.map((part) => part.text)
 					.join("");
 				const toolParts = message.parts.filter(
-					(part): part is DataUIPart<AdminUIData> =>
-						part.type === "data-tools",
+					(part): part is DataUIPart<AdminUIData> => part.type === "data-tools",
 				);
 
 				return (

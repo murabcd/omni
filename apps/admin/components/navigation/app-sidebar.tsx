@@ -1,6 +1,15 @@
 "use client";
 
-import { LayoutDashboard, Moon, Settings, Sun } from "lucide-react";
+import {
+	Clock,
+	LayoutDashboard,
+	Moon,
+	Rss,
+	Settings,
+	Sun,
+	Trophy,
+	Users,
+} from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useTheme } from "next-themes";
@@ -17,7 +26,6 @@ import {
 	SidebarMenuItem,
 	SidebarRail,
 } from "@/components/ui/sidebar";
-import { cn } from "@/lib/utils";
 
 // Pixel-style "O" logo
 function OmniLogo({ className }: { className?: string }) {
@@ -39,6 +47,10 @@ function OmniLogo({ className }: { className?: string }) {
 
 const navItems = [
 	{ href: "/", label: "Overview", icon: LayoutDashboard },
+	{ href: "/channels", label: "Channels", icon: Rss },
+	{ href: "/sessions", label: "Sessions", icon: Users },
+	{ href: "/cron", label: "Cron", icon: Clock },
+	{ href: "/skills", label: "Skills", icon: Trophy },
 	{ href: "/settings", label: "Settings", icon: Settings },
 ];
 
@@ -92,13 +104,6 @@ export function AppSidebar() {
 											asChild
 											isActive={isActive}
 											tooltip={item.label}
-											className={cn(
-												"border border-transparent",
-												"hover:text-primary hover:bg-transparent",
-												isActive &&
-													"bg-[#131313] border-[#1d1d1d] text-foreground hover:bg-[#131313]",
-												!isActive && "text-[#666666]",
-											)}
 										>
 											<Link href={item.href}>
 												<Icon className="size-4" />
@@ -119,11 +124,6 @@ export function AppSidebar() {
 						<SidebarMenuButton
 							onClick={() => setTheme(isDark ? "light" : "dark")}
 							tooltip={isDark ? "Light mode" : "Dark mode"}
-							className={cn(
-								"border border-transparent",
-								"hover:text-primary hover:bg-transparent",
-								"text-[#666666]",
-							)}
 							disabled={!mounted}
 						>
 							{!mounted ? (
@@ -133,9 +133,7 @@ export function AppSidebar() {
 							) : (
 								<Moon className="size-4" />
 							)}
-							<span>
-								{!mounted ? "Theme" : isDark ? "Light" : "Dark"} mode
-							</span>
+							<span>{!mounted ? "Theme" : isDark ? "Light" : "Dark"} mode</span>
 						</SidebarMenuButton>
 					</SidebarMenuItem>
 				</SidebarMenu>

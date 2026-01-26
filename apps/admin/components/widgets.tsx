@@ -1,144 +1,181 @@
 "use client";
 
-import { Clock, FileText, Play, Plug, Server, Shield } from "lucide-react";
+import {
+	Activity,
+	AlertCircle,
+	Clock,
+	Loader2,
+	RefreshCw,
+	Server,
+	Shield,
+	Trophy,
+	Users,
+} from "lucide-react";
 import { useMemo } from "react";
-import { CronRunner } from "@/components/cron-runner";
 import { useGateway } from "@/components/gateway-provider";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
-import { MetricCard, Widget, WidgetGrid } from "@/components/ui/widget";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Widget } from "@/components/ui/widget";
 
 export function Widgets() {
-	const { status, runCron } = useGateway();
+	const {
+		status,
+		baseUrl,
+		token,
+		setBaseUrl,
+		setToken,
+		connect,
+		loading,
+		error,
+	} = useGateway();
 	const serviceName = useMemo(() => status?.serviceName ?? "omni", [status]);
+	const isConnected = Boolean(status) && !error;
+	const uptime = Math.round(status?.uptimeSeconds ?? 0);
+	const instanceCount = status?.instanceId ? 1 : 0;
 
 	return (
 		<div className="space-y-6">
-			{/* Widgets Grid - 4 columns like midday */}
-			<WidgetGrid>
+			{/* Unified 6-column grid for all widgets */}
+			<div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-6 gap-4">
+				{/* Gateway access - spans 2 columns */}
+				<Widget
+					title="Gateway access"
+					icon={<Shield className="size-4" />}
+					description="Connection"
+					className="lg:col-span-2"
+				>
+					<div className="space-y-3">
+						<div className="grid grid-cols-2 gap-2">
+							<Input
+								value={baseUrl}
+								placeholder="Gateway URL"
+								onChange={(event) => setBaseUrl(event.target.value)}
+								className="h-7 text-xs bg-transparent"
+							/>
+							<Input
+								value={token}
+								placeholder="Admin token"
+								type="password"
+								onChange={(event) => setToken(event.target.value)}
+								className="h-7 text-xs bg-transparent"
+							/>
+							<Input
+								placeholder="Password (optional)"
+								type="password"
+								className="h-7 text-xs bg-transparent"
+							/>
+							<Input
+								placeholder="Session key"
+								className="h-7 text-xs bg-transparent"
+							/>
+						</div>
+						<div className="flex items-center gap-2">
+							<Button size="sm" onClick={connect} disabled={loading}>
+								{loading ? <Loader2 className="size-3 animate-spin" /> : null}
+								Connect
+							</Button>
+							<Button
+								size="sm"
+								variant="ghost"
+								onClick={connect}
+								disabled={loading}
+							>
+								<RefreshCw className="size-3" />
+								Refresh
+							</Button>
+						</div>
+						{error ? (
+							<Alert variant="destructive">
+								<AlertCircle className="size-4" />
+								<AlertDescription>{error}</AlertDescription>
+							</Alert>
+						) : null}
+					</div>
+				</Widget>
+
+				{/* Snapshot - spans 2 columns */}
+				<Widget
+					title="Snapshot"
+					icon={<Activity className="size-4" />}
+					description="Status"
+					className="lg:col-span-2"
+				>
+					<div className="flex flex-col gap-2">
+						<Badge
+							className={
+								isConnected
+									? "w-fit border-emerald-500/40 text-emerald-400 bg-emerald-500/10"
+									: "w-fit border-rose-500/40 text-rose-400 bg-rose-500/10"
+							}
+						>
+							{isConnected ? "connected" : "disconnected"}
+						</Badge>
+						<div className="text-xs text-[#666666] space-y-0.5">
+							<p>uptime: {uptime}s</p>
+							<p>tick interval: -</p>
+							<p>last channels refresh: -</p>
+						</div>
+					</div>
+				</Widget>
+
+				{/* Instances - spans 2 columns */}
+				<Widget
+					title="Instances"
+					icon={<Server className="size-4" />}
+					description="Active runtimes"
+					value={instanceCount}
+					className="lg:col-span-2"
+				>
+					<div className="text-xs text-[#666666] space-y-0.5">
+						<p>primary: {status?.instanceId ?? "unknown"}</p>
+						<p>region: {status?.region ?? "unknown"}</p>
+					</div>
+				</Widget>
+
+				{/* Sessions - spans 2 columns */}
+				<Widget
+					title="Sessions"
+					icon={<Users className="size-4" />}
+					description="Live connections"
+					value="-"
+					className="lg:col-span-2"
+				>
+					<div className="text-xs text-[#666666] space-y-0.5">
+						<p>streaming: -</p>
+						<p>history: -</p>
+					</div>
+				</Widget>
+
+				{/* Cron next run - spans 2 columns */}
+				<Widget
+					title="Cron next run"
+					icon={<Clock className="size-4" />}
+					description="Scheduled automation"
+					value={status?.cron?.enabled ? "scheduled" : "off"}
+					className="lg:col-span-2"
+				>
+					<div className="text-xs text-[#666666] space-y-0.5">
+						<p>timezone: {status?.cron?.timezone ?? "-"}</p>
+						<p>next: -</p>
+					</div>
+				</Widget>
+
+				{/* Service - spans 2 columns */}
 				<Widget
 					title="Service"
-					icon={<Server className="size-4" />}
+					icon={<Trophy className="size-4" />}
 					description="Runtime information"
 					value={serviceName}
-					actions={`v${status?.version ?? "unknown"}`}
+					className="lg:col-span-2"
 				>
 					<div className="text-xs text-[#666666] space-y-0.5">
 						<p>region: {status?.region ?? "unknown"}</p>
-						<p>uptime: {Math.round(status?.uptimeSeconds ?? 0)}s</p>
+						<p>uptime: {uptime}s</p>
+						<p>version: {status?.version ?? "unknown"}</p>
 					</div>
 				</Widget>
-
-				<Widget
-					title="Admin auth"
-					icon={<Shield className="size-4" />}
-					description="Authentication settings"
-				>
-					<div className="flex flex-col gap-2">
-						<Badge
-							className={
-								status?.admin?.authRequired
-									? "w-fit border-emerald-500/40 text-emerald-400 bg-emerald-500/10"
-									: "w-fit border-rose-500/40 text-rose-400 bg-rose-500/10"
-							}
-						>
-							{status?.admin?.authRequired ? "enabled" : "disabled"}
-						</Badge>
-						<p className="text-xs text-[#666666]">
-							allowlist:{" "}
-							{status?.admin?.allowlist?.length
-								? status.admin.allowlist.join(", ")
-								: "-"}
-						</p>
-					</div>
-				</Widget>
-
-				<Widget
-					title="Cron"
-					icon={<Clock className="size-4" />}
-					description="Scheduled automation"
-				>
-					<div className="flex flex-col gap-2">
-						<Badge
-							className={
-								status?.cron?.enabled
-									? "w-fit border-emerald-500/40 text-emerald-400 bg-emerald-500/10"
-									: "w-fit border-rose-500/40 text-rose-400 bg-rose-500/10"
-							}
-						>
-							{status?.cron?.enabled ? "enabled" : "disabled"}
-						</Badge>
-						<div className="text-xs text-[#666666] space-y-0.5">
-							<p>timezone: {status?.cron?.timezone ?? "-"}</p>
-							<p>filter: {status?.cron?.sprintFilter ?? "-"}</p>
-						</div>
-					</div>
-				</Widget>
-
-				<Widget
-					title="Summary"
-					icon={<FileText className="size-4" />}
-					description="Report generation"
-				>
-					<div className="flex flex-col gap-2">
-						<Badge
-							className={
-								status?.summary?.enabled
-									? "w-fit border-emerald-500/40 text-emerald-400 bg-emerald-500/10"
-									: "w-fit border-rose-500/40 text-rose-400 bg-rose-500/10"
-							}
-						>
-							{status?.summary?.enabled ? "enabled" : "disabled"}
-						</Badge>
-						<p className="text-xs text-[#666666]">
-							model: {status?.summary?.model ?? "-"}
-						</p>
-					</div>
-				</Widget>
-			</WidgetGrid>
-
-			{/* Larger cards section */}
-			<div className="grid gap-4 md:grid-cols-2">
-				<MetricCard
-					title="Gateway plugins"
-					value={status?.gateway?.plugins?.active?.length ?? 0}
-					footer={
-						<span>
-							{status?.gateway?.plugins?.configured?.length ?? 0} configured
-						</span>
-					}
-				>
-					<div className="space-y-2 text-sm text-[#666666]">
-						<div className="flex items-center gap-2">
-							<Plug className="size-4" />
-							<span>Active plugins</span>
-						</div>
-						<p className="text-xs">
-							{status?.gateway?.plugins?.active?.length
-								? status.gateway.plugins.active.join(", ")
-								: "No active plugins"}
-						</p>
-						{status?.gateway?.plugins?.allowlist?.length ? (
-							<p className="text-xs">
-								allowlist: {status.gateway.plugins.allowlist.join(", ")}
-							</p>
-						) : null}
-						{status?.gateway?.plugins?.denylist?.length ? (
-							<p className="text-xs">
-								denylist: {status.gateway.plugins.denylist.join(", ")}
-							</p>
-						) : null}
-					</div>
-				</MetricCard>
-
-				<MetricCard title="Manual run">
-					<div className="space-y-4">
-						<div className="flex items-center gap-2 text-sm text-[#666666]">
-							<Play className="size-4" />
-							<span>Run daily report manually</span>
-						</div>
-						<CronRunner runCron={runCron} />
-					</div>
-				</MetricCard>
 			</div>
 		</div>
 	);

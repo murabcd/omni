@@ -54,7 +54,7 @@ export function Widget({
 	);
 
 	const baseClasses = cn(
-		"border p-4 h-[210px] flex flex-col justify-between",
+		"rounded-lg border p-4 h-[210px] flex flex-col justify-between",
 		"bg-background dark:bg-[#0c0c0c]",
 		"dark:border-[#1d1d1d]",
 		"transition-all duration-300",
@@ -115,7 +115,7 @@ export function MetricCard({
 	return (
 		<div
 			className={cn(
-				"border p-6 flex flex-col",
+				"rounded-lg border p-6 flex flex-col",
 				"bg-background dark:bg-[#0c0c0c]",
 				"dark:border-[#1d1d1d]",
 				"transition-all duration-300",
