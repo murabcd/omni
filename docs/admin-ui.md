@@ -22,9 +22,10 @@ bun install
 cp .env.example .env.local
 ```
 
-Set `NEXT_PUBLIC_ADMIN_API_BASE` to your Worker URL (for example, a local
-Wrangler dev URL). The admin token is entered in the UI and stored in
-`localStorage`.
+By default, the UI derives the gateway base URL from the current host and
+persists overrides in `localStorage`. If you deploy the admin UI separately,
+set `NEXT_PUBLIC_ADMIN_API_BASE` to your Worker URL (for example, a local
+Wrangler dev URL).
 
 3) Run dev:
 
@@ -59,3 +60,16 @@ policies as Telegram). It is meant for debugging and does not persist history.
 - Tool visibility: tool calls are surfaced as `Tools: ...` hints during streams.
 
 Stopping a response uses `chat.abort`, which cancels the in-flight stream.
+
+## Skills
+
+The sidebar includes a Skills view that loads a live skills status report from
+the gateway over WebSocket (`skills.status`). It supports enabling/disabling
+skills (`skills.update`). Credential requirements are handled via global env
+values rather than per-skill API keys. Skills are grouped by tool server (for
+example, yandex-tracker).
+
+## Sessions and Cron
+
+The Sessions page shows live gateway connection counts and active streams pulled
+from the status snapshot. Cron shows the current schedule configuration.
