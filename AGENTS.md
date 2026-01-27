@@ -21,6 +21,16 @@
 - `bun run check`: format and lint using Biome (`biome check --write`).
 - `bun run type-check`: TypeScript type checking only.
 
+## Browser Automation
+
+Use `agent-browser` for web automation. Run `agent-browser --help` for all commands.
+
+Core workflow:
+1. `agent-browser open <url>` - Navigate to page
+2. `agent-browser snapshot -i` - Get interactive elements with refs (@e1, @e2)
+3. `agent-browser click @e1` / `fill @e2 "text"` - Interact using refs
+4. Re-snapshot after page changes
+
 ## Coding Style & Naming Conventions
 
 - Formatting and linting are enforced by Biome. Use tabs for indentation and double quotes in TS/JS.
