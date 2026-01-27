@@ -65,7 +65,7 @@ import {
 	loadHistoryMessages,
 	setSupermemoryConfig,
 } from "./lib/context/session-history.js";
-import { type FilePart, toFilePart } from "./lib/files.js";
+import { type FilePart, isPdfDocument, toFilePart } from "./lib/files.js";
 import { type ImageFilePart, toImageFilePart } from "./lib/images.js";
 import {
 	buildJiraJql,
@@ -2740,10 +2740,10 @@ export async function createBot(options: CreateBotOptions) {
 		const document = ctx.message?.document;
 		if (!document?.file_id) return [];
 		const fileName = document.file_name;
-		const mimeType = document.mime_type?.toLowerCase();
-		const isPdf =
-			mimeType === "application/pdf" ||
-			(fileName?.toLowerCase().endsWith(".pdf") ?? false);
+		const isPdf = isPdfDocument({
+			mimeType: document.mime_type,
+			fileName,
+		});
 		if (!isPdf) return [];
 		const file = await ctx.api.getFile(document.file_id);
 		if (!file.file_path) return [];
