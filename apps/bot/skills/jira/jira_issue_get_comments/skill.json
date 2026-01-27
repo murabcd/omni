@@ -1,0 +1,5 @@
+{
+	"name": "jira_issue_get_comments",
+	"description": "Get comments for a Jira issue by key.",
+	"tool": "jira.jira_issue_get_comments"
+}

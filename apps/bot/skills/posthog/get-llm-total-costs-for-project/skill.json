@@ -1,0 +1,5 @@
+{
+	"name": "get-llm-total-costs-for-project",
+	"description": "PostHog read-only tool",
+	"tool": "posthog.get-llm-total-costs-for-project"
+}

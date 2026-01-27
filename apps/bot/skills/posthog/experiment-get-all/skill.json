@@ -1,0 +1,5 @@
+{
+	"name": "experiment-get-all",
+	"description": "PostHog read-only tool",
+	"tool": "posthog.experiment-get-all"
+}

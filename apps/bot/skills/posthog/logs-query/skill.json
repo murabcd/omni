@@ -1,0 +1,5 @@
+{
+	"name": "logs-query",
+	"description": "PostHog read-only tool",
+	"tool": "posthog.logs-query"
+}

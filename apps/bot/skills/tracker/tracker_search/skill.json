@@ -1,0 +1,5 @@
+{
+	"name": "tracker_search",
+	"description": "Search Yandex Tracker issues using keywords from the question.",
+	"tool": "tracker.tracker_search"
+}

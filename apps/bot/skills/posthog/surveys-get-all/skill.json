@@ -1,0 +1,5 @@
+{
+	"name": "surveys-get-all",
+	"description": "PostHog read-only tool",
+	"tool": "posthog.surveys-get-all"
+}

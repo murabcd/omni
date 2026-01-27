@@ -1,0 +1,5 @@
+{
+	"name": "organizations-get",
+	"description": "PostHog read-only tool",
+	"tool": "posthog.organizations-get"
+}

@@ -1,0 +1,5 @@
+{
+	"name": "property-definitions",
+	"description": "PostHog read-only tool",
+	"tool": "posthog.property-definitions"
+}

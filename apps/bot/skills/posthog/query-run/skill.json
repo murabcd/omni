@@ -1,0 +1,5 @@
+{
+	"name": "query-run",
+	"description": "PostHog read-only tool",
+	"tool": "posthog.query-run"
+}

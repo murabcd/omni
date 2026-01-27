@@ -1,0 +1,5 @@
+{
+	"name": "query-generate-hogql-from-question",
+	"description": "PostHog read-only tool",
+	"tool": "posthog.query-generate-hogql-from-question"
+}

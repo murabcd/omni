@@ -1,0 +1,5 @@
+{
+	"name": "logs-list-attribute-values",
+	"description": "PostHog read-only tool",
+	"tool": "posthog.logs-list-attribute-values"
+}

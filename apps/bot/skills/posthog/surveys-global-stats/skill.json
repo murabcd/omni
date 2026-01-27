@@ -1,0 +1,5 @@
+{
+	"name": "surveys-global-stats",
+	"description": "PostHog read-only tool",
+	"tool": "posthog.surveys-global-stats"
+}

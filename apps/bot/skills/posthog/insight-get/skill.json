@@ -1,0 +1,5 @@
+{
+	"name": "insight-get",
+	"description": "PostHog read-only tool",
+	"tool": "posthog.insight-get"
+}

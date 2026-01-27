@@ -1,0 +1,5 @@
+{
+	"name": "jira_search",
+	"description": "Search Jira issues in a project.",
+	"tool": "jira.jira_search"
+}

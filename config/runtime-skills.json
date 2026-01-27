@@ -1,0 +1,207 @@
+[
+	{
+		"name": "action-get",
+		"description": "PostHog read-only tool",
+		"tool": "posthog.action-get"
+	},
+	{
+		"name": "actions-get-all",
+		"description": "PostHog read-only tool",
+		"tool": "posthog.actions-get-all"
+	},
+	{
+		"name": "addMemory",
+		"description": "Store memory (Supermemory).",
+		"tool": "memory.addMemory"
+	},
+	{
+		"name": "dashboard-get",
+		"description": "PostHog read-only tool",
+		"tool": "posthog.dashboard-get"
+	},
+	{
+		"name": "dashboards-get-all",
+		"description": "PostHog read-only tool",
+		"tool": "posthog.dashboards-get-all"
+	},
+	{
+		"name": "docs-search",
+		"description": "PostHog read-only tool",
+		"tool": "posthog.docs-search"
+	},
+	{
+		"name": "entity-search",
+		"description": "PostHog read-only tool",
+		"tool": "posthog.entity-search"
+	},
+	{
+		"name": "error-details",
+		"description": "PostHog read-only tool",
+		"tool": "posthog.error-details"
+	},
+	{
+		"name": "event-definitions-list",
+		"description": "PostHog read-only tool",
+		"tool": "posthog.event-definitions-list"
+	},
+	{
+		"name": "experiment-get",
+		"description": "PostHog read-only tool",
+		"tool": "posthog.experiment-get"
+	},
+	{
+		"name": "experiment-get-all",
+		"description": "PostHog read-only tool",
+		"tool": "posthog.experiment-get-all"
+	},
+	{
+		"name": "experiment-results-get",
+		"description": "PostHog read-only tool",
+		"tool": "posthog.experiment-results-get"
+	},
+	{
+		"name": "feature-flag-get-all",
+		"description": "PostHog read-only tool",
+		"tool": "posthog.feature-flag-get-all"
+	},
+	{
+		"name": "feature-flag-get-definition",
+		"description": "PostHog read-only tool",
+		"tool": "posthog.feature-flag-get-definition"
+	},
+	{
+		"name": "get-llm-total-costs-for-project",
+		"description": "PostHog read-only tool",
+		"tool": "posthog.get-llm-total-costs-for-project"
+	},
+	{
+		"name": "insight-get",
+		"description": "PostHog read-only tool",
+		"tool": "posthog.insight-get"
+	},
+	{
+		"name": "insight-query",
+		"description": "PostHog read-only tool",
+		"tool": "posthog.insight-query"
+	},
+	{
+		"name": "insights-get-all",
+		"description": "PostHog read-only tool",
+		"tool": "posthog.insights-get-all"
+	},
+	{
+		"name": "jira_issue_get",
+		"description": "Get Jira issue by key (e.g., FL-123).",
+		"tool": "jira.jira_issue_get"
+	},
+	{
+		"name": "jira_issue_get_comments",
+		"description": "Get comments for a Jira issue by key.",
+		"tool": "jira.jira_issue_get_comments"
+	},
+	{
+		"name": "jira_issues_find",
+		"description": "Search Jira issues using JQL.",
+		"tool": "jira.jira_issues_find"
+	},
+	{
+		"name": "jira_search",
+		"description": "Search Jira issues in a project.",
+		"tool": "jira.jira_search"
+	},
+	{
+		"name": "jira_sprint_issues",
+		"description": "List Jira issues for a sprint by name or id.",
+		"tool": "jira.jira_sprint_issues"
+	},
+	{
+		"name": "list-errors",
+		"description": "PostHog read-only tool",
+		"tool": "posthog.list-errors"
+	},
+	{
+		"name": "logs-list-attribute-values",
+		"description": "PostHog read-only tool",
+		"tool": "posthog.logs-list-attribute-values"
+	},
+	{
+		"name": "logs-list-attributes",
+		"description": "PostHog read-only tool",
+		"tool": "posthog.logs-list-attributes"
+	},
+	{
+		"name": "logs-query",
+		"description": "PostHog read-only tool",
+		"tool": "posthog.logs-query"
+	},
+	{
+		"name": "organization-details-get",
+		"description": "PostHog read-only tool",
+		"tool": "posthog.organization-details-get"
+	},
+	{
+		"name": "organizations-get",
+		"description": "PostHog read-only tool",
+		"tool": "posthog.organizations-get"
+	},
+	{
+		"name": "projects-get",
+		"description": "PostHog read-only tool",
+		"tool": "posthog.projects-get"
+	},
+	{
+		"name": "properties-list",
+		"description": "PostHog read-only tool",
+		"tool": "posthog.properties-list"
+	},
+	{
+		"name": "property-definitions",
+		"description": "PostHog read-only tool",
+		"tool": "posthog.property-definitions"
+	},
+	{
+		"name": "query-generate-hogql-from-question",
+		"description": "PostHog read-only tool",
+		"tool": "posthog.query-generate-hogql-from-question"
+	},
+	{
+		"name": "query-run",
+		"description": "PostHog read-only tool",
+		"tool": "posthog.query-run"
+	},
+	{
+		"name": "searchMemories",
+		"description": "Search saved memories (Supermemory).",
+		"tool": "memory.searchMemories"
+	},
+	{
+		"name": "survey-get",
+		"description": "PostHog read-only tool",
+		"tool": "posthog.survey-get"
+	},
+	{
+		"name": "survey-stats",
+		"description": "PostHog read-only tool",
+		"tool": "posthog.survey-stats"
+	},
+	{
+		"name": "surveys-get-all",
+		"description": "PostHog read-only tool",
+		"tool": "posthog.surveys-get-all"
+	},
+	{
+		"name": "surveys-global-stats",
+		"description": "PostHog read-only tool",
+		"tool": "posthog.surveys-global-stats"
+	},
+	{
+		"name": "tracker_search",
+		"description": "Search Yandex Tracker issues using keywords from the question.",
+		"tool": "tracker.tracker_search"
+	},
+	{
+		"name": "web_search",
+		"description": "Search the web for up-to-date information.",
+		"tool": "web.web_search"
+	}
+]

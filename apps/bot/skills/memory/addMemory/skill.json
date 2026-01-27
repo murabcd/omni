@@ -1,0 +1,5 @@
+{
+	"name": "addMemory",
+	"description": "Store memory (Supermemory).",
+	"tool": "memory.addMemory"
+}

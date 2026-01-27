@@ -1,0 +1,5 @@
+{
+	"name": "jira_issue_get",
+	"description": "Get Jira issue by key (e.g., FL-123).",
+	"tool": "jira.jira_issue_get"
+}

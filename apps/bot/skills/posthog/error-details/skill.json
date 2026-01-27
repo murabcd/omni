@@ -1,0 +1,5 @@
+{
+	"name": "error-details",
+	"description": "PostHog read-only tool",
+	"tool": "posthog.error-details"
+}

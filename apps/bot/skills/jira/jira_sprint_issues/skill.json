@@ -1,0 +1,5 @@
+{
+	"name": "jira_sprint_issues",
+	"description": "List Jira issues for a sprint by name or id.",
+	"tool": "jira.jira_sprint_issues"
+}

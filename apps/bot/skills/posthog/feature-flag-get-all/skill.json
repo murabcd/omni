@@ -1,0 +1,5 @@
+{
+	"name": "feature-flag-get-all",
+	"description": "PostHog read-only tool",
+	"tool": "posthog.feature-flag-get-all"
+}

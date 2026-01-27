@@ -1,0 +1,5 @@
+{
+	"name": "jira_issues_find",
+	"description": "Search Jira issues using JQL.",
+	"tool": "jira.jira_issues_find"
+}

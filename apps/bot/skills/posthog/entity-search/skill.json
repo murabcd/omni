@@ -1,0 +1,5 @@
+{
+	"name": "entity-search",
+	"description": "PostHog read-only tool",
+	"tool": "posthog.entity-search"
+}
