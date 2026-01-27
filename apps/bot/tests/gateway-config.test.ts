@@ -9,11 +9,15 @@ describe("gateway config helpers", () => {
 	it("sanitizes config to known string keys", () => {
 		const input = {
 			ALLOWED_TG_IDS: "1,2",
+			WEB_SEARCH_ENABLED: "1",
 			UNKNOWN: "nope",
 			CRON_STATUS_ENABLED: 1,
 		};
 		const sanitized = sanitizeGatewayConfig(input);
-		expect(sanitized).toEqual({ ALLOWED_TG_IDS: "1,2" });
+		expect(sanitized).toEqual({
+			ALLOWED_TG_IDS: "1,2",
+			WEB_SEARCH_ENABLED: "1",
+		});
 	});
 
 	it("applies only non-empty config values", () => {

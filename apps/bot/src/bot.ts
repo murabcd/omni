@@ -4,6 +4,7 @@ import { apiThrottler } from "@grammyjs/transformer-throttler";
 import { PostHogAgentToolkit } from "@posthog/agent-toolkit/integrations/ai-sdk";
 import { supermemoryTools } from "@supermemory/tools/ai-sdk";
 import {
+	convertToModelMessages,
 	createAgentUIStream,
 	createUIMessageStream,
 	type ModelMessage,
@@ -58,6 +59,7 @@ import {
 	loadHistoryMessages,
 	setSupermemoryConfig,
 } from "./lib/context/session-history.js";
+import { type ImageFilePart, toImageFilePart } from "./lib/images.js";
 import {
 	buildJiraJql,
 	extractJiraText,
@@ -191,6 +193,7 @@ export async function createBot(options: CreateBotOptions) {
 	const ALLOWED_TG_GROUPS = env.ALLOWED_TG_GROUPS ?? "";
 	const TELEGRAM_GROUP_REQUIRE_MENTION =
 		env.TELEGRAM_GROUP_REQUIRE_MENTION !== "0";
+	const IMAGE_MAX_BYTES = Number.parseInt(env.IMAGE_MAX_BYTES ?? "5000000", 10);
 	const WEB_SEARCH_ENABLED = env.WEB_SEARCH_ENABLED === "1";
 	const WEB_SEARCH_CONTEXT_SIZE = env.WEB_SEARCH_CONTEXT_SIZE ?? "low";
 	const TOOL_RATE_LIMITS = env.TOOL_RATE_LIMITS ?? "";
@@ -559,7 +562,13 @@ export async function createBot(options: CreateBotOptions) {
 		chat_id?: number | string;
 		user_id?: number | string;
 		username?: string;
-		message_type?: "command" | "text" | "voice" | "callback" | "other";
+		message_type?:
+			| "command"
+			| "text"
+			| "voice"
+			| "photo"
+			| "callback"
+			| "other";
 		command?: string;
 		command_sub?: string;
 		tool?: string;
@@ -704,7 +713,10 @@ export async function createBot(options: CreateBotOptions) {
 				outcome: "blocked",
 				status_code: 403,
 			});
-			return sendText(ctx, "Доступ запрещен.");
+			if (shouldReplyAccessDenied(ctx)) {
+				return sendText(ctx, "Доступ запрещен.");
+			}
+			return;
 		}
 		return next();
 	});
@@ -905,8 +917,25 @@ export async function createBot(options: CreateBotOptions) {
 		return allowedGroups.has(chatId);
 	}
 
+	function isReplyToBot(ctx: BotContext) {
+		return (
+			ctx.message?.reply_to_message?.from?.id !== undefined &&
+			ctx.me?.id !== undefined &&
+			ctx.message.reply_to_message.from.id === ctx.me.id
+		);
+	}
+
 	function isBotMentioned(ctx: BotContext) {
-		return isBotMentionedMessage(ctx.message, ctx.me);
+		return isBotMentionedMessage(ctx.message, ctx.me) || isReplyToBot(ctx);
+	}
+
+	function isReplyToBotWithoutMention(ctx: BotContext) {
+		return isReplyToBot(ctx) && !isBotMentionedMessage(ctx.message, ctx.me);
+	}
+
+	function shouldReplyAccessDenied(ctx: BotContext) {
+		if (!isGroupChat(ctx)) return true;
+		return isBotMentioned(ctx);
 	}
 
 	function getModelConfig(ref: string) {
@@ -937,6 +966,7 @@ export async function createBot(options: CreateBotOptions) {
 		history?: string;
 		chatId?: string;
 		ctx?: BotContext;
+		webSearchEnabled?: boolean;
 	}): Promise<ToolSet> {
 		const registry = createToolRegistry({ logger: toolConflictLogger });
 		const toolMap: ToolSet = {};
@@ -962,7 +992,11 @@ export async function createBot(options: CreateBotOptions) {
 		const webSearchContextSize = resolveWebSearchContextSize(
 			WEB_SEARCH_CONTEXT_SIZE.trim().toLowerCase(),
 		);
-		if (WEB_SEARCH_ENABLED) {
+		const allowWebSearch =
+			typeof options?.webSearchEnabled === "boolean"
+				? options.webSearchEnabled
+				: WEB_SEARCH_ENABLED;
+		if (allowWebSearch) {
 			registerTool(
 				{
 					name: "web_search",
@@ -1559,10 +1593,27 @@ export async function createBot(options: CreateBotOptions) {
 			userName?: string;
 			onToolStep?: (toolNames: string[]) => Promise<void> | void;
 			ctx?: BotContext;
+			webSearchEnabled?: boolean;
 		},
 	) {
 		const tools = await getAgentTools();
-		const toolLines = tools
+		const allowWebSearch =
+			typeof options?.webSearchEnabled === "boolean"
+				? options.webSearchEnabled
+				: WEB_SEARCH_ENABLED;
+		const webSearchMeta = {
+			name: "web_search",
+			description:
+				"Search the web for up-to-date information (OpenAI web_search).",
+			source: "web",
+			origin: "openai",
+		} satisfies ToolMeta;
+		const filteredTools = allowWebSearch
+			? tools.some((tool) => tool.name === "web_search")
+				? tools
+				: [...tools, webSearchMeta]
+			: tools.filter((tool) => tool.name !== "web_search");
+		const toolLines = filteredTools
 			.map((toolItem) => {
 				const desc = toolItem.description ? ` - ${toolItem.description}` : "";
 				return `${toolItem.name}${desc}`;
@@ -2742,10 +2793,7 @@ export async function createBot(options: CreateBotOptions) {
 				defaultRequireMention: TELEGRAM_GROUP_REQUIRE_MENTION,
 			})
 		) {
-			const allowReply =
-				ctx.message?.reply_to_message?.from?.id !== undefined &&
-				ctx.me?.id !== undefined &&
-				ctx.message.reply_to_message.from.id === ctx.me.id;
+			const allowReply = isReplyToBotWithoutMention(ctx);
 			if (!allowReply && !isBotMentioned(ctx)) {
 				setLogContext(ctx, { outcome: "blocked", status_code: 403 });
 				return;
@@ -2900,10 +2948,7 @@ export async function createBot(options: CreateBotOptions) {
 				defaultRequireMention: TELEGRAM_GROUP_REQUIRE_MENTION,
 			})
 		) {
-			const allowReply =
-				ctx.message?.reply_to_message?.from?.id !== undefined &&
-				ctx.me?.id !== undefined &&
-				ctx.message.reply_to_message.from.id === ctx.me.id;
+			const allowReply = isReplyToBotWithoutMention(ctx);
 			if (!allowReply && !isBotMentioned(ctx)) {
 				setLogContext(ctx, { outcome: "blocked", status_code: 403 });
 				return;
@@ -3091,21 +3136,66 @@ export async function createBot(options: CreateBotOptions) {
 		});
 	}
 
-	function buildUserUIMessage(text: string): UIMessage {
+	async function loadTelegramImageParts(
+		ctx: BotContext,
+	): Promise<ImageFilePart[]> {
+		const photo = ctx.message?.photo?.at(-1);
+		if (!photo?.file_id) return [];
+		const file = await ctx.api.getFile(photo.file_id);
+		if (!file.file_path) return [];
+		const downloadUrl = `https://api.telegram.org/file/bot${BOT_TOKEN}/${file.file_path}`;
+		const response = await fetch(downloadUrl);
+		if (!response.ok) {
+			throw new Error(`image_download_failed:${response.status}`);
+		}
+		const buffer = new Uint8Array(await response.arrayBuffer());
+		if (buffer.byteLength > IMAGE_MAX_BYTES) {
+			throw new Error(`image_too_large:${buffer.byteLength}`);
+		}
+		const [imagePart] = [
+			toImageFilePart({
+				buffer,
+				contentType: response.headers.get("content-type"),
+				filePath: file.file_path,
+			}),
+		];
+		return imagePart ? [imagePart] : [];
+	}
+
+	function buildUserUIMessage(
+		text: string,
+		files?: ImageFilePart[],
+	): UIMessage {
+		const parts: UIMessage["parts"] = [];
+		if (text) {
+			parts.push({ type: "text", text });
+		}
+		for (const file of files ?? []) {
+			parts.push({
+				type: "file",
+				mediaType: file.mediaType,
+				filename: file.filename,
+				url: file.url,
+			});
+		}
+		if (parts.length === 0) {
+			parts.push({ type: "text", text: "" });
+		}
 		return {
 			id: crypto.randomUUID(),
 			role: "user",
-			parts: [{ type: "text", text }],
+			parts,
 		};
 	}
 
 	function createAgentStreamWithTools(
 		agent: ToolLoopAgent,
 		text: string,
+		files?: ImageFilePart[],
 		onToolStep?: (toolNames: string[]) => Promise<void> | void,
 		abortSignal?: AbortSignal,
 	): ReadableStream<UIMessageChunk> {
-		const uiMessages = [buildUserUIMessage(text)];
+		const uiMessages = [buildUserUIMessage(text, files)];
 		return createUIMessageStream<UIMessage>({
 			execute: async ({ writer }) => {
 				const stream = await createAgentUIStream({
@@ -3129,6 +3219,8 @@ export async function createBot(options: CreateBotOptions) {
 
 	type LocalChatOptions = {
 		text: string;
+		files?: ImageFilePart[];
+		webSearchEnabled?: boolean;
 		chatId?: string;
 		userId?: string;
 		userName?: string;
@@ -3152,7 +3244,9 @@ export async function createBot(options: CreateBotOptions) {
 		const chatType = options.chatType ?? "private";
 		const userName = options.userName ?? "Admin";
 		const text = options.text.trim();
-		if (!text) return { messages };
+		const files = options.files ?? [];
+		const webSearchEnabled = options.webSearchEnabled;
+		if (!text && files.length === 0) return { messages };
 
 		const ctx = {
 			state: {},
@@ -3186,7 +3280,7 @@ export async function createBot(options: CreateBotOptions) {
 			message_type: "text",
 		});
 
-		await handleIncomingText(ctx, text);
+		await handleIncomingText(ctx, text, files, webSearchEnabled);
 		return { messages };
 	}
 
@@ -3199,7 +3293,9 @@ export async function createBot(options: CreateBotOptions) {
 		const chatType = options.chatType ?? "private";
 		const userName = options.userName ?? "Admin";
 		const text = options.text.trim();
-		if (!text) {
+		const files = options.files ?? [];
+		const webSearchEnabled = options.webSearchEnabled;
+		if (!text && files.length === 0) {
 			return { stream: createTextStream("Empty message.") };
 		}
 
@@ -3232,7 +3328,13 @@ export async function createBot(options: CreateBotOptions) {
 			message_type: "text",
 		});
 
-		const stream = await handleIncomingTextStream(ctx, text, abortSignal);
+		const stream = await handleIncomingTextStream(
+			ctx,
+			text,
+			files,
+			webSearchEnabled,
+			abortSignal,
+		);
 		return { stream };
 	}
 
@@ -3240,6 +3342,19 @@ export async function createBot(options: CreateBotOptions) {
 		setLogContext(ctx, { message_type: "text" });
 		const text = ctx.message.text.trim();
 		await handleIncomingText(ctx, text);
+	});
+
+	bot.on("message:photo", async (ctx) => {
+		setLogContext(ctx, { message_type: "photo" });
+		const caption = ctx.message.caption?.trim() ?? "";
+		try {
+			const files = await loadTelegramImageParts(ctx);
+			await handleIncomingText(ctx, caption, files);
+		} catch (error) {
+			logDebug("photo handling error", { error: String(error) });
+			setLogError(ctx, error);
+			await sendText(ctx, `Ошибка: ${String(error)}`);
+		}
 	});
 
 	bot.on("message:voice", async (ctx) => {
@@ -3253,7 +3368,9 @@ export async function createBot(options: CreateBotOptions) {
 			await ctx.replyWithChatAction("typing");
 			if (!isGroupAllowed(ctx)) {
 				setLogContext(ctx, { outcome: "blocked", status_code: 403 });
-				await sendText(ctx, "Доступ запрещен.");
+				if (shouldReplyAccessDenied(ctx)) {
+					await sendText(ctx, "Доступ запрещен.");
+				}
 				return;
 			}
 			if (
@@ -3263,11 +3380,8 @@ export async function createBot(options: CreateBotOptions) {
 					defaultRequireMention: TELEGRAM_GROUP_REQUIRE_MENTION,
 				})
 			) {
-				const allowReply =
-					ctx.message?.reply_to_message?.from?.id !== undefined &&
-					ctx.me?.id !== undefined &&
-					ctx.message.reply_to_message.from.id === ctx.me.id;
-				if (!allowReply) {
+				const allowReply = isReplyToBotWithoutMention(ctx);
+				if (!allowReply && !isBotMentioned(ctx)) {
 					setLogContext(ctx, { outcome: "blocked", status_code: 403 });
 					return;
 				}
@@ -3301,9 +3415,17 @@ export async function createBot(options: CreateBotOptions) {
 		}
 	});
 
-	async function handleIncomingText(ctx: BotContext, rawText: string) {
+	async function handleIncomingText(
+		ctx: BotContext,
+		rawText: string,
+		files: ImageFilePart[] = [],
+		webSearchEnabled?: boolean,
+	) {
 		const text = rawText.trim();
-		if (!text || text.startsWith("/")) {
+		if (
+			(!text && files.length === 0) ||
+			(text.startsWith("/") && !files.length)
+		) {
 			return;
 		}
 		const replyToMessageId = isGroupChat(ctx)
@@ -3319,7 +3441,9 @@ export async function createBot(options: CreateBotOptions) {
 			await ctx.replyWithChatAction("typing");
 			if (!isGroupAllowed(ctx)) {
 				setLogContext(ctx, { outcome: "blocked", status_code: 403 });
-				await sendText(ctx, "Доступ запрещен.");
+				if (shouldReplyAccessDenied(ctx)) {
+					await sendText(ctx, "Доступ запрещен.");
+				}
 				return;
 			}
 			if (
@@ -3329,10 +3453,7 @@ export async function createBot(options: CreateBotOptions) {
 					defaultRequireMention: TELEGRAM_GROUP_REQUIRE_MENTION,
 				})
 			) {
-				const allowReply =
-					ctx.message?.reply_to_message?.from?.id !== undefined &&
-					ctx.me?.id !== undefined &&
-					ctx.message.reply_to_message.from.id === ctx.me.id;
+				const allowReply = isReplyToBotWithoutMention(ctx);
 				if (!allowReply && !isBotMentioned(ctx)) {
 					setLogContext(ctx, { outcome: "blocked", status_code: 403 });
 					return;
@@ -3342,17 +3463,36 @@ export async function createBot(options: CreateBotOptions) {
 			const memoryId = ctx.from?.id?.toString() ?? chatId;
 			const userName = ctx.from?.first_name?.trim() || undefined;
 			const chatState = chatId ? getChatState(chatId) : null;
+			const promptText =
+				text || (files.length > 0 ? "Analyze the attached image." : text);
+			const allowWebSearch =
+				typeof webSearchEnabled === "boolean"
+					? webSearchEnabled
+					: WEB_SEARCH_ENABLED;
+			const generateAgent = async (agent: ToolLoopAgent) => {
+				if (files.length === 0) {
+					return agent.generate({ prompt: promptText });
+				}
+				const messages = await convertToModelMessages([
+					buildUserUIMessage(promptText, files),
+				]);
+				return agent.generate({ messages });
+			};
 			const historyMessages =
 				memoryId && Number.isFinite(HISTORY_MAX_MESSAGES)
-					? await loadHistoryMessages(memoryId, HISTORY_MAX_MESSAGES, text)
+					? await loadHistoryMessages(
+							memoryId,
+							HISTORY_MAX_MESSAGES,
+							promptText,
+						)
 					: [];
 			const historyText = historyMessages.length
 				? formatHistoryForPrompt(historyMessages)
 				: "";
-			const sprintQuery = isSprintQuery(text);
+			const sprintQuery = isSprintQuery(promptText);
 			const issueKeys = sprintQuery
-				? extractExplicitIssueKeys(text)
-				: extractIssueKeysFromText(text, DEFAULT_ISSUE_PREFIX);
+				? extractExplicitIssueKeys(promptText)
+				: extractIssueKeysFromText(promptText, DEFAULT_ISSUE_PREFIX);
 			setLogContext(ctx, {
 				issue_key_count: issueKeys.length,
 				issue_key: issueKeys[0],
@@ -3389,7 +3529,7 @@ export async function createBot(options: CreateBotOptions) {
 						try {
 							setLogContext(ctx, { model_ref: ref, model_id: config.id });
 							const agent = await createMultiIssueAgent({
-								question: text,
+								question: promptText,
 								modelRef: ref,
 								modelName: config.label ?? config.id,
 								reasoning: resolveReasoningFor(config),
@@ -3397,7 +3537,7 @@ export async function createBot(options: CreateBotOptions) {
 								issues: issuesData,
 								userName,
 							});
-							const result = await agent.generate({ prompt: text });
+							const result = await generateAgent(agent);
 							clearAllStatuses();
 							const replyText = result.text?.trim();
 							const sources = (result as { sources?: Array<{ url?: string }> })
@@ -3422,7 +3562,7 @@ export async function createBot(options: CreateBotOptions) {
 								void appendHistoryMessage(memoryId, {
 									timestamp: new Date().toISOString(),
 									role: "user",
-									text,
+									text: promptText,
 								});
 								void appendHistoryMessage(memoryId, {
 									timestamp: new Date().toISOString(),
@@ -3481,7 +3621,7 @@ export async function createBot(options: CreateBotOptions) {
 						try {
 							setLogContext(ctx, { model_ref: ref, model_id: config.id });
 							const agent = await createMultiIssueAgent({
-								question: text,
+								question: promptText,
 								modelRef: ref,
 								modelName: config.label ?? config.id,
 								reasoning: resolveReasoningFor(config),
@@ -3489,7 +3629,7 @@ export async function createBot(options: CreateBotOptions) {
 								issues: issuesData,
 								userName,
 							});
-							const result = await agent.generate({ prompt: text });
+							const result = await generateAgent(agent);
 							clearAllStatuses();
 							const replyText = result.text?.trim();
 							const sources = (result as { sources?: Array<{ url?: string }> })
@@ -3514,7 +3654,7 @@ export async function createBot(options: CreateBotOptions) {
 								void appendHistoryMessage(memoryId, {
 									timestamp: new Date().toISOString(),
 									role: "user",
-									text,
+									text: promptText,
 								});
 								void appendHistoryMessage(memoryId, {
 									timestamp: new Date().toISOString(),
@@ -3570,7 +3710,7 @@ export async function createBot(options: CreateBotOptions) {
 						try {
 							setLogContext(ctx, { model_ref: ref, model_id: config.id });
 							const agent = await createIssueAgent({
-								question: text,
+								question: promptText,
 								modelRef: ref,
 								modelName: config.label ?? config.id,
 								reasoning: resolveReasoningFor(config),
@@ -3580,7 +3720,7 @@ export async function createBot(options: CreateBotOptions) {
 								commentsText,
 								userName,
 							});
-							const result = await agent.generate({ prompt: text });
+							const result = await generateAgent(agent);
 							clearAllStatuses();
 							const replyText = result.text?.trim();
 							const sources = (result as { sources?: Array<{ url?: string }> })
@@ -3603,7 +3743,7 @@ export async function createBot(options: CreateBotOptions) {
 								void appendHistoryMessage(memoryId, {
 									timestamp: new Date().toISOString(),
 									role: "user",
-									text,
+									text: promptText,
 								});
 								void appendHistoryMessage(memoryId, {
 									timestamp: new Date().toISOString(),
@@ -3656,7 +3796,7 @@ export async function createBot(options: CreateBotOptions) {
 						try {
 							setLogContext(ctx, { model_ref: ref, model_id: config.id });
 							const agent = await createIssueAgent({
-								question: text,
+								question: promptText,
 								modelRef: ref,
 								modelName: config.label ?? config.id,
 								reasoning: resolveReasoningFor(config),
@@ -3666,7 +3806,7 @@ export async function createBot(options: CreateBotOptions) {
 								commentsText,
 								userName,
 							});
-							const result = await agent.generate({ prompt: text });
+							const result = await generateAgent(agent);
 							clearAllStatuses();
 							const replyText = result.text?.trim();
 							const sources = (result as { sources?: Array<{ url?: string }> })
@@ -3689,7 +3829,7 @@ export async function createBot(options: CreateBotOptions) {
 								void appendHistoryMessage(memoryId, {
 									timestamp: new Date().toISOString(),
 									role: "user",
-									text,
+									text: promptText,
 								});
 								void appendHistoryMessage(memoryId, {
 									timestamp: new Date().toISOString(),
@@ -3727,7 +3867,7 @@ export async function createBot(options: CreateBotOptions) {
 				}
 				try {
 					setLogContext(ctx, { model_ref: ref, model_id: config.id });
-					const plan = await buildOrchestrationPlan(text, ctx);
+					const plan = await buildOrchestrationPlan(promptText, ctx);
 					const orchestrationPolicy = resolveOrchestrationPolicy(ctx);
 					let orchestrationSummary = "";
 					if (plan.agents.length > 0) {
@@ -3735,6 +3875,7 @@ export async function createBot(options: CreateBotOptions) {
 							history: historyText,
 							chatId: memoryId,
 							ctx,
+							webSearchEnabled: allowWebSearch,
 						});
 						const toolsByAgent = {
 							tracker: buildTrackerTools(allTools),
@@ -3744,7 +3885,7 @@ export async function createBot(options: CreateBotOptions) {
 							memory: buildMemorySubagentTools(allTools),
 						};
 						const orchestrationResult = await runOrchestration(plan, {
-							prompt: text,
+							prompt: promptText,
 							modelId: config.id,
 							toolsByAgent,
 							isGroupChat: isGroupChat(ctx),
@@ -3765,7 +3906,7 @@ export async function createBot(options: CreateBotOptions) {
 						historyText,
 						orchestrationSummary,
 					);
-					const agent = await createAgent(text, ref, config, {
+					const agent = await createAgent(promptText, ref, config, {
 						onCandidates: (candidates) => {
 							if (!chatState) return;
 							chatState.lastCandidates = candidates;
@@ -3778,8 +3919,9 @@ export async function createBot(options: CreateBotOptions) {
 						userName,
 						onToolStep,
 						ctx,
+						webSearchEnabled: allowWebSearch,
 					});
-					const result = await agent.generate({ prompt: text });
+					const result = await generateAgent(agent);
 					clearAllStatuses();
 					if (DEBUG_LOGS) {
 						const steps =
@@ -3822,7 +3964,7 @@ export async function createBot(options: CreateBotOptions) {
 						void appendHistoryMessage(memoryId, {
 							timestamp: new Date().toISOString(),
 							role: "user",
-							text,
+							text: promptText,
 						});
 						void appendHistoryMessage(memoryId, {
 							timestamp: new Date().toISOString(),
@@ -3849,10 +3991,15 @@ export async function createBot(options: CreateBotOptions) {
 	async function handleIncomingTextStream(
 		ctx: BotContext,
 		rawText: string,
+		files: ImageFilePart[] = [],
+		webSearchEnabled?: boolean,
 		abortSignal?: AbortSignal,
 	): Promise<ReadableStream<UIMessageChunk>> {
 		const text = rawText.trim();
-		if (!text || text.startsWith("/")) {
+		if (
+			(!text && files.length === 0) ||
+			(text.startsWith("/") && !files.length)
+		) {
 			return createTextStream("Commands are not supported here.");
 		}
 
@@ -3860,7 +4007,10 @@ export async function createBot(options: CreateBotOptions) {
 			await ctx.replyWithChatAction("typing");
 			if (!isGroupAllowed(ctx)) {
 				setLogContext(ctx, { outcome: "blocked", status_code: 403 });
-				return createTextStream("Доступ запрещен.");
+				if (shouldReplyAccessDenied(ctx)) {
+					return createTextStream("Доступ запрещен.");
+				}
+				return createTextStream("");
 			}
 			if (
 				isGroupChat(ctx) &&
@@ -3869,10 +4019,7 @@ export async function createBot(options: CreateBotOptions) {
 					defaultRequireMention: TELEGRAM_GROUP_REQUIRE_MENTION,
 				})
 			) {
-				const allowReply =
-					ctx.message?.reply_to_message?.from?.id !== undefined &&
-					ctx.me?.id !== undefined &&
-					ctx.message.reply_to_message.from.id === ctx.me.id;
+				const allowReply = isReplyToBotWithoutMention(ctx);
 				if (!allowReply && !isBotMentioned(ctx)) {
 					setLogContext(ctx, { outcome: "blocked", status_code: 403 });
 					return createTextStream("Mention required.");
@@ -3882,17 +4029,27 @@ export async function createBot(options: CreateBotOptions) {
 			const memoryId = ctx.from?.id?.toString() ?? chatId;
 			const userName = ctx.from?.first_name?.trim() || undefined;
 			const chatState = chatId ? getChatState(chatId) : null;
+			const promptText =
+				text || (files.length > 0 ? "Analyze the attached image." : text);
+			const allowWebSearch =
+				typeof webSearchEnabled === "boolean"
+					? webSearchEnabled
+					: WEB_SEARCH_ENABLED;
 			const historyMessages =
 				memoryId && Number.isFinite(HISTORY_MAX_MESSAGES)
-					? await loadHistoryMessages(memoryId, HISTORY_MAX_MESSAGES, text)
+					? await loadHistoryMessages(
+							memoryId,
+							HISTORY_MAX_MESSAGES,
+							promptText,
+						)
 					: [];
 			const historyText = historyMessages.length
 				? formatHistoryForPrompt(historyMessages)
 				: "";
-			const sprintQuery = isSprintQuery(text);
+			const sprintQuery = isSprintQuery(promptText);
 			const issueKeys = sprintQuery
-				? extractExplicitIssueKeys(text)
-				: extractIssueKeysFromText(text, DEFAULT_ISSUE_PREFIX);
+				? extractExplicitIssueKeys(promptText)
+				: extractIssueKeysFromText(promptText, DEFAULT_ISSUE_PREFIX);
 			setLogContext(ctx, {
 				issue_key_count: issueKeys.length,
 				issue_key: issueKeys[0],
@@ -3924,7 +4081,7 @@ export async function createBot(options: CreateBotOptions) {
 				}
 				setLogContext(ctx, { model_ref: activeModelRef, model_id: config.id });
 				const agent = await createMultiIssueAgent({
-					question: text,
+					question: promptText,
 					modelRef: activeModelRef,
 					modelName: config.label ?? config.id,
 					reasoning: resolveReasoningFor(config),
@@ -3945,10 +4102,16 @@ export async function createBot(options: CreateBotOptions) {
 					void appendHistoryMessage(memoryId, {
 						timestamp: new Date().toISOString(),
 						role: "user",
-						text,
+						text: promptText,
 					});
 				}
-				return createAgentStreamWithTools(agent, text, undefined, abortSignal);
+				return createAgentStreamWithTools(
+					agent,
+					promptText,
+					files,
+					undefined,
+					abortSignal,
+				);
 			}
 
 			if (issueKeys.length > 1 && trackerKeys.length === issueKeys.length) {
@@ -3976,7 +4139,7 @@ export async function createBot(options: CreateBotOptions) {
 				}
 				setLogContext(ctx, { model_ref: activeModelRef, model_id: config.id });
 				const agent = await createMultiIssueAgent({
-					question: text,
+					question: promptText,
 					modelRef: activeModelRef,
 					modelName: config.label ?? config.id,
 					reasoning: resolveReasoningFor(config),
@@ -3997,10 +4160,16 @@ export async function createBot(options: CreateBotOptions) {
 					void appendHistoryMessage(memoryId, {
 						timestamp: new Date().toISOString(),
 						role: "user",
-						text,
+						text: promptText,
 					});
 				}
-				return createAgentStreamWithTools(agent, text, undefined, abortSignal);
+				return createAgentStreamWithTools(
+					agent,
+					promptText,
+					files,
+					undefined,
+					abortSignal,
+				);
 			}
 
 			const issueKey = issueKeys[0] ?? null;
@@ -4021,7 +4190,7 @@ export async function createBot(options: CreateBotOptions) {
 				}
 				setLogContext(ctx, { model_ref: activeModelRef, model_id: config.id });
 				const agent = await createIssueAgent({
-					question: text,
+					question: promptText,
 					modelRef: activeModelRef,
 					modelName: config.label ?? config.id,
 					reasoning: resolveReasoningFor(config),
@@ -4040,10 +4209,16 @@ export async function createBot(options: CreateBotOptions) {
 					void appendHistoryMessage(memoryId, {
 						timestamp: new Date().toISOString(),
 						role: "user",
-						text,
+						text: promptText,
 					});
 				}
-				return createAgentStreamWithTools(agent, text, undefined, abortSignal);
+				return createAgentStreamWithTools(
+					agent,
+					promptText,
+					files,
+					undefined,
+					abortSignal,
+				);
 			}
 
 			if (issueKey && trackerKeys.length === issueKeys.length) {
@@ -4064,7 +4239,7 @@ export async function createBot(options: CreateBotOptions) {
 				}
 				setLogContext(ctx, { model_ref: activeModelRef, model_id: config.id });
 				const agent = await createIssueAgent({
-					question: text,
+					question: promptText,
 					modelRef: activeModelRef,
 					modelName: config.label ?? config.id,
 					reasoning: resolveReasoningFor(config),
@@ -4083,10 +4258,16 @@ export async function createBot(options: CreateBotOptions) {
 					void appendHistoryMessage(memoryId, {
 						timestamp: new Date().toISOString(),
 						role: "user",
-						text,
+						text: promptText,
 					});
 				}
-				return createAgentStreamWithTools(agent, text, undefined, abortSignal);
+				return createAgentStreamWithTools(
+					agent,
+					promptText,
+					files,
+					undefined,
+					abortSignal,
+				);
 			}
 
 			const config = getModelConfig(activeModelRef);
@@ -4094,7 +4275,7 @@ export async function createBot(options: CreateBotOptions) {
 				return createTextStream("Model not configured.");
 			}
 			setLogContext(ctx, { model_ref: activeModelRef, model_id: config.id });
-			const plan = await buildOrchestrationPlan(text, ctx);
+			const plan = await buildOrchestrationPlan(promptText, ctx);
 			const orchestrationPolicy = resolveOrchestrationPolicy(ctx);
 			let orchestrationSummary = "";
 			if (plan.agents.length > 0) {
@@ -4102,6 +4283,7 @@ export async function createBot(options: CreateBotOptions) {
 					history: historyText,
 					chatId: memoryId,
 					ctx,
+					webSearchEnabled: allowWebSearch,
 				});
 				const toolsByAgent = {
 					tracker: buildTrackerTools(allTools),
@@ -4111,7 +4293,7 @@ export async function createBot(options: CreateBotOptions) {
 					memory: buildMemorySubagentTools(allTools),
 				};
 				const orchestrationResult = await runOrchestration(plan, {
-					prompt: text,
+					prompt: promptText,
 					modelId: config.id,
 					toolsByAgent,
 					isGroupChat: isGroupChat(ctx),
@@ -4131,7 +4313,7 @@ export async function createBot(options: CreateBotOptions) {
 				historyText,
 				orchestrationSummary,
 			);
-			const agent = await createAgent(text, activeModelRef, config, {
+			const agent = await createAgent(promptText, activeModelRef, config, {
 				onCandidates: (candidates) => {
 					if (!chatState) return;
 					chatState.lastCandidates = candidates;
@@ -4143,15 +4325,22 @@ export async function createBot(options: CreateBotOptions) {
 				chatId: memoryId,
 				userName,
 				ctx,
+				webSearchEnabled: allowWebSearch,
 			});
 			if (memoryId) {
 				void appendHistoryMessage(memoryId, {
 					timestamp: new Date().toISOString(),
 					role: "user",
-					text,
+					text: promptText,
 				});
 			}
-			return createAgentStreamWithTools(agent, text, undefined, abortSignal);
+			return createAgentStreamWithTools(
+				agent,
+				promptText,
+				files,
+				undefined,
+				abortSignal,
+			);
 		} catch (error) {
 			setLogError(ctx, error);
 			return createTextStream(`Ошибка: ${String(error)}`);
@@ -4159,6 +4348,33 @@ export async function createBot(options: CreateBotOptions) {
 	}
 
 	bot.on("message", (ctx) => {
+		if (
+			isGroupChat(ctx) &&
+			shouldRequireMentionForChannel({
+				channelConfig: ctx.state.channelConfig,
+				defaultRequireMention: TELEGRAM_GROUP_REQUIRE_MENTION,
+			})
+		) {
+			if (!isReplyToBotWithoutMention(ctx) && !isBotMentioned(ctx)) {
+				return;
+			}
+		}
+		if (
+			ctx.message?.new_chat_members ||
+			ctx.message?.left_chat_member ||
+			ctx.message?.new_chat_title ||
+			ctx.message?.new_chat_photo ||
+			ctx.message?.delete_chat_photo ||
+			ctx.message?.group_chat_created ||
+			ctx.message?.supergroup_chat_created ||
+			ctx.message?.channel_chat_created ||
+			ctx.message?.message_auto_delete_timer_changed ||
+			ctx.message?.pinned_message ||
+			ctx.message?.migrate_from_chat_id ||
+			ctx.message?.migrate_to_chat_id
+		) {
+			return;
+		}
 		setLogContext(ctx, { message_type: "other" });
 		return sendText(
 			ctx,
