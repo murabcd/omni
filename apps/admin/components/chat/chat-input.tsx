@@ -170,7 +170,7 @@ export function ChatInput({
 		<div className="size-full">
 			<PromptInputProvider>
 				<PromptInput
-					accept="image/*"
+					accept="image/*,application/pdf"
 					globalDrop
 					multiple
 					onSubmit={(message) => {

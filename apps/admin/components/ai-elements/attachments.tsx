@@ -71,7 +71,22 @@ export const AttachmentPreview = ({ className }: { className?: string }) => {
 	if (!ctx) return null;
 	const { data } = ctx;
 	const isImage = data.mediaType?.startsWith("image/");
-	if (!isImage) return null;
+	if (!isImage) {
+		const label =
+			data.mediaType === "application/pdf"
+				? "PDF"
+				: data.filename?.split(".").pop()?.toUpperCase() ?? "FILE";
+		return (
+			<div
+				className={cn(
+					"flex h-12 w-12 items-center justify-center rounded-md bg-muted text-[10px] font-semibold text-muted-foreground",
+					className,
+				)}
+			>
+				{label}
+			</div>
+		);
+	}
 	return (
 		<Image
 			alt={data.filename ?? "attachment"}

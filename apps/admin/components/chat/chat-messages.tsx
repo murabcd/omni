@@ -136,7 +136,8 @@ export function ChatMessages({ messages, isLoading }: ChatMessagesProps) {
 					(part): part is FileUIPart =>
 						part.type === "file" &&
 						typeof part.mediaType === "string" &&
-						part.mediaType.startsWith("image/"),
+						(part.mediaType.startsWith("image/") ||
+							part.mediaType === "application/pdf"),
 				);
 
 				return (

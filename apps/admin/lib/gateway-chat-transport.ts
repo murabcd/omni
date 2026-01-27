@@ -28,7 +28,8 @@ function extractLastUserPayload<UI_MESSAGE extends UIMessage>(
 			(part): part is FileUIPart =>
 				part.type === "file" &&
 				typeof part.mediaType === "string" &&
-				part.mediaType.startsWith("image/"),
+				(part.mediaType.startsWith("image/") ||
+					part.mediaType === "application/pdf"),
 		);
 		const metadata =
 			message.metadata && typeof message.metadata === "object"
