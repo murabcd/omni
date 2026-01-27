@@ -1,4 +1,5 @@
 import type { UIMessageChunk } from "ai";
+import { markdownToTelegramHtml } from "../telegram/format.js";
 
 type SendTextContext = {
 	reply: (text: string, options?: Record<string, unknown>) => Promise<unknown>;
@@ -54,64 +55,9 @@ export function createTelegramHelpers(options: TelegramHelpersOptions) {
 		}
 	}
 
-	function escapeHtml(input: string) {
-		return input
-			.replaceAll("&", "&amp;")
-			.replaceAll("<", "&lt;")
-			.replaceAll(">", "&gt;");
-	}
-
 	function formatTelegram(input: string) {
 		if (!input) return "";
-
-		const codeBlocks: string[] = [];
-		const inlineCodes: string[] = [];
-		let text = input;
-
-		text = text.replace(/```([\s\S]*?)```/g, (match, code) => {
-			void match;
-			const escaped = escapeHtml(String(code).trimEnd());
-			const html = `<pre><code>${escaped}</code></pre>`;
-			const token = `@@CODEBLOCK_${codeBlocks.length}@@`;
-			codeBlocks.push(html);
-			return token;
-		});
-
-		text = text.replace(/`([^`]+?)`/g, (match, code) => {
-			void match;
-			const escaped = escapeHtml(String(code));
-			const html = `<code>${escaped}</code>`;
-			const token = `@@INLINECODE_${inlineCodes.length}@@`;
-			inlineCodes.push(html);
-			return token;
-		});
-
-		text = escapeHtml(text);
-
-		text = text.replace(
-			/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g,
-			(match, label, url) => {
-				void match;
-				return `<a href="${url}">${label}</a>`;
-			},
-		);
-		text = text.replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>");
-		text = text.replace(/\*([^*]+)\*/g, "<i>$1</i>");
-		text = text.replace(/_([^_]+)_/g, "<i>$1</i>");
-		text = text.replace(/~~([^~]+)~~/g, "<s>$1</s>");
-
-		text = text.replace(/@@INLINECODE_(\d+)@@/g, (match, index) => {
-			void match;
-			const entry = inlineCodes[Number(index)];
-			return entry ?? "";
-		});
-		text = text.replace(/@@CODEBLOCK_(\d+)@@/g, (match, index) => {
-			void match;
-			const entry = codeBlocks[Number(index)];
-			return entry ?? "";
-		});
-
-		return text;
+		return markdownToTelegramHtml(input);
 	}
 
 	function appendSources(text: string, sources: Array<{ url?: string }> = []) {

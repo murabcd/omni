@@ -159,6 +159,7 @@ export async function createBot(options: CreateBotOptions) {
 		env.POSTHOG_API_BASE_URL ?? "https://eu.posthog.com";
 	const OPENAI_API_KEY = env.OPENAI_API_KEY;
 	const OPENAI_MODEL = env.OPENAI_MODEL ?? "";
+	const SOUL_PROMPT = env.SOUL_PROMPT ?? "";
 	const ALLOWED_TG_IDS = env.ALLOWED_TG_IDS ?? "";
 	const CRON_STATUS_TIMEZONE = env.CRON_STATUS_TIMEZONE ?? "UTC";
 	const DEFAULT_TRACKER_QUEUE = env.DEFAULT_TRACKER_QUEUE ?? "PROJ";
@@ -1736,7 +1737,8 @@ export async function createBot(options: CreateBotOptions) {
 			recentCandidates: options?.recentCandidates,
 			history: options?.history,
 			userName: options?.userName,
-			systemPrompt: options?.ctx?.state.channelConfig?.systemPrompt,
+			globalSoul: SOUL_PROMPT,
+			channelSoul: options?.ctx?.state.channelConfig?.systemPrompt,
 		});
 		const agentTools = await createAgentTools(options);
 		return new ToolLoopAgent({
@@ -3155,6 +3157,8 @@ export async function createBot(options: CreateBotOptions) {
 								modelId: config.id,
 								issues: issuesData,
 								userName,
+								globalSoul: SOUL_PROMPT,
+								channelSoul: ctx.state.channelConfig?.systemPrompt,
 							});
 							const result = await generateAgent(agent);
 							clearAllStatuses();
@@ -3247,6 +3251,8 @@ export async function createBot(options: CreateBotOptions) {
 								modelId: config.id,
 								issues: issuesData,
 								userName,
+								globalSoul: SOUL_PROMPT,
+								channelSoul: ctx.state.channelConfig?.systemPrompt,
 							});
 							const result = await generateAgent(agent);
 							clearAllStatuses();
@@ -3338,6 +3344,8 @@ export async function createBot(options: CreateBotOptions) {
 								issueText,
 								commentsText,
 								userName,
+								globalSoul: SOUL_PROMPT,
+								channelSoul: ctx.state.channelConfig?.systemPrompt,
 							});
 							const result = await generateAgent(agent);
 							clearAllStatuses();
@@ -3424,6 +3432,8 @@ export async function createBot(options: CreateBotOptions) {
 								issueText,
 								commentsText,
 								userName,
+								globalSoul: SOUL_PROMPT,
+								channelSoul: ctx.state.channelConfig?.systemPrompt,
 							});
 							const result = await generateAgent(agent);
 							clearAllStatuses();
@@ -3707,6 +3717,8 @@ export async function createBot(options: CreateBotOptions) {
 					modelId: config.id,
 					issues: issuesData,
 					userName,
+					globalSoul: SOUL_PROMPT,
+					channelSoul: ctx.state.channelConfig?.systemPrompt,
 				});
 				if (chatState) {
 					chatState.lastCandidates = issuesData.map((issue) => ({
@@ -3765,6 +3777,8 @@ export async function createBot(options: CreateBotOptions) {
 					modelId: config.id,
 					issues: issuesData,
 					userName,
+					globalSoul: SOUL_PROMPT,
+					channelSoul: ctx.state.channelConfig?.systemPrompt,
 				});
 				if (chatState) {
 					chatState.lastCandidates = issuesData.map((issue) => ({
@@ -3818,6 +3832,8 @@ export async function createBot(options: CreateBotOptions) {
 					issueText,
 					commentsText,
 					userName,
+					globalSoul: SOUL_PROMPT,
+					channelSoul: ctx.state.channelConfig?.systemPrompt,
 				});
 				if (chatState) {
 					chatState.lastCandidates = [{ key: issueKey, summary: "", score: 0 }];
@@ -3867,6 +3883,8 @@ export async function createBot(options: CreateBotOptions) {
 					issueText,
 					commentsText,
 					userName,
+					globalSoul: SOUL_PROMPT,
+					channelSoul: ctx.state.channelConfig?.systemPrompt,
 				});
 				if (chatState) {
 					chatState.lastCandidates = [{ key: issueKey, summary: "", score: 0 }];

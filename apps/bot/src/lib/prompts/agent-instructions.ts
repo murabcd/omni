@@ -11,7 +11,26 @@ export type AgentInstructionOptions = {
 	history?: string;
 	userName?: string;
 	systemPrompt?: string;
+	globalSoul?: string;
+	channelSoul?: string;
 };
+
+function buildSoulBlock(params: {
+	globalSoul?: string;
+	channelSoul?: string;
+	systemPrompt?: string;
+}): string {
+	const sections: string[] = [];
+	const globalSoul = params.globalSoul?.trim();
+	if (globalSoul) {
+		sections.push("SOUL (global):", globalSoul);
+	}
+	const channelSoul = (params.channelSoul ?? params.systemPrompt)?.trim();
+	if (channelSoul) {
+		sections.push("SOUL (channel):", channelSoul);
+	}
+	return sections.join("\n");
+}
 
 export function buildAgentInstructions(
 	options: AgentInstructionOptions,
@@ -31,13 +50,15 @@ export function buildAgentInstructions(
 			].join("\n")
 		: "";
 
+	const soulBlock = buildSoulBlock(options);
+
 	return [
 		buildSystemPrompt({
 			modelRef: options.modelRef,
 			modelName: options.modelName,
 			reasoning: options.reasoning,
 		}),
-		options.systemPrompt ? `\n${options.systemPrompt}` : "",
+		soulBlock ? `\n${soulBlock}` : "",
 		"Tool Use:",
 		"- Prefer `tracker_search` for integration/status/estimate questions when no exact issue key is provided.",
 		"- Prefer Jira tools for FL-* issues, sprints, or FLOM board requests.",
@@ -73,17 +94,22 @@ export type IssueInstructionOptions = {
 	issueText: string;
 	commentsText: string;
 	userName?: string;
+	globalSoul?: string;
+	channelSoul?: string;
+	systemPrompt?: string;
 };
 
 export function buildIssueAgentInstructions(
 	options: IssueInstructionOptions,
 ): string {
+	const soulBlock = buildSoulBlock(options);
 	return [
 		buildSystemPrompt({
 			modelRef: options.modelRef,
 			modelName: options.modelName,
 			reasoning: options.reasoning,
 		}),
+		soulBlock ? `\n${soulBlock}` : "",
 		"Context:",
 		`Issue key: ${options.issueKey}`,
 		"Issue data (issue_get):",

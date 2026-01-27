@@ -13,6 +13,9 @@ export type IssueAgentOptions = {
 	commentsText: string;
 	modelId: string;
 	userName?: string;
+	globalSoul?: string;
+	channelSoul?: string;
+	systemPrompt?: string;
 };
 
 export async function createIssueAgent(
@@ -27,6 +30,9 @@ export async function createIssueAgent(
 		issueText: options.issueText,
 		commentsText: options.commentsText,
 		userName: options.userName,
+		globalSoul: options.globalSoul,
+		channelSoul: options.channelSoul,
+		systemPrompt: options.systemPrompt,
 	});
 	return new ToolLoopAgent({
 		model: openai(options.modelId),
@@ -48,6 +54,9 @@ export type MultiIssueAgentOptions = {
 		commentsText: string;
 	}>;
 	userName?: string;
+	globalSoul?: string;
+	channelSoul?: string;
+	systemPrompt?: string;
 };
 
 export async function createMultiIssueAgent(
@@ -75,6 +84,9 @@ export async function createMultiIssueAgent(
 			issueText: "",
 			commentsText: "",
 			userName: options.userName,
+			globalSoul: options.globalSoul,
+			channelSoul: options.channelSoul,
+			systemPrompt: options.systemPrompt,
 		}),
 		"Rules:",
 		"- Use the provided issue data and comments to answer.",

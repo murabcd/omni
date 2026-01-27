@@ -11,6 +11,16 @@ const modelsConfig = await loadModelsConfig();
 const runtimeSkills = await loadSkills();
 
 const DEBUG_LOG_FILE = process.env.DEBUG_LOG_FILE ?? "";
+const SOUL_FILE_PATH = path.resolve("config/SOUL.md");
+
+try {
+	const soul = fs.readFileSync(SOUL_FILE_PATH, "utf8").trim();
+	if (soul) {
+		process.env.SOUL_PROMPT = `${soul}\n`;
+	}
+} catch {
+	// ignore missing SOUL.md in local dev
+}
 
 function createDebugAppender(filePath: string) {
 	if (!filePath) return undefined;
