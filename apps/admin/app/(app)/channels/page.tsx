@@ -242,7 +242,7 @@ function ChannelRow({
 			<TableCell>
 				<Input
 					value={row.systemPrompt ?? ""}
-					placeholder="Additional system prompt"
+					placeholder="Channel SOUL prompt"
 					onChange={(event) =>
 						onPatch(row.key, { systemPrompt: event.target.value || null })
 					}

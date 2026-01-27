@@ -49,6 +49,7 @@ export default function SettingsPage() {
 				<TabsList>
 					<TabsTrigger value="telegram">Telegram</TabsTrigger>
 					<TabsTrigger value="cron">Cron</TabsTrigger>
+					<TabsTrigger value="security">Security</TabsTrigger>
 				</TabsList>
 
 				{/* Telegram Tab */}
@@ -193,29 +194,33 @@ export default function SettingsPage() {
 						</CardFooter>
 					</Card>
 				</TabsContent>
-			</Tabs>
 
-			<Card className="mt-8">
-				<CardHeader>
-					<CardTitle>Admin allowlist</CardTitle>
-					<CardDescription>
-						Restrict admin panel access to specific IP addresses.
-					</CardDescription>
-				</CardHeader>
-				<CardContent>
-					<div className="max-w-md">
-						<Field
-							label="Allowed IPs"
-							value={config.ADMIN_ALLOWLIST ?? ""}
-							placeholder="127.0.0.1"
-							onChange={(value) => updateConfigField("ADMIN_ALLOWLIST", value)}
-						/>
-					</div>
-				</CardContent>
-				<CardFooter>
-					<span>Comma-separated IP addresses.</span>
-				</CardFooter>
-			</Card>
+				<TabsContent value="security">
+					<Card>
+						<CardHeader>
+							<CardTitle>Admin allowlist</CardTitle>
+							<CardDescription>
+								Restrict admin panel access to specific IP addresses.
+							</CardDescription>
+						</CardHeader>
+						<CardContent>
+							<div className="max-w-md">
+								<Field
+									label="Allowed IPs"
+									value={config.ADMIN_ALLOWLIST ?? ""}
+									placeholder="127.0.0.1"
+									onChange={(value) =>
+										updateConfigField("ADMIN_ALLOWLIST", value)
+									}
+								/>
+							</div>
+						</CardContent>
+						<CardFooter>
+							<span>Comma-separated IP addresses.</span>
+						</CardFooter>
+					</Card>
+				</TabsContent>
+			</Tabs>
 
 			{/* Save Button - Always visible */}
 			<div className="mt-8 border-t border-border pt-6">
