@@ -18,14 +18,7 @@ import {
 	type UIMessage,
 	type UIMessageChunk,
 } from "ai";
-import {
-	API_CONSTANTS,
-	Bot,
-	type CallbackQueryContext,
-	type Context,
-	InlineKeyboard,
-} from "grammy";
-import type { Update } from "grammy/types";
+import { API_CONSTANTS, Bot, InlineKeyboard } from "grammy";
 import { z } from "zod";
 import {
 	createIssueAgent,
@@ -44,8 +37,21 @@ import {
 	buildTrackerTools,
 	buildWebTools,
 } from "./lib/agents/subagents/index.js";
+import { createAccessHelpers, isGroupChat } from "./lib/bot/access.js";
+import { registerCommands } from "./lib/bot/commands.js";
 import {
-	type ChannelConfig,
+	buildCronExpr,
+	findCronJob,
+	formatCronJob,
+	parseTime,
+} from "./lib/bot/cron.js";
+import {
+	createLogHelpers,
+	createRequestLoggerMiddleware,
+} from "./lib/bot/logging.js";
+import { createTelegramHelpers } from "./lib/bot/telegram.js";
+import type { BotContext } from "./lib/bot/types.js";
+import {
 	filterSkillsForChannel,
 	isUserAllowedForChannel,
 	parseChannelConfig,
@@ -72,7 +78,6 @@ import {
 	POSTHOG_READONLY_TOOL_NAMES,
 } from "./lib/posthog-tools.js";
 import { buildAgentInstructions } from "./lib/prompts/agent-instructions.js";
-import { isBotMentionedMessage } from "./lib/telegram-mentions.js";
 import {
 	expandTermVariants,
 	extractIssueKeysFromText,
@@ -583,73 +588,16 @@ export async function createBot(options: CreateBotOptions) {
 	const TOOL_SUPPRESSED_BY_POLICY = toolInventory.suppressedByPolicy;
 	let lastTrackerCallAt: number | null = null;
 
-	type LogContext = {
-		request_id?: string;
-		update_id?: number;
-		update_type?: string;
-		chat_id?: number | string;
-		user_id?: number | string;
-		username?: string;
-		message_type?:
-			| "command"
-			| "text"
-			| "voice"
-			| "photo"
-			| "callback"
-			| "other";
-		command?: string;
-		command_sub?: string;
-		tool?: string;
-		model_ref?: string;
-		model_id?: string;
-		issue_key?: string;
-		issue_key_count?: number;
-		outcome?: "success" | "error" | "blocked";
-		status_code?: number;
-		error?: { message: string; type?: string };
-	};
-
-	type BotContext = Context & {
-		state: { logContext?: LogContext; channelConfig?: ChannelConfig };
-	};
-
-	function getLogContext(ctx: BotContext) {
-		return ctx.state.logContext ?? {};
-	}
-
-	function setLogContext(ctx: BotContext, update: Partial<LogContext>) {
-		ctx.state.logContext = { ...ctx.state.logContext, ...update };
-	}
-
-	function setLogError(ctx: BotContext, error: unknown) {
-		const message = error instanceof Error ? error.message : String(error);
-		const type = error instanceof Error ? error.name : undefined;
-		setLogContext(ctx, {
-			outcome: "error",
-			status_code: 500,
-			error: { message, type },
+	const { getLogContext, setLogContext, setLogError, getUpdateType, logDebug } =
+		createLogHelpers({
+			debugEnabled: DEBUG_LOGS,
+			logger,
+			onDebugLog: options.onDebugLog,
 		});
-	}
-
-	function getUpdateType(update?: Update) {
-		if (!update) return "unknown";
-		const keys = Object.keys(
-			update as unknown as Record<string, unknown>,
-		).filter((key) => key !== "update_id");
-		return keys[0] ?? "unknown";
-	}
-
-	function logDebug(message: string, data?: unknown) {
-		if (!DEBUG_LOGS) return;
-		const payload = {
-			event: "debug",
-			message,
-			data,
-		};
-		const line = JSON.stringify(payload);
-		logger.info(payload);
-		options.onDebugLog?.(line);
-	}
+	const { sendText, appendSources, createTextStream } = createTelegramHelpers({
+		textChunkLimit: TELEGRAM_TEXT_CHUNK_LIMIT,
+		logDebug,
+	});
 
 	bot.api.config.use(apiThrottler());
 	bot.use(
@@ -660,55 +608,15 @@ export async function createBot(options: CreateBotOptions) {
 		}),
 	);
 
-	bot.use(async (ctx, next) => {
-		ctx.state ??= {};
-		const startedAt = Date.now();
-		const updateId = ctx.update?.update_id;
-		const chatId = ctx.chat?.id;
-		const userId = ctx.from?.id;
-		const username = ctx.from?.username;
-		const updateType = getUpdateType(ctx.update);
-		const requestId = `tg:${updateId ?? "unknown"}:${chatId ?? userId ?? "unknown"}`;
-		setLogContext(ctx, {
-			request_id: requestId,
-			update_id: updateId,
-			chat_id: chatId,
-			user_id: userId,
-			username,
-			update_type: updateType,
-		});
-
-		try {
-			await next();
-			const context = getLogContext(ctx);
-			if (!context.outcome) {
-				setLogContext(ctx, { outcome: "success" });
-			}
-		} catch (error) {
-			setLogError(ctx, error);
-			throw error;
-		} finally {
-			const durationMs = Date.now() - startedAt;
-			const context = getLogContext(ctx);
-			const statusCode =
-				context.status_code ??
-				(context.outcome === "blocked"
-					? 403
-					: context.outcome === "error"
-						? 500
-						: 200);
-			if (!context.status_code) {
-				setLogContext(ctx, { status_code: statusCode });
-			}
-			const finalContext = getLogContext(ctx);
-			const level = finalContext.outcome === "error" ? "error" : "info";
-			logger[level]({
-				event: "telegram_update",
-				...finalContext,
-				duration_ms: durationMs,
-			});
-		}
-	});
+	bot.use(
+		createRequestLoggerMiddleware({
+			logger,
+			getLogContext,
+			setLogContext,
+			setLogError,
+			getUpdateType,
+		}),
+	);
 
 	const allowedIds = new Set(
 		ALLOWED_TG_IDS.split(",")
@@ -720,6 +628,12 @@ export async function createBot(options: CreateBotOptions) {
 			.map((value: string) => value.trim())
 			.filter((value: string) => value.length > 0),
 	);
+	const {
+		isGroupAllowed,
+		isReplyToBotWithoutMention,
+		isBotMentioned,
+		shouldReplyAccessDenied,
+	} = createAccessHelpers({ allowedGroups });
 
 	bot.use((ctx, next) => {
 		const raw = (ctx.update as { __channelConfig?: unknown }).__channelConfig;
@@ -751,11 +665,6 @@ export async function createBot(options: CreateBotOptions) {
 
 	function resolveReasoningFor(config: typeof activeModelConfig): string {
 		return activeReasoningOverride ?? config.reasoning ?? "standard";
-	}
-
-	function isGroupChat(ctx: BotContext) {
-		const type = ctx.chat?.type;
-		return type === "group" || type === "supergroup";
 	}
 
 	function resolveChatToolPolicy(ctx?: BotContext) {
@@ -936,34 +845,6 @@ export async function createBot(options: CreateBotOptions) {
 		ctx: BotContext,
 	): Promise<OrchestrationPlan> {
 		return routeRequest(prompt, activeModelConfig.id, isGroupChat(ctx));
-	}
-
-	function isGroupAllowed(ctx: BotContext) {
-		if (!isGroupChat(ctx)) return true;
-		if (allowedGroups.size === 0) return true;
-		const chatId = ctx.chat?.id?.toString() ?? "";
-		return allowedGroups.has(chatId);
-	}
-
-	function isReplyToBot(ctx: BotContext) {
-		return (
-			ctx.message?.reply_to_message?.from?.id !== undefined &&
-			ctx.me?.id !== undefined &&
-			ctx.message.reply_to_message.from.id === ctx.me.id
-		);
-	}
-
-	function isBotMentioned(ctx: BotContext) {
-		return isBotMentionedMessage(ctx.message, ctx.me) || isReplyToBot(ctx);
-	}
-
-	function isReplyToBotWithoutMention(ctx: BotContext) {
-		return isReplyToBot(ctx) && !isBotMentionedMessage(ctx.message, ctx.me);
-	}
-
-	function shouldReplyAccessDenied(ctx: BotContext) {
-		if (!isGroupChat(ctx)) return true;
-		return isBotMentioned(ctx);
 	}
 
 	function getModelConfig(ref: string) {
@@ -2776,674 +2657,53 @@ export async function createBot(options: CreateBotOptions) {
 		"Можно писать текстом или голосом.\n" +
 		"Если есть номер задачи — укажите его, например PROJ-1234.\n\n";
 
-	bot.command("start", (ctx) => {
-		setLogContext(ctx, { command: "/start", message_type: "command" });
-		const memoryId = ctx.from?.id?.toString() ?? "";
-		if (memoryId) {
-			clearHistoryMessages();
-		}
-		return sendText(ctx, START_GREETING, { reply_markup: startKeyboard });
-	});
-
-	async function handleHelp(ctx: {
-		reply: (text: string) => Promise<unknown>;
-	}) {
-		await sendText(
-			ctx,
-			"Команды:\n" +
-				"/tools - показать доступные инструменты\n" +
-				"/model - показать или сменить модель (list — список, set — выбрать)\n" +
-				"/model list - показать список моделей\n" +
-				"/model set <ref> - выбрать модель по имени\n" +
-				"/model reasoning <level> - установить уровень логики ответа (off/low/standard/high)\n" +
-				"/whoami - кто такой бот\n" +
-				"/tracker <tool> <json> - вручную вызвать инструмент с параметрами (для продвинутых)\n\n" +
-				"Можно просто спросить, например:\n" +
-				'"Делали интеграцию с ЦИАН?"',
-		);
-	}
-
-	bot.command("help", (ctx) => {
-		setLogContext(ctx, { command: "/help", message_type: "command" });
-		return handleHelp(ctx);
-	});
-
-	async function handleTools(ctx: {
-		reply: (text: string) => Promise<unknown>;
-	}) {
-		try {
-			const tools = await getCommandTools();
-			const chatPolicy = resolveChatToolPolicy(ctx as BotContext);
-			const effectivePolicy = mergeToolPolicies(toolPolicy, chatPolicy);
-			const filteredTools = filterToolMetasByPolicy(tools, effectivePolicy);
-			if (!tools.length) {
-				await sendText(ctx, "Нет доступных инструментов.");
-				return;
-			}
-
-			const lines = filteredTools.map((tool) => {
-				const desc = tool.description ? ` - ${tool.description}` : "";
-				return `${tool.name}${desc}`;
-			});
-
-			const conflictLines =
-				TOOL_CONFLICTS.length > 0
-					? TOOL_CONFLICTS.map(
-							(conflict) =>
-								`- ${conflict.tool.name} (duplicate name, source ${conflict.tool.source})`,
-						)
-					: [];
-			const suppressedLines = (() => {
-				const globalSuppressed =
-					TOOL_SUPPRESSED_BY_POLICY.length > 0 ? TOOL_SUPPRESSED_BY_POLICY : [];
-				if (!chatPolicy) return globalSuppressed;
-				const chatSuppressed = tools
-					.filter((tool) => !filteredTools.includes(tool))
-					.map((tool) => tool.name);
-				return Array.from(new Set([...globalSuppressed, ...chatSuppressed]));
-			})();
-			const approvalLines =
-				approvalRequired.size > 0
-					? Array.from(approvalRequired).map((name) => `- ${name}`)
-					: [];
-			const rateRules = parseToolRateLimits(TOOL_RATE_LIMITS);
-			const rateLimitLines =
-				rateRules.length > 0
-					? [
-							"Лимиты (на пользователя и чат):",
-							...rateRules.map(
-								(rule) => `- ${rule.tool}: ${rule.max}/${rule.windowSeconds}s`,
-							),
-						]
-					: [];
-			const sections = [
-				`Доступные инструменты:\n${lines.join("\n")}`,
-				conflictLines.length > 0
-					? `\nКонфликты:\n${conflictLines.join("\n")}`
-					: "",
-				suppressedLines.length > 0
-					? `\nОтключены политикой:\n${suppressedLines.map((name) => `- ${name}`).join("\n")}`
-					: "",
-				approvalLines.length > 0
-					? `\nТребуют одобрения:\n${approvalLines.join("\n")}`
-					: "",
-				rateLimitLines.length > 0 ? `\n${rateLimitLines.join("\n")}` : "",
-			].filter(Boolean);
-
-			await sendText(ctx, sections.join("\n"));
-		} catch (error) {
-			await sendText(ctx, `Ошибка списка инструментов: ${String(error)}`);
-		}
-	}
-
-	bot.command("tools", (ctx) => {
-		setLogContext(ctx, { command: "/tools", message_type: "command" });
-		return handleTools(ctx);
-	});
-
-	bot.command("approve", async (ctx) => {
-		setLogContext(ctx, { command: "/approve", message_type: "command" });
-		const text = ctx.message?.text ?? "";
-		const [, toolRaw] = text.split(" ");
-		const chatId = ctx.chat?.id?.toString() ?? "";
-		if (!chatId) {
-			await sendText(ctx, "Нет chat_id для одобрения.");
-			return;
-		}
-		if (!toolRaw) {
-			const list =
-				approvalRequired.size > 0
-					? Array.from(approvalRequired).join(", ")
-					: "нет";
-			await sendText(
-				ctx,
-				`Использование: /approve <tool>\nТребуют одобрения: ${list}`,
-			);
-			return;
-		}
-		const normalized = normalizeToolName(toolRaw);
-		if (!approvalRequired.has(normalized)) {
-			await sendText(ctx, `Инструмент ${normalized} не требует одобрения.`);
-			return;
-		}
-		approvalStore.approve(chatId, normalized);
-		await sendText(ctx, `Одобрено: ${normalized}. Повторите запрос.`);
-	});
-
-	bot.command("approvals", async (ctx) => {
-		setLogContext(ctx, { command: "/approvals", message_type: "command" });
-		const chatId = ctx.chat?.id?.toString() ?? "";
-		if (!chatId) {
-			await sendText(ctx, "Нет chat_id для списка одобрений.");
-			return;
-		}
-		const approvals = listApprovals(approvalStore, chatId);
-		if (approvals.length === 0) {
-			await sendText(ctx, "Активных одобрений нет.");
-			return;
-		}
-		const lines = approvals.map(
-			(item) => `- ${item.tool} (до ${new Date(item.expiresAt).toISOString()})`,
-		);
-		await sendText(ctx, `Активные одобрения:\n${lines.join("\n")}`);
-	});
-
-	bot.command("model", async (ctx) => {
-		setLogContext(ctx, { command: "/model", message_type: "command" });
-		const text = ctx.message?.text ?? "";
-		const [, sub, ...rest] = text.split(" ");
-		if (sub) setLogContext(ctx, { command_sub: sub });
-
-		if (!sub) {
-			const fallbacks = activeModelFallbacks.length
-				? activeModelFallbacks.join(", ")
-				: "none";
-			await sendText(
-				ctx,
-				`Model: ${activeModelRef}\nReasoning: ${resolveReasoning()}\nFallbacks: ${fallbacks}`,
-			);
-			return;
-		}
-
-		if (sub === "list") {
-			const lines = Object.entries(modelsConfig.models).map(([ref, cfg]) => {
-				const label = cfg.label ?? cfg.id;
-				return `${ref} - ${label}`;
-			});
-			await sendText(ctx, `Available models:\n${lines.join("\n")}`);
-			return;
-		}
-
-		if (sub === "set") {
-			const raw = rest.join(" ").trim();
-			if (!raw) {
-				await sendText(ctx, "Использование: /model set <ref>");
-				return;
-			}
-			const normalized = normalizeModelRef(raw);
-			try {
-				setActiveModel(normalized);
-				await sendText(ctx, `Model set to ${activeModelRef}`);
-			} catch (error) {
-				await sendText(ctx, `Ошибка модели: ${String(error)}`);
-			}
-			return;
-		}
-
-		if (sub === "reasoning") {
-			const raw = rest.join(" ").trim();
-			const normalized = normalizeReasoning(raw);
-			if (!normalized) {
-				await sendText(ctx, "Reasoning must be off|low|standard|high");
-				return;
-			}
-			activeReasoningOverride = normalized;
-			await sendText(ctx, `Reasoning set to ${normalized}`);
-			return;
-		}
-
-		await sendText(ctx, "Unknown /model subcommand");
-	});
-
-	bot.command("skills", async (ctx) => {
-		setLogContext(ctx, { command: "/skills", message_type: "command" });
-		const channelSkills = filterSkillsForChannel({
-			skills: runtimeSkills,
-			channelConfig: ctx.state.channelConfig,
-		});
-		const channelSupported = filterSkillsForChannel({
-			skills: runtimeSkills,
-			channelConfig: ctx.state.channelConfig,
-		});
-		if (!channelSkills.length) {
-			await sendText(ctx, "Нет доступных runtime-skills.");
-			return;
-		}
-		const supported = new Set(channelSupported.map((skill) => skill.name));
-		const lines = channelSkills.map((skill) => {
-			const desc = skill.description ? ` - ${skill.description}` : "";
-			const suffix = supported.has(skill.name) ? "" : " (blocked)";
-			return `${skill.name}${suffix}${desc}`;
-		});
-		await sendText(ctx, `Доступные runtime-skills:\n${lines.join("\n")}`);
-	});
-
-	bot.command("skill", async (ctx) => {
-		setLogContext(ctx, { command: "/skill", message_type: "command" });
-		if (
-			isGroupChat(ctx) &&
-			shouldRequireMentionForChannel({
-				channelConfig: ctx.state.channelConfig,
-				defaultRequireMention: TELEGRAM_GROUP_REQUIRE_MENTION,
-			})
-		) {
-			const allowReply = isReplyToBotWithoutMention(ctx);
-			if (!allowReply && !isBotMentioned(ctx)) {
-				setLogContext(ctx, { outcome: "blocked", status_code: 403 });
-				return;
-			}
-		}
-		const text = ctx.message?.text ?? "";
-		const [, skillName, ...rest] = text.split(" ");
-		if (!skillName) {
-			await sendText(ctx, "Использование: /skill <name> <json>");
-			return;
-		}
-		const channelSupported = filterSkillsForChannel({
-			skills: runtimeSkills,
-			channelConfig: ctx.state.channelConfig,
-		});
-		const skill = channelSupported.find((item) => item.name === skillName);
-		if (!skill) {
-			await sendText(ctx, `Неизвестный skill: ${skillName}`);
-			return;
-		}
-
-		const rawArgs = rest.join(" ").trim();
-		let args: Record<string, unknown> = {};
-		if (rawArgs) {
-			try {
-				args = JSON.parse(rawArgs) as Record<string, unknown>;
-			} catch (error) {
-				await sendText(ctx, `Некорректный JSON: ${String(error)}`);
-				return;
-			}
-		}
-
-		const mergedArgs = { ...(skill.args ?? {}), ...args };
-		const { server, tool } = resolveToolRef(skill.tool);
-		if (!tool) {
-			await sendText(ctx, `Некорректный tool в skill: ${skill.name}`);
-			return;
-		}
-		if (server !== "yandex-tracker") {
-			await sendText(ctx, `Неподдерживаемый tool server: ${server}`);
-			return;
-		}
-
-		try {
-			const result = await trackerCallTool(
-				tool,
-				mergedArgs,
-				skill.timeoutMs ?? 30_000,
-				ctx,
-			);
-			const text = formatToolResult(result);
-			if (text) {
-				await sendText(ctx, text);
-				return;
-			}
-			await sendText(ctx, "Skill выполнился, но не вернул текст.");
-		} catch (error) {
-			await sendText(ctx, `Ошибка вызова skill: ${String(error)}`);
-		}
-	});
-
-	async function handleStatus(ctx: {
-		reply: (text: string) => Promise<unknown>;
-	}) {
-		const uptimeSeconds = options.getUptimeSeconds?.() ?? 0;
-		const uptime = formatUptime(uptimeSeconds);
-		let trackerStatus = "ok";
-		let trackerInfo = "";
-		try {
-			await withTimeout(trackerHealthCheck(), 5_000, "trackerHealthCheck");
-			trackerInfo = "ok";
-		} catch (error) {
-			trackerStatus = "error";
-			trackerInfo = String(error);
-		}
-
-		const lastCall = lastTrackerCallAt
-			? new Date(lastTrackerCallAt).toISOString()
-			: "n/a";
-		await sendText(
-			ctx,
-			[
-				"Status:",
-				`uptime: ${uptime}`,
-				`model: ${activeModelRef}`,
-				`tracker: ${trackerStatus} (${trackerInfo})`,
-				`last_tracker_call: ${lastCall}`,
-			].join("\n"),
-		);
-	}
-
-	bot.command("status", (ctx) => {
-		setLogContext(ctx, { command: "/status", message_type: "command" });
-		return handleStatus(ctx);
-	});
-
-	bot.command("whoami", (ctx) => {
-		setLogContext(ctx, { command: "/whoami", message_type: "command" });
-		return sendText(ctx, "Я Omni, ассистент по Yandex Tracker.");
-	});
-
-	function formatCronSchedule(schedule: unknown) {
-		if (!schedule || typeof schedule !== "object") return "unknown";
-		const kind = (schedule as { kind?: string }).kind ?? "unknown";
-		if (kind === "interval") {
-			const value = (schedule as { value?: number }).value ?? "?";
-			const unit = (schedule as { unit?: string }).unit ?? "interval";
-			return `every ${value} ${unit}`;
-		}
-		if (kind === "every") {
-			const everyMs = (schedule as { everyMs?: number }).everyMs ?? 0;
-			const minutes = Math.max(1, Math.round(everyMs / 60000));
-			return `every ${minutes} min`;
-		}
-		if (kind === "cron") {
-			const expr = (schedule as { expr?: string }).expr ?? "cron";
-			const tz = (schedule as { tz?: string }).tz;
-			return tz ? `${expr} (${tz})` : expr;
-		}
-		if (kind === "none") return "manual";
-		return kind;
-	}
-
-	function parseTime(value: string) {
-		const match = /^([01]?\\d|2[0-3]):([0-5]\\d)$/.exec(value.trim());
-		if (!match) return null;
-		const hour = Number.parseInt(match[1] ?? "0", 10);
-		const minute = Number.parseInt(match[2] ?? "0", 10);
-		return { hour, minute };
-	}
-
-	function buildCronExpr(
-		time: { hour: number; minute: number },
-		weekdays: boolean,
-	) {
-		const dow = weekdays ? "1-5" : "*";
-		return `${time.minute} ${time.hour} * * ${dow}`;
-	}
-
-	function formatCronJob(job: unknown) {
-		if (!job || typeof job !== "object") return "unknown job";
-		const record = job as {
-			id?: string;
-			name?: string;
-			enabled?: boolean;
-			schedule?: unknown;
-			payload?: { kind?: string };
-			state?: {
-				nextRunAtMs?: number;
-				lastRunAtMs?: number;
-				lastStatus?: string;
-			};
-		};
-		const enabled = record.enabled === false ? "off" : "on";
-		const schedule = formatCronSchedule(record.schedule);
-		const payload = record.payload?.kind ?? "unknown";
-		const nextRun =
-			typeof record.state?.nextRunAtMs === "number"
-				? new Date(record.state.nextRunAtMs).toISOString()
-				: "n/a";
-		const lastRun =
-			typeof record.state?.lastRunAtMs === "number"
-				? new Date(record.state.lastRunAtMs).toISOString()
-				: "n/a";
-		const lastStatus = record.state?.lastStatus ?? "n/a";
-		return `${record.id ?? "unknown"} | ${enabled} | ${record.name ?? "Untitled"} | ${schedule} | ${payload} | next ${nextRun} | last ${lastStatus} ${lastRun}`;
-	}
-
-	function findCronJob(jobs: unknown[], target: string) {
-		const needle = target.trim().toLowerCase();
-		const matches = jobs.filter((job) => {
-			if (!job || typeof job !== "object") return false;
-			const record = job as { id?: string; name?: string };
-			const id = record.id?.toLowerCase() ?? "";
-			const name = record.name?.toLowerCase() ?? "";
-			return id === needle || id.startsWith(needle) || name === needle;
-		});
-		return matches;
-	}
-
-	async function safeAnswerCallback(ctx: {
-		answerCallbackQuery: () => Promise<unknown>;
-	}) {
-		try {
-			await ctx.answerCallbackQuery();
-		} catch (error) {
-			logDebug("callback_query answer failed", { error: String(error) });
-		}
-	}
-
-	async function refreshInlineKeyboard(ctx: CallbackQueryContext<BotContext>) {
-		try {
-			await ctx.editMessageReplyMarkup({
-				reply_markup: startKeyboard,
-			});
-		} catch (error) {
-			logDebug("callback_query refresh keyboard failed", {
-				error: String(error),
-			});
-		}
-	}
-
-	bot.callbackQuery(/^cmd:(help|status)$/, async (ctx) => {
-		setLogContext(ctx, { message_type: "callback" });
-		await safeAnswerCallback(ctx);
-		const command = ctx.match?.[1];
-		if (command === "help") {
-			setLogContext(ctx, { command: "cmd:help" });
-			await handleHelp(ctx);
-			await refreshInlineKeyboard(ctx);
-			return;
-		}
-		if (command === "status") {
-			setLogContext(ctx, { command: "cmd:status" });
-			await handleStatus(ctx);
-			await refreshInlineKeyboard(ctx);
-		}
-	});
-
-	bot.on("callback_query:data", async (ctx) => {
-		setLogContext(ctx, { message_type: "callback" });
-		await safeAnswerCallback(ctx);
-	});
-
-	bot.command("tracker", async (ctx) => {
-		setLogContext(ctx, { command: "/tracker", message_type: "command" });
-		const SUPPORTED_TRACKER_TOOLS = new Set([
-			"issues_find",
-			"issue_get",
-			"issue_get_comments",
-			"issue_get_url",
-		]);
-		if (
-			isGroupChat(ctx) &&
-			shouldRequireMentionForChannel({
-				channelConfig: ctx.state.channelConfig,
-				defaultRequireMention: TELEGRAM_GROUP_REQUIRE_MENTION,
-			})
-		) {
-			const allowReply = isReplyToBotWithoutMention(ctx);
-			if (!allowReply && !isBotMentioned(ctx)) {
-				setLogContext(ctx, { outcome: "blocked", status_code: 403 });
-				return;
-			}
-		}
-		const text = ctx.message?.text ?? "";
-		const [, toolName, ...rest] = text.split(" ");
-		if (!toolName) {
-			await sendText(ctx, "Использование: /tracker <tool> <json>");
-			return;
-		}
-		setLogContext(ctx, { tool: toolName });
-
-		if (!SUPPORTED_TRACKER_TOOLS.has(toolName)) {
-			await sendText(
-				ctx,
-				`Неподдерживаемый инструмент: ${toolName}. Используйте: ${Array.from(SUPPORTED_TRACKER_TOOLS).join(", ")}`,
-			);
-			return;
-		}
-
-		const rawArgs = rest.join(" ").trim();
-		let args: Record<string, unknown> = {};
-		if (rawArgs) {
-			try {
-				args = JSON.parse(rawArgs) as Record<string, unknown>;
-			} catch (error) {
-				await sendText(ctx, `Некорректный JSON: ${String(error)}`);
-				return;
-			}
-		}
-
-		try {
-			const result = await trackerCallTool(toolName, args, 30_000, ctx);
-			const text = formatToolResult(result);
-			if (text) {
-				await sendText(ctx, text);
-				return;
-			}
-			await sendText(ctx, "Инструмент выполнился, но не вернул текст.");
-		} catch (error) {
-			await sendText(ctx, `Ошибка вызова инструмента: ${String(error)}`);
-		}
-	});
-
-	async function sendText(
-		ctx: {
-			reply: (
-				text: string,
-				options?: Record<string, unknown>,
-			) => Promise<unknown>;
+	registerCommands({
+		bot,
+		startGreeting: START_GREETING,
+		startKeyboard,
+		sendText,
+		logDebug,
+		clearHistoryMessages,
+		setLogContext,
+		getCommandTools,
+		resolveChatToolPolicy,
+		toolPolicy,
+		mergeToolPolicies,
+		filterToolMetasByPolicy,
+		TOOL_CONFLICTS,
+		TOOL_SUPPRESSED_BY_POLICY,
+		approvalRequired,
+		approvalStore,
+		listApprovals,
+		parseToolRateLimits,
+		TOOL_RATE_LIMITS,
+		normalizeToolName,
+		runtimeSkills,
+		filterSkillsForChannel,
+		resolveToolRef,
+		trackerCallTool,
+		formatToolResult,
+		getActiveModelRef: () => activeModelRef,
+		getActiveModelFallbacks: () => activeModelFallbacks,
+		resolveReasoning,
+		setActiveModel,
+		setActiveReasoningOverride: (value) => {
+			activeReasoningOverride = value;
 		},
-		text: string,
-		options?: Record<string, unknown>,
-	) {
-		const limit =
-			Number.isFinite(TELEGRAM_TEXT_CHUNK_LIMIT) &&
-			TELEGRAM_TEXT_CHUNK_LIMIT > 0
-				? TELEGRAM_TEXT_CHUNK_LIMIT
-				: 4000;
-		const replyOptions = options?.parse_mode
-			? options
-			: { ...(options ?? {}), parse_mode: "HTML" };
-		const formatted = formatTelegram(text);
-
-		try {
-			if (formatted.length <= limit) {
-				await ctx.reply(formatted, replyOptions);
-				return;
-			}
-			for (let i = 0; i < formatted.length; i += limit) {
-				const chunk = formatted.slice(i, i + limit);
-				await ctx.reply(chunk, replyOptions);
-			}
-			return;
-		} catch (error) {
-			logDebug("telegram html reply failed, retrying as plain text", {
-				error: String(error),
-			});
-		}
-
-		const plainOptions = { ...(options ?? {}) };
-		delete (plainOptions as { parse_mode?: string }).parse_mode;
-		if (text.length <= limit) {
-			await ctx.reply(text, plainOptions);
-			return;
-		}
-		for (let i = 0; i < text.length; i += limit) {
-			const chunk = text.slice(i, i + limit);
-			await ctx.reply(chunk, plainOptions);
-		}
-	}
-
-	function escapeHtml(input: string) {
-		return input
-			.replaceAll("&", "&amp;")
-			.replaceAll("<", "&lt;")
-			.replaceAll(">", "&gt;");
-	}
-
-	function formatTelegram(input: string) {
-		if (!input) return "";
-
-		const codeBlocks: string[] = [];
-		const inlineCodes: string[] = [];
-		let text = input;
-
-		text = text.replace(/```([\s\S]*?)```/g, (match, code) => {
-			void match;
-			const escaped = escapeHtml(String(code).trimEnd());
-			const html = `<pre><code>${escaped}</code></pre>`;
-			const token = `@@CODEBLOCK_${codeBlocks.length}@@`;
-			codeBlocks.push(html);
-			return token;
-		});
-
-		text = text.replace(/`([^`]+?)`/g, (match, code) => {
-			void match;
-			const escaped = escapeHtml(String(code));
-			const html = `<code>${escaped}</code>`;
-			const token = `@@INLINECODE_${inlineCodes.length}@@`;
-			inlineCodes.push(html);
-			return token;
-		});
-
-		text = escapeHtml(text);
-
-		text = text.replace(
-			/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g,
-			(match, label, url) => {
-				void match;
-				return `<a href="${url}">${label}</a>`;
-			},
-		);
-		text = text.replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>");
-		text = text.replace(/\*([^*]+)\*/g, "<i>$1</i>");
-		text = text.replace(/_([^_]+)_/g, "<i>$1</i>");
-		text = text.replace(/~~([^~]+)~~/g, "<s>$1</s>");
-
-		text = text.replace(/@@INLINECODE_(\d+)@@/g, (match, index) => {
-			void match;
-			const entry = inlineCodes[Number(index)];
-			return entry ?? "";
-		});
-		text = text.replace(/@@CODEBLOCK_(\d+)@@/g, (match, index) => {
-			void match;
-			const entry = codeBlocks[Number(index)];
-			return entry ?? "";
-		});
-
-		return text;
-	}
-
-	function appendSources(text: string, sources: Array<{ url?: string }> = []) {
-		const urls = sources
-			.map((source) => source.url)
-			.filter((url): url is string => Boolean(url));
-		if (!urls.length) return text;
-		const unique = Array.from(new Set(urls));
-		const lines = unique.map((url) => `- ${url}`);
-		return `${text}\n\nИсточники:\n${lines.join("\n")}`;
-	}
-
-	function chunkText(text: string, size = 64) {
-		const chunks: string[] = [];
-		for (let i = 0; i < text.length; i += size) {
-			chunks.push(text.slice(i, i + size));
-		}
-		return chunks;
-	}
-
-	function createTextStream(text: string): ReadableStream<UIMessageChunk> {
-		const messageId = crypto.randomUUID();
-		return new ReadableStream<UIMessageChunk>({
-			start(controller) {
-				controller.enqueue({ type: "start", messageId });
-				controller.enqueue({ type: "text-start", id: messageId });
-				for (const delta of chunkText(text)) {
-					controller.enqueue({ type: "text-delta", id: messageId, delta });
-				}
-				controller.enqueue({ type: "text-end", id: messageId });
-				controller.enqueue({ type: "finish", finishReason: "stop" });
-				controller.close();
-			},
-		});
-	}
+		normalizeModelRef,
+		normalizeReasoning,
+		modelsConfig,
+		isGroupChat,
+		shouldRequireMentionForChannel,
+		isReplyToBotWithoutMention,
+		isBotMentioned,
+		TELEGRAM_GROUP_REQUIRE_MENTION,
+		withTimeout,
+		trackerHealthCheck,
+		formatUptime,
+		getUptimeSeconds: options.getUptimeSeconds,
+		getLastTrackerCallAt: () => lastTrackerCallAt,
+	});
 
 	async function loadTelegramImageParts(
 		ctx: BotContext,
