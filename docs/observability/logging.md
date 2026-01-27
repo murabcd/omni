@@ -55,6 +55,17 @@ At minimum, each wide event should include:
 - Model context: `model_ref`, `model_id`
 - Deployment context: `service`, `version`, `commit_hash`, `region`, `instance_id`
 
+## Bot invocation events
+
+The Worker emits lightweight execution breadcrumbs around bot handling:
+
+- `bot_invocation_start`
+- `bot_invocation_end`
+
+These events include `update_id`, `update_type`, `chat_id`, `user_id`, and
+execution metadata like `route`, `status`, and `elapsed_ms`. Use them to
+correlate long-running updates and failures even when no tools are called.
+
 ## Environment fields
 
 These values are injected into every log line when set:
