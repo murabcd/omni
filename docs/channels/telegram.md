@@ -44,3 +44,13 @@ This starts long‑polling and ignores the webhook.
 
 Outbound messages are sent as Telegram HTML. The bot converts `**bold**`
 to `<b>bold</b>` and escapes other HTML for safety.
+
+## Attachments
+
+- Images are supported from `message:photo`.
+- PDF documents are supported from `message:document`.
+- Non-PDF documents are ignored (reply: "Поддерживаются только PDF документы.").
+
+Limits:
+- `IMAGE_MAX_BYTES` (default: 5MB)
+- `DOCUMENT_MAX_BYTES` (default: 10MB)
