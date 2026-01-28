@@ -44,7 +44,7 @@ export function Widget({
 			</div>
 
 			<div>
-				{value && <h2 className="text-2xl font-normal mb-2">{value}</h2>}
+				{value && <h2 className="text-lg font-medium mb-2">{value}</h2>}
 				{children}
 				{actions && (
 					<span className="text-xs text-muted-foreground group-hover:text-primary transition-colors duration-300">

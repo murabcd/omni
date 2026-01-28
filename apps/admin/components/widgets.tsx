@@ -2,7 +2,6 @@
 
 import {
 	Activity,
-	AlertCircle,
 	Clock,
 	Loader2,
 	Server,
@@ -12,7 +11,6 @@ import {
 } from "lucide-react";
 import { useMemo } from "react";
 import { useGateway } from "@/components/gateway-provider";
-import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -85,10 +83,9 @@ export function Widgets() {
 							</Button>
 						</div>
 						{error ? (
-							<Alert variant="destructive">
-								<AlertCircle className="size-4" />
-								<AlertDescription>{error}</AlertDescription>
-							</Alert>
+							<p className="text-xs text-rose-500 dark:text-rose-400">
+								{error}
+							</p>
 						) : null}
 					</div>
 				</Widget>
@@ -148,12 +145,19 @@ export function Widgets() {
 					title="Cron next run"
 					icon={<Clock className="size-4" />}
 					description="Scheduled automation"
-					value={status?.cron?.enabled ? "scheduled" : "off"}
 					className="lg:col-span-2"
 				>
-					<div className="text-xs text-muted-foreground space-y-0.5">
-						<p>timezone: {status?.cron?.timezone ?? "-"}</p>
-						<p>next: -</p>
+					<div className="flex flex-col gap-2">
+						<Badge
+							variant={status?.cron?.enabled ? "success" : "muted"}
+							className="w-fit"
+						>
+							{status?.cron?.enabled ? "scheduled" : "off"}
+						</Badge>
+						<div className="text-xs text-muted-foreground space-y-0.5">
+							<p>timezone: {status?.cron?.timezone ?? "-"}</p>
+							<p>next: -</p>
+						</div>
 					</div>
 				</Widget>
 
@@ -162,13 +166,15 @@ export function Widgets() {
 					title="Service"
 					icon={<Trophy className="size-4" />}
 					description="Runtime information"
-					value={serviceName}
 					className="lg:col-span-2"
 				>
-					<div className="text-xs text-muted-foreground space-y-0.5">
-						<p>region: {status?.region ?? "unknown"}</p>
-						<p>uptime: {uptime}s</p>
-						<p>version: {status?.version ?? "unknown"}</p>
+					<div className="space-y-2">
+						<p className="text-sm font-medium">{serviceName}</p>
+						<div className="text-xs text-muted-foreground space-y-0.5">
+							<p>region: {status?.region ?? "unknown"}</p>
+							<p>uptime: {uptime}s</p>
+							<p>version: {status?.version ?? "unknown"}</p>
+						</div>
 					</div>
 				</Widget>
 			</div>

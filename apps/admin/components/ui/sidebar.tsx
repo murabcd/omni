@@ -243,7 +243,7 @@ const Sidebar = React.forwardRef<
 				{/* This is what handles the sidebar gap on desktop */}
 				<div
 					className={cn(
-						"relative h-svh w-(--sidebar-width) bg-transparent transition-[width] duration-200 ease-linear",
+						"relative h-svh w-(--sidebar-width) bg-transparent transition-[width] duration-300 ease-in-out",
 						"group-data-[collapsible=offcanvas]:w-0",
 						"group-data-[side=right]:rotate-180",
 						variant === "floating" || variant === "inset"
@@ -253,7 +253,7 @@ const Sidebar = React.forwardRef<
 				/>
 				<div
 					className={cn(
-						"fixed inset-y-0 z-10 hidden h-svh w-(--sidebar-width) transition-[left,right,width] duration-200 ease-linear md:flex",
+						"fixed inset-y-0 z-10 hidden h-svh w-(--sidebar-width) transition-[left,right,width] duration-300 ease-in-out md:flex",
 						side === "left"
 							? "left-0 group-data-[collapsible=offcanvas]:left-[calc(var(--sidebar-width)*-1)]"
 							: "right-0 group-data-[collapsible=offcanvas]:right-[calc(var(--sidebar-width)*-1)]",
@@ -282,24 +282,31 @@ const SidebarTrigger = React.forwardRef<
 	React.ElementRef<typeof Button>,
 	React.ComponentProps<typeof Button>
 >(({ className, onClick, ...props }, ref) => {
-	const { toggleSidebar } = useSidebar();
+	const { toggleSidebar, state } = useSidebar();
 
 	return (
-		<Button
-			ref={ref}
-			data-sidebar="trigger"
-			variant="ghost"
-			size="icon"
-			className={cn("h-7 w-7", className)}
-			onClick={(event) => {
-				onClick?.(event);
-				toggleSidebar();
-			}}
-			{...props}
-		>
-			<PanelLeft />
-			<span className="sr-only">Toggle Sidebar</span>
-		</Button>
+		<Tooltip>
+			<TooltipTrigger asChild>
+				<Button
+					ref={ref}
+					data-sidebar="trigger"
+					variant="ghost"
+					size="icon"
+					className={cn("h-7 w-7 cursor-pointer", className)}
+					onClick={(event) => {
+						onClick?.(event);
+						toggleSidebar();
+					}}
+					{...props}
+				>
+					<PanelLeft />
+					<span className="sr-only">Toggle Sidebar</span>
+				</Button>
+			</TooltipTrigger>
+			<TooltipContent side="right">
+				{state === "expanded" ? "Hide sidebar" : "Show sidebar"}
+			</TooltipContent>
+		</Tooltip>
 	);
 });
 SidebarTrigger.displayName = "SidebarTrigger";

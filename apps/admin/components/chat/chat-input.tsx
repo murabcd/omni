@@ -2,7 +2,7 @@
 
 import type { ChatStatus } from "ai";
 import { CheckIcon, GlobeIcon } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
 	Attachment,
 	AttachmentPreview,
@@ -40,6 +40,12 @@ import {
 import { Button } from "@/components/ui/button";
 import { ButtonGroup } from "@/components/ui/button-group";
 import { Command } from "@/components/ui/command";
+import {
+	Tooltip,
+	TooltipContent,
+	TooltipProvider,
+	TooltipTrigger,
+} from "@/components/ui/tooltip";
 
 const models = [
 	{
@@ -156,6 +162,7 @@ export function ChatInput({
 	const [webSearchEnabled, setWebSearchEnabled] = useState(
 		defaultWebSearchEnabled,
 	);
+	const inputRef = useRef<HTMLTextAreaElement>(null);
 
 	useEffect(() => {
 		setWebSearchEnabled(defaultWebSearchEnabled);
@@ -174,92 +181,130 @@ export function ChatInput({
 					globalDrop
 					multiple
 					onSubmit={(message) => {
-						return onSubmitMessage({
+						const result = onSubmitMessage({
 							...message,
 							webSearchEnabled,
 						});
+						requestAnimationFrame(() => inputRef.current?.focus());
+						return result;
 					}}
 				>
 					<PromptInputAttachmentsDisplay />
 					<PromptInputBody>
-						<PromptInputTextarea placeholder="Ask anything about the system..." />
+						<PromptInputTextarea
+							autoFocus
+							placeholder="Ask anything about the system..."
+							ref={inputRef}
+						/>
 					</PromptInputBody>
 					<PromptInputFooter>
-						<PromptInputTools>
-							<PromptInputActionMenu>
-								<PromptInputActionMenuTrigger />
-								<PromptInputActionMenuContent>
-									<PromptInputActionAddAttachments />
-								</PromptInputActionMenuContent>
-							</PromptInputActionMenu>
-							<PromptInputButton
-								aria-pressed={webSearchEnabled}
-								className={webSearchEnabled ? "bg-muted" : undefined}
-								onClick={() => setWebSearchEnabled((prev) => !prev)}
-								type="button"
-								variant={webSearchEnabled ? "secondary" : "ghost"}
-							>
-								<GlobeIcon size={16} />
-								<span>Search</span>
-							</PromptInputButton>
-							<ModelSelector
-								onOpenChange={setModelSelectorOpen}
-								open={modelSelectorOpen}
-							>
-								<ModelSelectorTrigger asChild>
-									<PromptInputButton
-										className="ml-1"
-										size="sm"
-										type="button"
-										variant="ghost"
-									>
-										{selectedModelData?.name && (
-											<ModelSelectorName>
-												{selectedModelData.name}
-											</ModelSelectorName>
-										)}
-									</PromptInputButton>
-								</ModelSelectorTrigger>
-								<ModelSelectorContent>
-									<Command>
-										<ModelSelectorInput placeholder="Search models..." />
-										<ModelSelectorList>
-											<ModelSelectorEmpty>No models found.</ModelSelectorEmpty>
-											{["OpenAI"].map((chef) => {
-												const group = models.filter(
-													(candidate) => candidate.chef === chef,
-												);
-												if (group.length === 0) return null;
-												return (
-													<ModelSelectorGroup heading={chef} key={chef}>
-														{group.map((candidate) => (
-															<ModelSelectorItem
-																key={candidate.id}
-																onSelect={() => {
-																	setModel(candidate.id);
-																	setModelSelectorOpen(false);
-																}}
-																value={candidate.id}
-															>
-																<ModelSelectorName>
-																	{candidate.name}
-																</ModelSelectorName>
-																{model === candidate.id ? (
-																	<CheckIcon className="ml-auto size-4" />
-																) : (
-																	<div className="ml-auto size-4" />
-																)}
-															</ModelSelectorItem>
-														))}
-													</ModelSelectorGroup>
-												);
-											})}
-										</ModelSelectorList>
-									</Command>
-								</ModelSelectorContent>
-							</ModelSelector>
-						</PromptInputTools>
-						<PromptInputSubmit onStop={onStop} status={status} />
+						<TooltipProvider delayDuration={300}>
+							<PromptInputTools>
+								<Tooltip>
+									<TooltipTrigger asChild>
+										<PromptInputActionMenu>
+											<PromptInputActionMenuTrigger className="cursor-pointer" />
+											<PromptInputActionMenuContent>
+												<PromptInputActionAddAttachments />
+											</PromptInputActionMenuContent>
+										</PromptInputActionMenu>
+									</TooltipTrigger>
+									<TooltipContent>Add attachments</TooltipContent>
+								</Tooltip>
+								<Tooltip>
+									<TooltipTrigger asChild>
+										<PromptInputButton
+											aria-pressed={webSearchEnabled}
+											className={`cursor-pointer ${webSearchEnabled ? "bg-muted" : ""}`}
+											onClick={() => setWebSearchEnabled((prev) => !prev)}
+											type="button"
+											variant={webSearchEnabled ? "secondary" : "ghost"}
+										>
+											<GlobeIcon size={16} />
+											<span>Search</span>
+										</PromptInputButton>
+									</TooltipTrigger>
+									<TooltipContent>
+										{webSearchEnabled ? "Disable" : "Enable"} web search
+									</TooltipContent>
+								</Tooltip>
+								<Tooltip>
+									<TooltipTrigger asChild>
+										<ModelSelector
+											onOpenChange={setModelSelectorOpen}
+											open={modelSelectorOpen}
+										>
+											<ModelSelectorTrigger asChild>
+												<PromptInputButton
+													className="ml-1 cursor-pointer"
+													size="sm"
+													type="button"
+													variant="ghost"
+												>
+													{selectedModelData?.name && (
+														<ModelSelectorName>
+															{selectedModelData.name}
+														</ModelSelectorName>
+													)}
+												</PromptInputButton>
+											</ModelSelectorTrigger>
+											<ModelSelectorContent>
+												<Command>
+													<ModelSelectorInput placeholder="Search models..." />
+													<ModelSelectorList>
+														<ModelSelectorEmpty>
+															No models found.
+														</ModelSelectorEmpty>
+														{["OpenAI"].map((chef) => {
+															const group = models.filter(
+																(candidate) => candidate.chef === chef,
+															);
+															if (group.length === 0) return null;
+															return (
+																<ModelSelectorGroup heading={chef} key={chef}>
+																	{group.map((candidate) => (
+																		<ModelSelectorItem
+																			key={candidate.id}
+																			onSelect={() => {
+																				setModel(candidate.id);
+																				setModelSelectorOpen(false);
+																			}}
+																			value={candidate.id}
+																		>
+																			<ModelSelectorName>
+																				{candidate.name}
+																			</ModelSelectorName>
+																			{model === candidate.id ? (
+																				<CheckIcon className="ml-auto size-4" />
+																			) : (
+																				<div className="ml-auto size-4" />
+																			)}
+																		</ModelSelectorItem>
+																	))}
+																</ModelSelectorGroup>
+															);
+														})}
+													</ModelSelectorList>
+												</Command>
+											</ModelSelectorContent>
+										</ModelSelector>
+									</TooltipTrigger>
+									<TooltipContent>Select model</TooltipContent>
+								</Tooltip>
+							</PromptInputTools>
+							<Tooltip>
+								<TooltipTrigger asChild>
+									<PromptInputSubmit
+										className="cursor-pointer"
+										onStop={onStop}
+										status={status}
+									/>
+								</TooltipTrigger>
+								<TooltipContent>
+									{status === "streaming" ? "Stop" : "Send message"}
+								</TooltipContent>
+							</Tooltip>
+						</TooltipProvider>
 					</PromptInputFooter>
 				</PromptInput>
 

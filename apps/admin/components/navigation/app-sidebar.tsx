@@ -4,6 +4,7 @@ import {
 	Clock,
 	LayoutDashboard,
 	Moon,
+	Plus,
 	Rss,
 	Settings,
 	Sun,
@@ -11,10 +12,11 @@ import {
 	Users,
 } from "lucide-react";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { useTheme } from "next-themes";
 import { useEffect, useState } from "react";
 import { Icons } from "@/components/icons";
+import { Button } from "@/components/ui/button";
 import {
 	Sidebar,
 	SidebarContent,
@@ -26,7 +28,13 @@ import {
 	SidebarMenuButton,
 	SidebarMenuItem,
 	SidebarRail,
+	useSidebar,
 } from "@/components/ui/sidebar";
+import {
+	Tooltip,
+	TooltipContent,
+	TooltipTrigger,
+} from "@/components/ui/tooltip";
 
 const navItems = [
 	{ href: "/", label: "Overview", icon: LayoutDashboard },
@@ -39,6 +47,8 @@ const navItems = [
 
 export function AppSidebar() {
 	const pathname = usePathname();
+	const router = useRouter();
+	const { isMobile, setOpenMobile, state } = useSidebar();
 	const { setTheme, theme, resolvedTheme } = useTheme();
 	const [mounted, setMounted] = useState(false);
 
@@ -48,18 +58,58 @@ export function AppSidebar() {
 
 	const activeTheme = mounted ? (resolvedTheme ?? theme) : undefined;
 	const isDark = activeTheme === "dark";
+	const isChatPage = pathname.startsWith("/chat");
 
 	return (
 		<Sidebar collapsible="icon">
-			<SidebarHeader className="h-14 border-b border-border justify-center">
-				<SidebarMenu>
-					<SidebarMenuItem>
-						<SidebarMenuButton asChild>
-							<Link href="/">
-								<Icons.omniLogo className="size-4" />
-								<span className="truncate font-semibold">Omni</span>
-							</Link>
-						</SidebarMenuButton>
+			<SidebarHeader className="h-14 border-b border-border p-0 flex items-center">
+				<SidebarMenu className="h-full w-full">
+					<SidebarMenuItem className="relative h-full">
+						<div
+							className={`absolute inset-0 flex items-center justify-center transition-opacity duration-200 ${
+								state === "collapsed"
+									? "opacity-100"
+									: "pointer-events-none opacity-0"
+							}`}
+						>
+							<SidebarMenuButton asChild className="h-8 w-8 justify-center">
+								<Link href="/" aria-label="Omni home">
+									<Icons.omniLogo className="size-4" />
+								</Link>
+							</SidebarMenuButton>
+						</div>
+						<div
+							className={`flex h-full items-center justify-between gap-2 px-2 transition-opacity duration-200 ${
+								state === "collapsed"
+									? "pointer-events-none opacity-0"
+									: "opacity-100"
+							}`}
+						>
+							<SidebarMenuButton asChild className="h-10 flex-1">
+								<Link href="/">
+									<Icons.omniLogo className="size-4" />
+									<span className="truncate font-semibold">Omni</span>
+								</Link>
+							</SidebarMenuButton>
+							{isChatPage && !isMobile && state === "expanded" && (
+								<Tooltip>
+									<TooltipTrigger asChild>
+										<Button
+											variant="ghost"
+											size="icon"
+											onClick={() => {
+												router.push("/");
+												router.refresh();
+												setOpenMobile(false);
+											}}
+										>
+											<Plus className="h-4 w-4" />
+										</Button>
+									</TooltipTrigger>
+									<TooltipContent align="end">New chat</TooltipContent>
+								</Tooltip>
+							)}
+						</div>
 					</SidebarMenuItem>
 				</SidebarMenu>
 			</SidebarHeader>

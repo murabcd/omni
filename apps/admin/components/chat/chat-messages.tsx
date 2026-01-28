@@ -16,19 +16,19 @@ import {
 	Attachments,
 } from "@/components/ai-elements/attachments";
 import {
-	Source,
-	Sources,
-	SourcesContent,
-	SourcesTrigger,
-} from "@/components/ai-elements/sources";
-import {
 	Message,
 	MessageAction,
 	MessageActions,
 	MessageContent,
 	MessageResponse,
-	MessageToolbar,
 } from "@/components/ai-elements/messages";
+import { Shimmer } from "@/components/ai-elements/shimmer";
+import {
+	Source,
+	Sources,
+	SourcesContent,
+	SourcesTrigger,
+} from "@/components/ai-elements/sources";
 import {
 	Tool,
 	ToolContent,
@@ -36,7 +36,6 @@ import {
 	ToolInput,
 	ToolOutput,
 } from "@/components/ai-elements/tool";
-import { Shimmer } from "@/components/ai-elements/shimmer";
 import { Icons } from "@/components/icons";
 
 export type ToolStatusData = {
@@ -91,16 +90,14 @@ export function ChatMessages({ messages, isLoading }: ChatMessagesProps) {
 	}
 
 	return (
-		<div className="flex flex-col gap-4 p-4">
+		<div className="flex flex-col gap-4">
 			{messages.map((message) => {
 				const text = message.parts
 					.filter((part) => part.type === "text")
 					.map((part) => part.text)
 					.join("");
 				const toolParts = message.parts.filter(
-					(
-						part,
-					): part is DataUIPart<AdminUIData> & { type: "data-tools" } =>
+					(part): part is DataUIPart<AdminUIData> & { type: "data-tools" } =>
 						part.type === "data-tools",
 				);
 				const toolCallParts = message.parts.filter(
@@ -145,154 +142,152 @@ export function ChatMessages({ messages, isLoading }: ChatMessagesProps) {
 						{fileParts.length > 0 ? (
 							<Attachments className="mb-2" variant="stacked">
 								{fileParts.map((part, index) => (
-									<Attachment
-										data={part}
-										key={`${message.id}-file-${index}`}
-									>
+									<Attachment data={part} key={`${message.id}-file-${index}`}>
 										<AttachmentPreview />
 									</Attachment>
 								))}
 							</Attachments>
 						) : null}
-						<MessageContent>
-							{message.role === "assistant" ? (
-								<MessageResponse>{text}</MessageResponse>
-							) : (
+						{message.role === "assistant" ? (
+							<div className="flex gap-3">
+								<div className="flex size-7 shrink-0 items-center justify-center rounded-full bg-muted text-muted-foreground mt-0.5">
+									<Icons.sparkles className="size-3" />
+								</div>
+								<div className="flex-1 min-w-0">
+									<MessageContent>
+										<MessageResponse>{text}</MessageResponse>
+										{toolParts.map((part, i) => {
+											const tools = Array.isArray(part.data?.tools)
+												? part.data.tools.join(", ")
+												: "";
+											if (!tools) return null;
+											return (
+												<div
+													key={`${message.id}-tools-${i}`}
+													className="mt-2 rounded-md bg-background/60 px-2 py-1 text-xs text-muted-foreground"
+												>
+													Tools: {tools}
+												</div>
+											);
+										})}
+									</MessageContent>
+									{toolCallParts.length > 0 ? (
+										<div className="space-y-2 mt-2">
+											{toolCallParts.map((part, index) => {
+												const toolKey =
+													typeof part.toolCallId === "string"
+														? part.toolCallId
+														: `${message.id}-${index}`;
+												const toolTitle =
+													part.type === "dynamic-tool"
+														? part.toolName
+														: part.type.split("-").slice(1).join("-");
+												return (
+													<Tool
+														defaultOpen={part.state !== "output-available"}
+														key={toolKey}
+													>
+														{part.type === "dynamic-tool" ? (
+															<ToolHeader
+																state={part.state}
+																title={toolTitle}
+																type="dynamic-tool"
+																toolName={part.toolName}
+															/>
+														) : (
+															<ToolHeader
+																state={part.state}
+																title={toolTitle}
+																type={part.type}
+															/>
+														)}
+														<ToolContent>
+															<ToolInput input={part.input ?? {}} />
+															<ToolOutput
+																errorText={part.errorText}
+																output={part.output as React.ReactNode}
+															/>
+														</ToolContent>
+													</Tool>
+												);
+											})}
+										</div>
+									) : null}
+									{sources.length > 0 ? (
+										<Sources>
+											<SourcesTrigger count={sources.length} />
+											<SourcesContent>
+												{sources.map((source) => (
+													<Source
+														href={source.href}
+														key={source.key ?? source.href}
+														title={source.title}
+													/>
+												))}
+											</SourcesContent>
+										</Sources>
+									) : null}
+									{text.trim().length > 0 ? (
+										<MessageActions className="mt-3">
+											<MessageAction
+												label="Like"
+												onClick={() =>
+													setLiked((prev) => ({
+														...prev,
+														[message.id]: !prev[message.id],
+													}))
+												}
+												tooltip="Like this response"
+											>
+												<ThumbsUpIcon
+													className="size-4"
+													fill={liked[message.id] ? "currentColor" : "none"}
+												/>
+											</MessageAction>
+											<MessageAction
+												label="Dislike"
+												onClick={() =>
+													setDisliked((prev) => ({
+														...prev,
+														[message.id]: !prev[message.id],
+													}))
+												}
+												tooltip="Dislike this response"
+											>
+												<ThumbsDownIcon
+													className="size-4"
+													fill={disliked[message.id] ? "currentColor" : "none"}
+												/>
+											</MessageAction>
+											<MessageAction
+												label="Copy"
+												onClick={() => handleCopy(text)}
+												tooltip="Copy to clipboard"
+											>
+												<CopyIcon className="size-4" />
+											</MessageAction>
+										</MessageActions>
+									) : null}
+								</div>
+							</div>
+						) : (
+							<MessageContent>
 								<div className="whitespace-pre-wrap">{text}</div>
-							)}
-							{toolParts.map((part, i) => {
-								const tools = Array.isArray(part.data?.tools)
-									? part.data.tools.join(", ")
-									: "";
-								if (!tools) return null;
-								return (
-									<div
-										key={`${message.id}-tools-${i}`}
-										className="mt-2 rounded-md bg-background/60 px-2 py-1 text-xs text-muted-foreground"
-									>
-										Tools: {tools}
-									</div>
-								);
-							})}
 							</MessageContent>
-							{toolCallParts.length > 0 && message.role === "assistant" ? (
-								<div className="space-y-2">
-									{toolCallParts.map((part, index) => {
-										const toolKey =
-											typeof part.toolCallId === "string"
-												? part.toolCallId
-												: `${message.id}-${index}`;
-										const toolTitle =
-											part.type === "dynamic-tool"
-												? part.toolName
-												: part.type.split("-").slice(1).join("-");
-										return (
-										<Tool
-											defaultOpen={part.state !== "output-available"}
-											key={toolKey}
-										>
-											{part.type === "dynamic-tool" ? (
-												<ToolHeader
-													state={part.state}
-													title={toolTitle}
-													type="dynamic-tool"
-													toolName={part.toolName}
-												/>
-											) : (
-												<ToolHeader
-													state={part.state}
-													title={toolTitle}
-													type={part.type}
-												/>
-											)}
-											<ToolContent>
-												<ToolInput input={part.input ?? {}} />
-												<ToolOutput
-													errorText={part.errorText}
-													output={part.output as React.ReactNode}
-												/>
-											</ToolContent>
-										</Tool>
-										);
-									})}
-								</div>
-							) : null}
-							{sources.length > 0 && message.role === "assistant" ? (
-								<Sources>
-									<SourcesTrigger count={sources.length} />
-									<SourcesContent>
-										{sources.map((source) => (
-											<Source
-												href={source.href}
-												key={source.key ?? source.href}
-												title={source.title}
-											/>
-										))}
-									</SourcesContent>
-								</Sources>
-							) : null}
-							{message.role === "assistant" && text.trim().length > 0 ? (
-								<MessageToolbar>
-								<div className="flex items-center gap-2 text-xs text-muted-foreground">
-									<div className="flex size-7 items-center justify-center rounded-full bg-muted text-muted-foreground">
-										<Icons.sparkles className="size-3" />
-									</div>
-									Assistant
-								</div>
-								<MessageActions>
-									<MessageAction
-										label="Like"
-										onClick={() =>
-											setLiked((prev) => ({
-												...prev,
-												[message.id]: !prev[message.id],
-											}))
-										}
-										tooltip="Like this response"
-									>
-										<ThumbsUpIcon
-											className="size-4"
-											fill={liked[message.id] ? "currentColor" : "none"}
-										/>
-									</MessageAction>
-									<MessageAction
-										label="Dislike"
-										onClick={() =>
-											setDisliked((prev) => ({
-												...prev,
-												[message.id]: !prev[message.id],
-											}))
-										}
-										tooltip="Dislike this response"
-									>
-										<ThumbsDownIcon
-											className="size-4"
-											fill={disliked[message.id] ? "currentColor" : "none"}
-										/>
-									</MessageAction>
-									<MessageAction
-										label="Copy"
-										onClick={() => handleCopy(text)}
-										tooltip="Copy to clipboard"
-									>
-										<CopyIcon className="size-4" />
-									</MessageAction>
-								</MessageActions>
-							</MessageToolbar>
-						) : null}
+						)}
 					</Message>
 				);
 			})}
 			{isLoading && !hasAssistantText && (
 				<Message from="assistant">
-					<MessageContent>
-						<div className="flex items-center gap-2 text-sm text-muted-foreground">
-							<div className="flex size-8 shrink-0 items-center justify-center rounded-full bg-muted text-muted-foreground">
-								<Icons.sparkles className="size-4" />
-							</div>
-							<Shimmer>Thinking...</Shimmer>
+					<div className="flex gap-3">
+						<div className="flex size-7 shrink-0 items-center justify-center rounded-full bg-muted text-muted-foreground mt-0.5">
+							<Icons.sparkles className="size-3" />
 						</div>
-					</MessageContent>
+						<MessageContent>
+							<Shimmer>Thinking...</Shimmer>
+						</MessageContent>
+					</div>
 				</Message>
 			)}
 		</div>
