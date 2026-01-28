@@ -5,6 +5,9 @@ export type BotEnvConfig = {
 	TRACKER_TOKEN?: string;
 	TRACKER_CLOUD_ORG_ID?: string;
 	TRACKER_ORG_ID: string;
+	WIKI_TOKEN?: string;
+	WIKI_CLOUD_ORG_ID?: string;
+	FIGMA_TOKEN?: string;
 	JIRA_BASE_URL: string;
 	JIRA_EMAIL: string;
 	JIRA_API_TOKEN: string;
@@ -68,6 +71,9 @@ export function loadBotEnv(env: BotEnv): BotEnvConfig {
 	const TRACKER_TOKEN = env.TRACKER_TOKEN;
 	const TRACKER_CLOUD_ORG_ID = env.TRACKER_CLOUD_ORG_ID;
 	const TRACKER_ORG_ID = env.TRACKER_ORG_ID ?? "";
+	const WIKI_TOKEN = env.WIKI_TOKEN;
+	const WIKI_CLOUD_ORG_ID = env.WIKI_CLOUD_ORG_ID;
+	const FIGMA_TOKEN = env.FIGMA_TOKEN;
 	const JIRA_BASE_URL = env.JIRA_BASE_URL ?? "";
 	const JIRA_EMAIL = env.JIRA_EMAIL ?? "";
 	const JIRA_API_TOKEN = env.JIRA_API_TOKEN ?? "";
@@ -180,6 +186,9 @@ export function loadBotEnv(env: BotEnv): BotEnvConfig {
 		TRACKER_TOKEN,
 		TRACKER_CLOUD_ORG_ID,
 		TRACKER_ORG_ID,
+		WIKI_TOKEN,
+		WIKI_CLOUD_ORG_ID,
+		FIGMA_TOKEN,
 		JIRA_BASE_URL,
 		JIRA_EMAIL,
 		JIRA_API_TOKEN,
