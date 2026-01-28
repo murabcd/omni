@@ -1,0 +1,5 @@
+{
+	"name": "wiki_page_get_by_id",
+	"description": "Get Yandex Wiki page details by id.",
+	"tool": "yandex-wiki.wiki_page_get_by_id"
+}

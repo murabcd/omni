@@ -106,6 +106,26 @@ function resolveSkillRequirements(toolRef: string) {
 			},
 		};
 	}
+	if (server === "yandex-wiki") {
+		return {
+			requirements: {
+				bins: [],
+				env: ["WIKI_TOKEN", "WIKI_CLOUD_ORG_ID"],
+				config: [],
+				os: [],
+			},
+		};
+	}
+	if (server === "figma") {
+		return {
+			requirements: {
+				bins: [],
+				env: ["FIGMA_TOKEN"],
+				config: [],
+				os: [],
+			},
+		};
+	}
 	if (server === "posthog") {
 		return {
 			requirements: {
@@ -166,6 +186,19 @@ function buildMissingEnv(params: {
 		}
 		if (!params.effectiveEnv.JIRA_API_TOKEN) {
 			missing.push("JIRA_API_TOKEN");
+		}
+	}
+	if (params.server === "yandex-wiki") {
+		if (!params.effectiveEnv.WIKI_TOKEN) {
+			missing.push("WIKI_TOKEN");
+		}
+		if (!params.effectiveEnv.WIKI_CLOUD_ORG_ID) {
+			missing.push("WIKI_CLOUD_ORG_ID");
+		}
+	}
+	if (params.server === "figma") {
+		if (!params.effectiveEnv.FIGMA_TOKEN) {
+			missing.push("FIGMA_TOKEN");
 		}
 	}
 	if (params.server === "posthog") {

@@ -1,0 +1,5 @@
+{
+	"name": "figma_file_get",
+	"description": "Get Figma file metadata and document tree.",
+	"tool": "figma.figma_file_get"
+}

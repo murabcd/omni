@@ -1,0 +1,5 @@
+{
+	"name": "figma_file_comments_list",
+	"description": "List comments for a Figma file.",
+	"tool": "figma.figma_file_comments_list"
+}

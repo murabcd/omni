@@ -1,0 +1,5 @@
+{
+	"name": "figma_project_files_list",
+	"description": "List files in a Figma project.",
+	"tool": "figma.figma_project_files_list"
+}

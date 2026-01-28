@@ -1,0 +1,5 @@
+{
+	"name": "figma_me",
+	"description": "Get current Figma user profile.",
+	"tool": "figma.figma_me"
+}

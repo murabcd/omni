@@ -1,0 +1,5 @@
+{
+	"name": "wiki_page_create",
+	"description": "Create a new Yandex Wiki page.",
+	"tool": "yandex-wiki.wiki_page_create"
+}

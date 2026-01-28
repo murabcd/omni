@@ -1,4 +1,7 @@
+import { regex } from "arkregex";
 import { extractJiraText, type JiraIssue } from "../jira.js";
+
+const SPACE_RE = regex("\\s+", "g");
 
 export type JiraClientConfig = {
 	baseUrl: string;
@@ -272,7 +275,7 @@ export function createJiraClient(config: JiraClientConfig): JiraClient {
 			.trim()
 			.replaceAll("–", "-")
 			.replaceAll("—", "-")
-			.replaceAll(/\s+/g, " ")
+			.replace(SPACE_RE, " ")
 			.toLowerCase();
 	}
 

@@ -1,0 +1,5 @@
+{
+	"name": "wiki_page_update",
+	"description": "Update an existing Yandex Wiki page.",
+	"tool": "yandex-wiki.wiki_page_update"
+}

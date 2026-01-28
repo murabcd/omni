@@ -70,6 +70,31 @@
 		"tool": "posthog.feature-flag-get-definition"
 	},
 	{
+		"name": "figma_file_comments_list",
+		"description": "List comments for a Figma file.",
+		"tool": "figma.figma_file_comments_list"
+	},
+	{
+		"name": "figma_file_get",
+		"description": "Get Figma file metadata and document tree.",
+		"tool": "figma.figma_file_get"
+	},
+	{
+		"name": "figma_file_nodes_get",
+		"description": "Get specific nodes from a Figma file.",
+		"tool": "figma.figma_file_nodes_get"
+	},
+	{
+		"name": "figma_me",
+		"description": "Get current Figma user profile.",
+		"tool": "figma.figma_me"
+	},
+	{
+		"name": "figma_project_files_list",
+		"description": "List files in a Figma project.",
+		"tool": "figma.figma_project_files_list"
+	},
+	{
 		"name": "get_global_fields",
 		"description": "Get all global fields available in Yandex Tracker.",
 		"tool": "yandex-tracker.get_global_fields"
@@ -98,6 +123,16 @@
 		"name": "get-llm-total-costs-for-project",
 		"description": "PostHog read-only tool",
 		"tool": "posthog.get-llm-total-costs-for-project"
+	},
+	{
+		"name": "google_public_doc_read",
+		"description": "Read a public Google Doc by shared link.",
+		"tool": "google-public.google_public_doc_read"
+	},
+	{
+		"name": "google_public_sheet_read",
+		"description": "Read a public Google Sheet by shared link.",
+		"tool": "google-public.google_public_sheet_read"
 	},
 	{
 		"name": "insight-get",
@@ -184,11 +219,7 @@
 		"description": "Search issues using Yandex Tracker Query Language.",
 		"tool": "yandex-tracker.issues_find",
 		"args": {
-			"fields": [
-				"key",
-				"summary",
-				"created_at"
-			],
+			"fields": ["key", "summary", "created_at"],
 			"per_page": 100
 		}
 	},
@@ -297,10 +328,7 @@
 		"description": "List all available Yandex Tracker queues.",
 		"tool": "yandex-tracker.queues_get_all",
 		"args": {
-			"fields": [
-				"key",
-				"name"
-			],
+			"fields": ["key", "name"],
 			"per_page": 100
 		}
 	},
@@ -358,5 +386,30 @@
 		"name": "web_search",
 		"description": "Search the web for up-to-date information.",
 		"tool": "web.web_search"
+	},
+	{
+		"name": "wiki_page_append_content",
+		"description": "Append content to an existing Yandex Wiki page.",
+		"tool": "yandex-wiki.wiki_page_append_content"
+	},
+	{
+		"name": "wiki_page_create",
+		"description": "Create a new Yandex Wiki page.",
+		"tool": "yandex-wiki.wiki_page_create"
+	},
+	{
+		"name": "wiki_page_get",
+		"description": "Get Yandex Wiki page details by slug.",
+		"tool": "yandex-wiki.wiki_page_get"
+	},
+	{
+		"name": "wiki_page_get_by_id",
+		"description": "Get Yandex Wiki page details by id.",
+		"tool": "yandex-wiki.wiki_page_get_by_id"
+	},
+	{
+		"name": "wiki_page_update",
+		"description": "Update an existing Yandex Wiki page.",
+		"tool": "yandex-wiki.wiki_page_update"
 	}
 ]

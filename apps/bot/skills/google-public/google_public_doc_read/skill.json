@@ -1,0 +1,5 @@
+{
+	"name": "google_public_doc_read",
+	"description": "Read a public Google Doc by shared link.",
+	"tool": "google-public.google_public_doc_read"
+}

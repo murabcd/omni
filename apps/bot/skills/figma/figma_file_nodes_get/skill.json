@@ -1,0 +1,5 @@
+{
+	"name": "figma_file_nodes_get",
+	"description": "Get specific nodes from a Figma file.",
+	"tool": "figma.figma_file_nodes_get"
+}
