@@ -8,7 +8,9 @@ export type ToolPolicy = {
 export const TOOL_GROUPS: Record<string, string[]> = {
 	"group:web": ["web_search"],
 	"group:tracker": [
-		"tracker_search",
+		"yandex_tracker_search",
+		"yandex_tracker_find_issue",
+		"yandex_tracker_issue_summary",
 		"issues_find",
 		"issue_get",
 		"issue_get_comments",
@@ -57,6 +59,10 @@ export const TOOL_GROUPS: Record<string, string[]> = {
 	],
 	"group:memory": ["searchmemories", "addmemory"],
 	"group:yandex-wiki": [
+		"yandex_wiki_find_page",
+		"yandex_wiki_read_page",
+		"yandex_wiki_update_page",
+		"yandex_wiki_append_page",
 		"wiki_page_get",
 		"wiki_page_get_by_id",
 		"wiki_page_create",
@@ -71,6 +77,7 @@ export const TOOL_GROUPS: Record<string, string[]> = {
 		"figma_project_files_list",
 	],
 	"group:google-public": ["google_public_doc_read", "google_public_sheet_read"],
+	"group:image": ["gemini_image_generate"],
 	"group:runtime-skills": [],
 };
 

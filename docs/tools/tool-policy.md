@@ -40,7 +40,7 @@ Chat‑specific allow/deny lists are merged on top of the base lists.
 Supported groups:
 
 - `group:web` → `web_search`
-- `group:tracker` → Tracker tools (`tracker_search`, `issues_find`, `issue_get`, `issue_get_comments`, `issue_get_url`)
+- `group:tracker` → Yandex Tracker tools (`yandex_tracker_search`, `issues_find`, `issue_get`, `issue_get_comments`, `issue_get_url`)
 - `group:jira` → Jira tools (`jira_search`, `jira_issues_find`, `jira_issue_get`, `jira_issue_get_comments`, `jira_sprint_issues`)
 - `group:posthog` → PostHog read-only tools
 - `group:memory` → Supermemory tools (`searchMemories`, `addMemory`)
@@ -52,7 +52,7 @@ Examples:
 TOOL_ALLOWLIST=group:tracker,group:memory
 TOOL_DENYLIST=web_search
 TOOL_ALLOWLIST_GROUP=group:tracker
-TOOL_RATE_LIMITS=web_search:10/60,tracker_search:20/60
+TOOL_RATE_LIMITS=web_search:10/60,yandex_tracker_search:20/60
 TOOL_APPROVAL_REQUIRED=web_search
 TOOL_APPROVAL_TTL_MS=600000
 TOOL_APPROVAL_STORE_PATH=data/approvals/approvals.json

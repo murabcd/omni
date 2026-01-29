@@ -30,9 +30,9 @@ describe("createToolStatusHandler", () => {
 			delayMs: 1500,
 		});
 
-		onToolStep(["tracker_search"]);
+		onToolStep(["yandex_tracker_search"]);
 		vi.advanceTimersByTime(1500);
-		expect(sendReply).toHaveBeenCalledWith("Проверяю в Tracker…");
+		expect(sendReply).toHaveBeenCalledWith("Проверяю в Yandex Tracker…");
 
 		vi.useRealTimers();
 	});

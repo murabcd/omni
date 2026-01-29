@@ -17,7 +17,7 @@ export function createToolStatusHandler(
 ) {
 	const delayMs = options.delayMs ?? 1500;
 	const webMessage = options.webMessage ?? "Ищу в интернете…";
-	const trackerMessage = options.trackerMessage ?? "Проверяю в Tracker…";
+	const trackerMessage = options.trackerMessage ?? "Проверяю в Yandex Tracker…";
 	const jiraMessage = options.jiraMessage ?? "Проверяю в Jira…";
 	const posthogMessage = options.posthogMessage ?? "Смотрю аналитику…";
 	const memoryMessage = options.memoryMessage ?? "Смотрю историю…";
@@ -57,7 +57,7 @@ export function createToolStatusHandler(
 
 	const clearAllStatuses = () => {
 		clearStatus("web_search");
-		clearStatus("tracker_search");
+		clearStatus("yandex_tracker_search");
 		clearStatus("jira");
 		clearStatus("posthog");
 		clearStatus("memory");
@@ -66,7 +66,9 @@ export function createToolStatusHandler(
 
 	const onToolStep = (toolNames: string[]) => {
 		const hasWeb = toolNames.includes("web_search");
-		const hasTracker = toolNames.includes("tracker_search");
+		const hasTracker = toolNames.some((name) =>
+			name.startsWith("yandex_tracker_"),
+		);
 		const hasJira = toolNames.some((name) => jiraTools.has(name));
 		const hasPosthog = toolNames.some((name) =>
 			POSTHOG_READONLY_TOOL_NAMES.has(name),
@@ -74,13 +76,13 @@ export function createToolStatusHandler(
 		const hasMemory = toolNames.some((name) => memoryTools.has(name));
 		const hasCron = toolNames.some((name) => cronTools.has(name));
 		if (hasWeb) scheduleStatus("web_search", webMessage);
-		if (hasTracker) scheduleStatus("tracker_search", trackerMessage);
+		if (hasTracker) scheduleStatus("yandex_tracker_search", trackerMessage);
 		if (hasJira) scheduleStatus("jira", jiraMessage);
 		if (hasPosthog) scheduleStatus("posthog", posthogMessage);
 		if (hasMemory) scheduleStatus("memory", memoryMessage);
 		if (hasCron) scheduleStatus("cron", cronMessage);
 		if (!hasWeb) clearStatus("web_search");
-		if (!hasTracker) clearStatus("tracker_search");
+		if (!hasTracker) clearStatus("yandex_tracker_search");
 		if (!hasJira) clearStatus("jira");
 		if (!hasPosthog) clearStatus("posthog");
 		if (!hasMemory) clearStatus("memory");
@@ -89,8 +91,8 @@ export function createToolStatusHandler(
 
 	const onToolStart = (toolName: string) => {
 		if (toolName === "web_search") scheduleStatus("web_search", webMessage);
-		if (toolName === "tracker_search")
-			scheduleStatus("tracker_search", trackerMessage);
+		if (toolName.startsWith("yandex_tracker_"))
+			scheduleStatus("yandex_tracker_search", trackerMessage);
 		if (jiraTools.has(toolName)) scheduleStatus("jira", jiraMessage);
 		if (POSTHOG_READONLY_TOOL_NAMES.has(toolName))
 			scheduleStatus("posthog", posthogMessage);
