@@ -37,6 +37,18 @@ TOOL_DENYLIST_GROUP=
 TOOL_RATE_LIMITS=web_search:10/60
 ```
 
+## Sub-agent defaults (orchestration)
+
+Sub-agents default to the same model as the main agent unless overridden.
+You can set global defaults via env:
+
+```
+SUBAGENT_MODEL_PROVIDER="google"
+SUBAGENT_MODEL_ID="gemini-2.5-flash"
+```
+
+If `SUBAGENT_MODEL_PROVIDER=google`, ensure `GEMINI_API_KEY` is set.
+
 ## Reply threading
 
 The bot replies to the triggering message in Telegram (uses `reply_to_message_id`)
