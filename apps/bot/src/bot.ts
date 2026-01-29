@@ -770,7 +770,7 @@ export async function createBot(options: CreateBotOptions) {
 	};
 
 	const toolInventory = buildToolInventory();
-	const AGENT_TOOL_LIST = toolInventory.agentTools;
+	const AGENT_TOOL_LIST = toolInventory.allTools;
 	const ALL_TOOL_LIST = toolInventory.allTools;
 	const TOOL_CONFLICTS = toolInventory.conflicts;
 	const TOOL_SUPPRESSED_BY_POLICY = toolInventory.suppressedByPolicy;
