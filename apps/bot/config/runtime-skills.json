@@ -135,6 +135,10 @@
 		"tool": "google-public.google_public_sheet_read"
 	},
 	{
+		"name": "google_public_slides_read",
+		"tool": "google-public.google_public_slides_read"
+	},
+	{
 		"name": "insight-get",
 		"description": "PostHog read-only tool",
 		"tool": "posthog.insight-get"
