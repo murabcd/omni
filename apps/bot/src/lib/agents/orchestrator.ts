@@ -2,6 +2,7 @@ import { openai } from "@ai-sdk/openai";
 import { stepCountIs, ToolLoopAgent, type ToolSet, tool } from "ai";
 import { regex } from "arkregex";
 import { z } from "zod";
+import { buildSystemPrompt } from "../prompts/system-prompt.js";
 
 export type OrchestrationAgentId =
 	| "tracker"
@@ -31,6 +32,13 @@ export type OrchestrationContext = {
 	toolsByAgent: Record<OrchestrationAgentId, ToolSet>;
 	isGroupChat: boolean;
 	log: (event: Record<string, unknown>) => void;
+	promptMode?: "full" | "minimal" | "none";
+	promptContext?: {
+		modelRef: string;
+		modelName: string;
+		reasoning: string;
+		globalSoul?: string;
+	};
 	allowAgents?: OrchestrationAgentId[];
 	denyAgents?: OrchestrationAgentId[];
 	parallelism?: number;
@@ -82,6 +90,27 @@ const ROUTER_SCHEMA = z.object({
 });
 
 const ISSUE_KEY_RE = regex("\\b(?<prefix>[A-Z]{2,10})-(?<num>\\d+)\\b");
+
+function buildSubagentSystemPrompt(params: {
+	promptContext?: OrchestrationContext["promptContext"];
+	toolNames: string[];
+	baseInstruction: string;
+}): string {
+	const promptContext = params.promptContext;
+	if (!promptContext) return params.baseInstruction;
+	const base = buildSystemPrompt({
+		modelRef: promptContext.modelRef,
+		modelName: promptContext.modelName,
+		reasoning: promptContext.reasoning,
+	});
+	const globalSoul = promptContext.globalSoul?.trim();
+	const soulBlock = globalSoul ? ["SOUL (global):", globalSoul, ""].join("\n") : "";
+	const toolLines = params.toolNames.length > 0 ? params.toolNames.join("\n") : "(none)";
+	const toolsBlock = ["Available tools:", toolLines, ""].join("\n");
+	return [base, soulBlock, toolsBlock, params.baseInstruction]
+		.filter((line) => line && line.trim())
+		.join("\n\n");
+}
 
 function buildRouterTool() {
 	return tool({
@@ -318,6 +347,16 @@ export async function runOrchestration(
 		const instructions =
 			override.instructions ??
 			`You are the ${entry.id} subagent. Provide a concise summary for the user.`;
+		const promptMode = context.promptMode ?? "full";
+		const toolNames = Object.keys(tools);
+		const resolvedInstructions =
+			promptMode === "minimal"
+				? buildSubagentSystemPrompt({
+						promptContext: context.promptContext,
+						toolNames,
+						baseInstruction: instructions,
+					})
+				: instructions;
 		const modelId = override.modelId ?? context.modelId;
 		const maxSteps =
 			override.maxSteps ?? budget?.maxSteps ?? context.defaultMaxSteps ?? 3;
@@ -328,7 +367,7 @@ export async function runOrchestration(
 			20_000;
 		const agent = new ToolLoopAgent({
 			model: openai(modelId),
-			instructions,
+			instructions: resolvedInstructions,
 			tools: wrappedTools,
 			stopWhen: stepCountIs(maxSteps),
 		});

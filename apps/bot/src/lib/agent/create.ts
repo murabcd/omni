@@ -19,6 +19,7 @@ import {
 import { regex } from "arkregex";
 import { z } from "zod";
 import type { ModelConfig } from "../../models-core.js";
+import type { RuntimeSkill } from "../../skills-core.js";
 import {
 	buildCronExpr,
 	findCronJob,
@@ -61,6 +62,9 @@ import {
 } from "../tools/registry.js";
 import { sanitizeToolCallIdsForTranscript } from "../tools/tool-call-id.js";
 import { repairToolUseResultPairing } from "../tools/transcript-repair.js";
+import type { ChannelConfig } from "../channels.js";
+import { buildSkillsPrompt } from "../prompts/skills-prompt.js";
+import { formatUserDateTime } from "../prompts/time.js";
 
 export type AgentToolSet = Awaited<ReturnType<AgentToolsFactory>>;
 export type AgentToolCall = TypedToolCall<AgentToolSet>;
@@ -161,6 +165,10 @@ export type AgentToolsDeps = {
 	webSearchContextSize: string;
 	defaultTrackerQueue: string;
 	cronStatusTimezone: string;
+	resolveChatTimezone?: (
+		ctx?: BotContext,
+		chatId?: string,
+	) => Promise<string | undefined> | string | undefined;
 	jiraProjectKey: string;
 	jiraBoardId: number;
 	jiraEnabled: boolean;
@@ -175,6 +183,14 @@ export type AgentToolsDeps = {
 		}) => Promise<{ jobs?: unknown[] }>;
 		add: (params: Record<string, unknown>) => Promise<unknown>;
 		remove: (params: { jobId: string }) => Promise<unknown>;
+		run: (params: { jobId: string; mode?: "due" | "force" }) => Promise<unknown>;
+		update: (params: {
+			id?: string;
+			jobId?: string;
+			patch: Record<string, unknown>;
+		}) => Promise<unknown>;
+		runs: (params: { id?: string; jobId?: string; limit?: number }) => Promise<unknown>;
+		status: () => Promise<unknown>;
 	};
 	trackerClient: TrackerClient;
 	wikiClient: WikiClient;
@@ -193,6 +209,7 @@ export type AgentToolsDeps = {
 	supermemoryTagPrefix: string;
 	commentsFetchBudgetMs: number;
 	imageStore?: ImageStore;
+	geminiImageSize?: "1K" | "2K" | "4K";
 };
 
 export type AgentModelConfig = ModelConfig;
@@ -207,6 +224,7 @@ export type CreateAgentOptions = {
 	onToolStart?: (toolName: string) => void;
 	ctx?: BotContext;
 	webSearchEnabled?: boolean;
+	promptMode?: "full" | "minimal" | "none";
 };
 
 export type AgentDeps = {
@@ -217,7 +235,23 @@ export type AgentDeps = {
 	debugLogs: boolean;
 	webSearchEnabled: boolean;
 	soulPrompt: string;
+	projectContext?: Array<{ path: string; content: string }>;
+	runtimeSkills?: RuntimeSkill[];
+	filterSkillsForChannel?: (params: {
+		skills: RuntimeSkill[];
+		channelConfig?: ChannelConfig;
+	}) => RuntimeSkill[];
+	resolveChatTimezone?: (
+		ctx?: BotContext,
+		chatId?: string,
+	) => Promise<string> | string;
+	serviceName?: string;
+	releaseVersion?: string;
+	region?: string;
+	instanceId?: string;
 };
+
+// buildSkillsPrompt and formatUserDateTime moved to prompts helpers
 
 function resolveWebSearchContextSize(value: string): "low" | "medium" | "high" {
 	if (value === "medium" || value === "high") return value;
@@ -382,10 +416,10 @@ export function createAgentToolsFactory(
 									providerOptions: {
 										google: {
 											responseModalities: ["TEXT", "IMAGE"],
-											imageConfig: {
-												aspectRatio,
-												imageSize: "1K",
-											},
+										imageConfig: {
+											aspectRatio,
+											imageSize: deps.geminiImageSize ?? "1K",
+										},
 										},
 									},
 							});
@@ -1535,13 +1569,13 @@ export function createAgentToolsFactory(
 				{
 					name: "cron_schedule",
 					description:
-						"Schedule a recurring report or reminder and deliver it to the current chat.",
+						"Schedule a recurring report or reminder and deliver it to the current chat (default timezone: Europe/Moscow unless user specifies).",
 					source: "cron",
 					origin: "core",
 				},
 				tool({
 					description:
-						"Create a recurring cron job that runs a prompt and sends the result to Telegram.",
+						"Create a recurring cron job that runs a prompt and sends the result to Telegram. If the user mentions a different location or timezone, ask to confirm the timezone before scheduling.",
 					inputSchema: z.object({
 						goal: z.string().describe("What should the report/reminder do?"),
 						prompt: z
@@ -1580,8 +1614,14 @@ export function createAgentToolsFactory(
 							};
 						}
 						const cadence = input.schedule.cadence ?? "daily";
+						const resolvedTimezone = await deps.resolveChatTimezone?.(
+							options?.ctx,
+							options?.chatId,
+						);
 						const timezone =
-							input.schedule.timezone?.trim() || deps.cronStatusTimezone;
+							input.schedule.timezone?.trim() ||
+							resolvedTimezone?.trim() ||
+							deps.cronStatusTimezone;
 						let schedule: Record<string, unknown> | null = null;
 						if (cadence === "every") {
 							const everyMinutes = input.schedule.everyMinutes;
@@ -1637,6 +1677,143 @@ export function createAgentToolsFactory(
 						const prompt =
 							input.prompt?.trim() ||
 							`Prepare a concise report: ${goal}. Include key numbers and a short insight.`;
+						const job = {
+							name: goal.slice(0, 80),
+							description: goal,
+							enabled: true,
+							schedule,
+							sessionTarget: "main",
+							wakeMode: "next-heartbeat",
+							payload: {
+								kind: "agentTurn",
+								message: prompt,
+								deliver: true,
+								channel: "telegram",
+								to: chatId,
+							},
+						};
+						const created = await deps.cronClient?.add(job);
+						return {
+							ok: true,
+							message: created
+								? `Scheduled: ${formatCronJob(created)}`
+								: "Scheduled",
+							job: created,
+						};
+					},
+				}),
+			);
+
+			registerTool(
+				{
+					name: "cron_schedule_tracker_mentions",
+					description:
+						"Schedule tracker mention notifications for a user and deliver them to the current chat.",
+					source: "cron",
+					origin: "core",
+				},
+				tool({
+					description:
+						"Create a recurring cron job that checks tracker mentions for a user and sends a concise notification to Telegram.",
+					inputSchema: z.object({
+						user: z.string().describe("User name or mention to watch for."),
+						schedule: z.object({
+							cadence: z
+								.enum(["daily", "weekdays", "weekly", "every"])
+								.optional(),
+							time: z.string().optional().describe("Time in HH:MM (24h)."),
+							timezone: z.string().optional().describe("IANA timezone."),
+							dayOfWeek: z
+								.enum(["mon", "tue", "wed", "thu", "fri", "sat", "sun"])
+								.optional()
+								.describe("Required for weekly cadence."),
+							everyMinutes: z
+								.number()
+								.int()
+								.positive()
+								.optional()
+								.describe("Required for every cadence."),
+						}),
+						deliverToChatId: z
+							.string()
+							.optional()
+							.describe("Telegram chat id to deliver to."),
+					}),
+					execute: async (input) => {
+						const chatId =
+							input.deliverToChatId ?? options?.ctx?.chat?.id?.toString() ?? "";
+						if (!chatId) {
+							return {
+								ok: false,
+								message: "Missing chat id. Ask the user where to deliver.",
+							};
+						}
+						const cadence = input.schedule.cadence ?? "daily";
+						const resolvedTimezone = await deps.resolveChatTimezone?.(
+							options?.ctx,
+							options?.chatId,
+						);
+						const timezone =
+							input.schedule.timezone?.trim() ||
+							resolvedTimezone?.trim() ||
+							deps.cronStatusTimezone;
+						let schedule: Record<string, unknown> | null = null;
+						if (cadence === "every") {
+							const everyMinutes = input.schedule.everyMinutes;
+							if (!everyMinutes) {
+								return {
+									ok: false,
+									message:
+										"Need interval minutes for every cadence (e.g. every 60 minutes).",
+								};
+							}
+							schedule = {
+								kind: "every",
+								everyMs: Math.max(1, everyMinutes) * 60_000,
+							};
+						} else {
+							const time = input.schedule.time
+								? parseTime(input.schedule.time)
+								: null;
+							if (!time) {
+								return {
+									ok: false,
+									message: "Need time in HH:MM (e.g. 11:00).",
+								};
+							}
+							let expr = "";
+							if (cadence === "weekdays") {
+								expr = buildCronExpr(time, true);
+							} else if (cadence === "weekly") {
+								const day = input.schedule.dayOfWeek;
+								if (!day) {
+									return {
+										ok: false,
+										message: "Need dayOfWeek for weekly cadence (mon/tue/...).",
+									};
+								}
+								const dayMap: Record<string, string> = {
+									mon: "1",
+									tue: "2",
+									wed: "3",
+									thu: "4",
+									fri: "5",
+									sat: "6",
+									sun: "0",
+								};
+								expr = `${time.minute} ${time.hour} * * ${dayMap[day] ?? "*"}`;
+							} else {
+								expr = buildCronExpr(time, false);
+							}
+							schedule = { kind: "cron", expr, tz: timezone };
+						}
+
+						const goal = `Tracker mentions for ${input.user.trim()}`;
+						const prompt = [
+							`Check Yandex Tracker for mentions of "${input.user.trim()}" in the last 24 hours.`,
+							"Summarize any mentions briefly with issue keys and context.",
+							"If no mentions, say that there are none.",
+						].join(" ");
 						const job = {
 							name: goal.slice(0, 80),
 							description: goal,
@@ -1723,6 +1900,219 @@ export function createAgentToolsFactory(
 						const jobId = (matches[0] as { id?: string }).id ?? target;
 						await deps.cronClient?.remove({ jobId });
 						return { ok: true, message: `Removed ${jobId}.` };
+					},
+				}),
+			);
+
+			registerTool(
+				{
+					name: "cron_update",
+					description: "Update a scheduled cron job (enable/disable or change schedule).",
+					source: "cron",
+					origin: "core",
+				},
+				tool({
+					description:
+						"Update a scheduled cron job. Provide id/jobId or a target name, and a patch with enabled/name/description/schedule.",
+					inputSchema: z.object({
+						target: z.string().optional().describe("Job id or name."),
+						id: z.string().optional(),
+						jobId: z.string().optional(),
+						enabled: z.boolean().optional(),
+						name: z.string().optional(),
+						description: z.string().optional(),
+						schedule: z
+							.object({
+								kind: z.enum(["cron", "every"]).optional(),
+								expr: z.string().optional().describe("Cron expression."),
+								tz: z.string().optional().describe("IANA timezone."),
+								everyMinutes: z
+									.number()
+									.int()
+									.positive()
+									.optional()
+									.describe("Interval minutes for every cadence."),
+							})
+							.optional(),
+					}),
+					execute: async ({
+						target,
+						id,
+						jobId,
+						enabled,
+						name,
+						description,
+						schedule,
+					}) => {
+						let resolvedId = id ?? jobId;
+						if (!resolvedId && target) {
+							const payload = await deps.cronClient?.list({
+								includeDisabled: true,
+							});
+							const jobs = Array.isArray(payload?.jobs) ? payload.jobs : [];
+							const matches = findCronJob(jobs, target);
+							if (matches.length === 0) {
+								return { ok: false, message: `No job found for ${target}.` };
+							}
+							if (matches.length > 1) {
+								return {
+									ok: false,
+									message: "Multiple matches found. Please specify a job id.",
+								};
+							}
+							resolvedId = (matches[0] as { id?: string }).id ?? target;
+						}
+						if (!resolvedId) {
+							return { ok: false, message: "Missing job id." };
+						}
+						const patch: Record<string, unknown> = {};
+						if (enabled !== undefined) patch.enabled = enabled;
+						if (name !== undefined) patch.name = name;
+						if (description !== undefined) patch.description = description;
+						if (schedule) {
+							if (schedule.kind === "every" || schedule.everyMinutes) {
+								const everyMinutes = schedule.everyMinutes ?? 0;
+								if (!everyMinutes) {
+									return {
+										ok: false,
+										message: "Need everyMinutes for every cadence.",
+									};
+								}
+								patch.schedule = {
+									kind: "every",
+									everyMs: Math.max(1, everyMinutes) * 60_000,
+								};
+							} else if (schedule.expr) {
+								patch.schedule = {
+									kind: "cron",
+									expr: schedule.expr.trim(),
+									tz: schedule.tz?.trim() || undefined,
+								};
+							}
+						}
+						if (Object.keys(patch).length === 0) {
+							return { ok: false, message: "No updates provided." };
+						}
+						const updated = await deps.cronClient?.update({
+							id: resolvedId,
+							patch,
+						});
+						return {
+							ok: true,
+							message: updated
+								? `Updated: ${formatCronJob(updated)}`
+								: "Updated",
+							job: updated,
+						};
+					},
+				}),
+			);
+
+			registerTool(
+				{
+					name: "cron_run",
+					description: "Run a scheduled cron job immediately.",
+					source: "cron",
+					origin: "core",
+				},
+				tool({
+					description: "Run a cron job by id or name.",
+					inputSchema: z.object({
+						target: z.string().optional().describe("Job id or name."),
+						id: z.string().optional(),
+						jobId: z.string().optional(),
+						mode: z.enum(["due", "force"]).optional(),
+					}),
+					execute: async ({ target, id, jobId, mode }) => {
+						let resolvedId = id ?? jobId;
+						if (!resolvedId && target) {
+							const payload = await deps.cronClient?.list({
+								includeDisabled: true,
+							});
+							const jobs = Array.isArray(payload?.jobs) ? payload.jobs : [];
+							const matches = findCronJob(jobs, target);
+							if (matches.length === 0) {
+								return { ok: false, message: `No job found for ${target}.` };
+							}
+							if (matches.length > 1) {
+								return {
+									ok: false,
+									message: "Multiple matches found. Please specify a job id.",
+								};
+							}
+							resolvedId = (matches[0] as { id?: string }).id ?? target;
+						}
+						if (!resolvedId) {
+							return { ok: false, message: "Missing job id." };
+						}
+						await deps.cronClient?.run({
+							jobId: resolvedId,
+							mode: mode ?? "force",
+						});
+						return { ok: true, message: `Triggered ${resolvedId}.` };
+					},
+				}),
+			);
+
+			registerTool(
+				{
+					name: "cron_runs",
+					description: "List recent runs for a cron job.",
+					source: "cron",
+					origin: "core",
+				},
+				tool({
+					description: "List recent cron job runs by id or name.",
+					inputSchema: z.object({
+						target: z.string().optional().describe("Job id or name."),
+						id: z.string().optional(),
+						jobId: z.string().optional(),
+						limit: z.number().int().positive().optional(),
+					}),
+					execute: async ({ target, id, jobId, limit }) => {
+						let resolvedId = id ?? jobId;
+						if (!resolvedId && target) {
+							const payload = await deps.cronClient?.list({
+								includeDisabled: true,
+							});
+							const jobs = Array.isArray(payload?.jobs) ? payload.jobs : [];
+							const matches = findCronJob(jobs, target);
+							if (matches.length === 0) {
+								return { ok: false, message: `No job found for ${target}.` };
+							}
+							if (matches.length > 1) {
+								return {
+									ok: false,
+									message: "Multiple matches found. Please specify a job id.",
+								};
+							}
+							resolvedId = (matches[0] as { id?: string }).id ?? target;
+						}
+						if (!resolvedId) {
+							return { ok: false, message: "Missing job id." };
+						}
+						const payload = await deps.cronClient?.runs({
+							id: resolvedId,
+							limit: limit ?? 10,
+						});
+						return { ok: true, runs: payload };
+					},
+				}),
+			);
+
+			registerTool(
+				{
+					name: "cron_status",
+					description: "Get cron scheduler status.",
+					source: "cron",
+					origin: "core",
+				},
+				tool({
+					description: "Get cron scheduler status.",
+					inputSchema: z.object({}),
+					execute: async () => {
+						const payload = await deps.cronClient?.status();
+						return { ok: true, status: payload };
 					},
 				}),
 			);
@@ -2156,6 +2546,33 @@ export function createAgentFactory(deps: AgentDeps) {
 		modelConfig: ModelConfig,
 		options?: CreateAgentOptions,
 	) {
+		const channelConfig = options?.ctx?.state.channelConfig;
+		const runtimeSkills =
+			typeof deps.filterSkillsForChannel === "function"
+				? deps.filterSkillsForChannel({
+						skills: deps.runtimeSkills ?? [],
+						channelConfig,
+					})
+				: deps.runtimeSkills ?? [];
+		const skillsPrompt = buildSkillsPrompt(runtimeSkills);
+		const timeZone =
+			typeof deps.resolveChatTimezone === "function"
+				? await deps.resolveChatTimezone(options?.ctx, options?.chatId)
+				: undefined;
+		const currentDateTime = timeZone
+			? formatUserDateTime(new Date(), timeZone)
+			: "";
+		const chatType = options?.ctx?.chat?.type ?? "";
+		const runtimeParts = [
+			deps.serviceName ? `service=${deps.serviceName}` : "",
+			deps.releaseVersion ? `version=${deps.releaseVersion}` : "",
+			deps.region ? `region=${deps.region}` : "",
+			deps.instanceId ? `instance=${deps.instanceId}` : "",
+			modelConfig.label ? `model=${modelConfig.label}` : "",
+			modelRef ? `ref=${modelRef}` : "",
+			chatType ? `channel=telegram:${chatType}` : "channel=telegram",
+		].filter(Boolean);
+		const runtimeLine = runtimeParts.length > 0 ? runtimeParts.join(" | ") : "";
 		const tools = await deps.getAgentTools();
 		const allowWebSearch =
 			typeof options?.webSearchEnabled === "boolean"
@@ -2190,6 +2607,13 @@ export function createAgentFactory(deps: AgentDeps) {
 			userName: options?.userName,
 			globalSoul: deps.soulPrompt,
 			channelSoul: options?.ctx?.state.channelConfig?.systemPrompt,
+			projectContext: deps.projectContext,
+			currentDateTime: currentDateTime
+				? `${currentDateTime} (${timeZone ?? "unknown"})`
+				: "",
+			runtimeLine,
+			skillsPrompt,
+			promptMode: options?.promptMode,
 		});
 		const agentTools = await deps.createAgentTools(options);
 		return new ToolLoopAgent({

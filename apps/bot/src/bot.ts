@@ -62,6 +62,9 @@ import {
 	type TrackerToolResult,
 } from "./lib/clients/tracker.js";
 import { createWikiClient } from "./lib/clients/wiki.js";
+import { buildAgentInstructions } from "./lib/prompts/agent-instructions.js";
+import { buildSkillsPrompt } from "./lib/prompts/skills-prompt.js";
+import { formatUserDateTime } from "./lib/prompts/time.js";
 import { type BotEnv, loadBotEnv } from "./lib/config/env.js";
 import {
 	getChatState,
@@ -92,6 +95,7 @@ import {
 	extractIssueKeysFromText,
 	truncateText,
 } from "./lib/text/normalize.js";
+import { mapWithConcurrency } from "./lib/concurrency.js";
 import { createToolStatusHandler } from "./lib/tool-status.js";
 import { parseSenderToolAccess } from "./lib/tools/access.js";
 import {
@@ -151,6 +155,21 @@ export type CreateBotOptions = {
 			jobId: string;
 			mode?: "due" | "force";
 		}) => Promise<unknown>;
+		update: (params: {
+			id?: string;
+			jobId?: string;
+			patch: Record<string, unknown>;
+		}) => Promise<unknown>;
+		runs: (params: {
+			id?: string;
+			jobId?: string;
+			limit?: number;
+		}) => Promise<unknown>;
+		status: () => Promise<unknown>;
+	};
+	sessionClient?: {
+		get: (params: { key: string }) => Promise<unknown>;
+		patch: (params: { key: string; timeZone?: string | null }) => Promise<unknown>;
 	};
 };
 
@@ -176,6 +195,7 @@ export async function createBot(options: CreateBotOptions) {
 		GEMINI_API_KEY,
 		OPENAI_MODEL,
 		SOUL_PROMPT,
+		PROJECT_CONTEXT,
 		ALLOWED_TG_IDS,
 		CRON_STATUS_TIMEZONE,
 		DEFAULT_TRACKER_QUEUE,
@@ -197,6 +217,7 @@ export async function createBot(options: CreateBotOptions) {
 		IMAGE_MAX_BYTES,
 		DOCUMENT_MAX_BYTES,
 		ATTACHMENT_MAX_BYTES,
+		GEMINI_IMAGE_SIZE,
 		WEB_SEARCH_ENABLED,
 		WEB_SEARCH_CONTEXT_SIZE,
 		TOOL_RATE_LIMITS,
@@ -224,6 +245,8 @@ export async function createBot(options: CreateBotOptions) {
 		REGION,
 		INSTANCE_ID,
 	} = envConfig;
+
+	const sessionClient = options.sessionClient;
 	const ATTACHMENT_MAX_COUNT = 3;
 	const ATTACHMENT_CONSENT_TTL_MS = 10 * 60 * 1000;
 	const toolPolicies = parseToolPolicyVariants(env);
@@ -945,6 +968,47 @@ export async function createBot(options: CreateBotOptions) {
 		}
 	}
 
+	function buildTelegramSessionKey(ctx: BotContext) {
+		const chatId = ctx.chat?.id?.toString() ?? "";
+		return chatId ? `telegram:${chatId}` : "";
+	}
+
+	async function getChatTimezoneOverride(ctx: BotContext) {
+		if (!sessionClient) return undefined;
+		const key = buildTelegramSessionKey(ctx);
+		if (!key) return undefined;
+		const payload = (await sessionClient.get({ key })) as {
+			entry?: { timeZone?: string };
+		};
+		const tz = payload?.entry?.timeZone?.trim() ?? "";
+		return tz || undefined;
+	}
+
+	async function resolveChatTimezone(ctx?: BotContext, chatId?: string) {
+		if (!ctx && !chatId) return CRON_STATUS_TIMEZONE;
+		if (!sessionClient) return CRON_STATUS_TIMEZONE;
+		const key =
+			ctx?.chat?.id != null
+				? `telegram:${ctx.chat.id}`
+				: chatId
+					? `telegram:${chatId}`
+					: "";
+		if (!key) return CRON_STATUS_TIMEZONE;
+		const payload = (await sessionClient.get({ key })) as {
+			entry?: { timeZone?: string };
+		};
+		const tz = payload?.entry?.timeZone?.trim() ?? "";
+		return tz || CRON_STATUS_TIMEZONE;
+	}
+
+	async function setChatTimezone(ctx: BotContext, timeZone: string | null) {
+		if (!sessionClient) return false;
+		const key = buildTelegramSessionKey(ctx);
+		if (!key) return false;
+		await sessionClient.patch({ key, timeZone });
+		return true;
+	}
+
 	async function getAgentTools() {
 		return AGENT_TOOL_LIST;
 	}
@@ -967,6 +1031,7 @@ export async function createBot(options: CreateBotOptions) {
 		webSearchContextSize: WEB_SEARCH_CONTEXT_SIZE,
 		defaultTrackerQueue: DEFAULT_TRACKER_QUEUE,
 		cronStatusTimezone: CRON_STATUS_TIMEZONE,
+		resolveChatTimezone,
 		jiraProjectKey: JIRA_PROJECT_KEY,
 		jiraBoardId: JIRA_BOARD_ID,
 		jiraEnabled,
@@ -986,6 +1051,10 @@ export async function createBot(options: CreateBotOptions) {
 		supermemoryTagPrefix: SUPERMEMORY_TAG_PREFIX,
 		commentsFetchBudgetMs: COMMENTS_FETCH_BUDGET_MS,
 		imageStore: options.imageStore,
+		geminiImageSize:
+			GEMINI_IMAGE_SIZE === "2K" || GEMINI_IMAGE_SIZE === "4K"
+				? GEMINI_IMAGE_SIZE
+				: "1K",
 	});
 
 	const createAgent = createAgentFactory({
@@ -996,6 +1065,14 @@ export async function createBot(options: CreateBotOptions) {
 		debugLogs: DEBUG_LOGS,
 		webSearchEnabled: WEB_SEARCH_ENABLED,
 		soulPrompt: SOUL_PROMPT,
+		projectContext: PROJECT_CONTEXT,
+		runtimeSkills,
+		filterSkillsForChannel,
+		resolveChatTimezone,
+		serviceName: SERVICE_NAME,
+		releaseVersion: RELEASE_VERSION,
+		region: REGION,
+		instanceId: INSTANCE_ID,
 	});
 
 	function isSprintQuery(text: string) {
@@ -1120,6 +1197,7 @@ export async function createBot(options: CreateBotOptions) {
 
 	const startKeyboard = new InlineKeyboard()
 		.text("Помощь", "cmd:help")
+		.text("Команды", "cmd:commands")
 		.text("Статус", "cmd:status");
 
 	const START_GREETING =
@@ -1179,6 +1257,10 @@ export async function createBot(options: CreateBotOptions) {
 		posthogEnabled: Boolean(POSTHOG_PERSONAL_API_KEY),
 		webSearchEnabled: WEB_SEARCH_ENABLED,
 		memoryEnabled: Boolean(SUPERMEMORY_API_KEY),
+		cronClient: options.cronClient,
+		defaultCronTimezone: CRON_STATUS_TIMEZONE,
+		getChatTimezoneOverride,
+		setChatTimezone,
 	});
 
 	async function loadTelegramImageParts(
@@ -1207,17 +1289,47 @@ export async function createBot(options: CreateBotOptions) {
 		return imagePart ? [imagePart] : [];
 	}
 
-	async function loadTelegramPdfParts(ctx: BotContext): Promise<FilePart[]> {
+	async function loadTelegramDocumentPayload(ctx: BotContext): Promise<{
+		files: FilePart[];
+		extraContextParts: string[];
+		skipped: Array<{ filename: string; reason: string }>;
+		supported: boolean;
+	}> {
 		const document = ctx.message?.document;
-		if (!document?.file_id) return [];
+		if (!document?.file_id) {
+			return {
+				files: [],
+				extraContextParts: [],
+				skipped: [],
+				supported: false,
+			};
+		}
 		const fileName = document.file_name;
 		const isPdf = isPdfDocument({
 			mimeType: document.mime_type,
 			fileName,
 		});
-		if (!isPdf) return [];
+		const isDocx = isDocxDocument({
+			mimeType: document.mime_type,
+			fileName,
+		});
+		if (!isPdf && !isDocx) {
+			return {
+				files: [],
+				extraContextParts: [],
+				skipped: [],
+				supported: false,
+			};
+		}
 		const file = await ctx.api.getFile(document.file_id);
-		if (!file.file_path) return [];
+		if (!file.file_path) {
+			return {
+				files: [],
+				extraContextParts: [],
+				skipped: [],
+				supported: false,
+			};
+		}
 		const downloadUrl = `https://api.telegram.org/file/bot${BOT_TOKEN}/${file.file_path}`;
 		const response = await fetch(downloadUrl);
 		if (!response.ok) {
@@ -1229,13 +1341,37 @@ export async function createBot(options: CreateBotOptions) {
 		}
 		const filename =
 			fileName ?? file.file_path.split("/").pop() ?? "document.pdf";
-		return [
-			toFilePart({
-				buffer,
-				mediaType: "application/pdf",
-				filename,
-			}),
-		];
+		if (isDocx) {
+			const skipped: Array<{ filename: string; reason: string }> = [];
+			let text = "";
+			try {
+				text = await convertDocxToText(buffer);
+			} catch (error) {
+				skipped.push({
+					filename,
+					reason: `extract_failed:${String(error)}`,
+				});
+			}
+			const truncated = text ? truncateText(text, 8000) : "";
+			return {
+				files: [],
+				extraContextParts: truncated ? [`DOCX (${filename}):\n${truncated}`] : [],
+				skipped,
+				supported: true,
+			};
+		}
+		return {
+			files: [
+				toFilePart({
+					buffer,
+					mediaType: "application/pdf",
+					filename,
+				}),
+			],
+			extraContextParts: [],
+			skipped: [],
+			supported: true,
+		};
 	}
 
 	async function readGoogleDoc(url: string) {
@@ -1285,6 +1421,66 @@ export async function createBot(options: CreateBotOptions) {
 			buffer: Buffer.from(buffer),
 		});
 		return result.value ?? "";
+	}
+
+	function decodeDataUrl(url: string): { buffer: Uint8Array; mimeType?: string } | null {
+		if (!url.startsWith("data:")) return null;
+		const [meta, data] = url.split(",", 2);
+		if (!meta || !data) return null;
+		const metaMatch = meta.match(/^data:([^;]+)?;base64$/);
+		if (!metaMatch) return null;
+		try {
+			const buffer = Buffer.from(data, "base64");
+			return {
+				buffer: new Uint8Array(buffer),
+				mimeType: metaMatch[1],
+			};
+		} catch {
+			return null;
+		}
+	}
+
+	const ATTACHMENT_READ_CONCURRENCY = 2;
+
+	type DocxExtractionResult = {
+		files: FilePart[];
+		extraContextParts: string[];
+		skipped: Array<{ filename: string; reason: string }>;
+	};
+
+	async function extractDocxFromFileParts(
+		files: FilePart[],
+	): Promise<DocxExtractionResult> {
+		const nextFiles: FilePart[] = [];
+		const extraContextParts: string[] = [];
+		const skipped: Array<{ filename: string; reason: string }> = [];
+		for (const file of files) {
+			const filename = file.filename ?? "document.docx";
+			if (!isDocxDocument({ mimeType: file.mediaType, fileName: filename })) {
+				nextFiles.push(file);
+				continue;
+			}
+			const decoded = decodeDataUrl(file.url);
+			if (!decoded) {
+				skipped.push({ filename, reason: "decode_failed" });
+				continue;
+			}
+			if (decoded.buffer.byteLength > DOCUMENT_MAX_BYTES) {
+				skipped.push({
+					filename,
+					reason: `too_large:${decoded.buffer.byteLength}`,
+				});
+				continue;
+			}
+			try {
+				const text = await convertDocxToText(decoded.buffer);
+				const truncated = truncateText(text, 8000);
+				extraContextParts.push(`DOCX (${filename}):\n${truncated}`);
+			} catch (error) {
+				skipped.push({ filename, reason: `extract_failed:${String(error)}` });
+			}
+		}
+		return { files: nextFiles, extraContextParts, skipped };
 	}
 
 	async function collectAttachmentRequest(params: {
@@ -1501,12 +1697,22 @@ export async function createBot(options: CreateBotOptions) {
 		setLogContext(ctx, { message_type: "document" });
 		const caption = ctx.message.caption?.trim() ?? "";
 		try {
-			const files = await loadTelegramPdfParts(ctx);
-			if (files.length === 0) {
-				await sendText(ctx, "Поддерживаются только PDF документы.");
+			const payload = await loadTelegramDocumentPayload(ctx);
+			if (!payload.supported) {
+				await sendText(ctx, "Поддерживаются только PDF или DOCX документы.");
 				return;
 			}
-			await handleIncomingText(ctx, caption, files, undefined, true);
+			if (payload.skipped.length > 0) {
+				logDebug("telegram docx skipped", { items: payload.skipped });
+			}
+			await handleIncomingText(
+				ctx,
+				caption,
+				payload.files,
+				undefined,
+				true,
+				payload.extraContextParts,
+			);
 		} catch (error) {
 			logDebug("document handling error", { error: String(error) });
 			setLogError(ctx, error);
@@ -1595,6 +1801,7 @@ export async function createBot(options: CreateBotOptions) {
 		files: FilePart[] = [],
 		webSearchEnabled?: boolean,
 		skipFileStatus?: boolean,
+		extraContextParts: string[] = [],
 	) {
 		const text = rawText.trim();
 		if (
@@ -1660,8 +1867,26 @@ export async function createBot(options: CreateBotOptions) {
 			const memoryId = ctx.from?.id?.toString() ?? chatId;
 			const userName = ctx.from?.first_name?.trim() || undefined;
 			const chatState = chatId ? getChatState(chatId) : null;
+			const docxExtracted = await extractDocxFromFileParts(files);
+			const filesForModel = docxExtracted.files;
+			const combinedExtraContext = [
+				...extraContextParts,
+				...docxExtracted.extraContextParts,
+			].filter(Boolean);
 			const promptText =
-				text || (files.length > 0 ? "Analyze the attached file." : text);
+				text ||
+				(filesForModel.length > 0 || combinedExtraContext.length > 0
+					? "Analyze the attached file."
+					: text);
+			const modelPrompt = combinedExtraContext.length
+				? [promptText, ...combinedExtraContext].join("\n\n")
+				: promptText;
+			if (docxExtracted.skipped.length > 0) {
+				logDebug("docx read skipped", {
+					count: docxExtracted.skipped.length,
+					items: docxExtracted.skipped,
+				});
+			}
 			const generateAgentWithFiles = async (
 				agent: ToolLoopAgent,
 				prompt: string,
@@ -1723,64 +1948,87 @@ export async function createBot(options: CreateBotOptions) {
 							const skippedReads: string[] = [];
 							const readErrors: string[] = [];
 
-							for (const link of pendingRequest.googleLinks) {
-								try {
-									const doc = await readGoogleDoc(link);
-									const truncated = truncateText(doc.text, 8000);
-									extraContextParts.push(
-										`Google ${doc.type} (${link}):\n${truncated}`,
-									);
-								} catch (error) {
-									readErrors.push(`${link} (${String(error)})`);
-								}
-							}
-
-							for (const attachment of pendingRequest.attachments) {
-								try {
-									const downloaded = await downloadAttachment(
-										attachment.id,
-										15_000,
-									);
-									const filename = downloaded.filename ?? attachment.filename;
-									const mimeType =
-										downloaded.contentType ?? attachment.mimeType;
-									sendFiles.push({
-										buffer: downloaded.buffer,
-										filename,
-										mimeType,
-									});
-
-									if (downloaded.buffer.byteLength > ATTACHMENT_MAX_BYTES) {
-										skippedReads.push(filename);
-										continue;
-									}
-									if (
-										isPdfDocument({ mimeType, fileName: filename }) &&
-										downloaded.buffer.byteLength > 0
-									) {
-										fileParts.push(
-											toFilePart({
-												buffer: downloaded.buffer,
-												mediaType: "application/pdf",
-												filename,
-											}),
+							await mapWithConcurrency(
+								pendingRequest.googleLinks,
+								ATTACHMENT_READ_CONCURRENCY,
+								async (link) => {
+									try {
+										const doc = await readGoogleDoc(link);
+										const truncated = truncateText(doc.text, 8000);
+										extraContextParts.push(
+											`Google ${doc.type} (${link}):\n${truncated}`,
 										);
-										continue;
+									} catch (error) {
+										readErrors.push(`${link} (${String(error)})`);
 									}
-									if (isDocxDocument({ mimeType, fileName: filename })) {
-										const text = await convertDocxToText(downloaded.buffer);
-										const truncated = truncateText(text, 8000);
-										extraContextParts.push(`DOCX (${filename}):\n${truncated}`);
+									return null;
+								},
+							);
+
+							await mapWithConcurrency(
+								pendingRequest.attachments,
+								ATTACHMENT_READ_CONCURRENCY,
+								async (attachment) => {
+									try {
+										const downloaded = await downloadAttachment(
+											attachment.id,
+											15_000,
+										);
+										const filename =
+											downloaded.filename ?? attachment.filename;
+										const mimeType =
+											downloaded.contentType ?? attachment.mimeType;
+										sendFiles.push({
+											buffer: downloaded.buffer,
+											filename,
+											mimeType,
+										});
+
+										if (downloaded.buffer.byteLength > ATTACHMENT_MAX_BYTES) {
+											skippedReads.push(filename);
+											return null;
+										}
+										if (
+											isPdfDocument({ mimeType, fileName: filename }) &&
+											downloaded.buffer.byteLength > 0
+										) {
+											fileParts.push(
+												toFilePart({
+													buffer: downloaded.buffer,
+													mediaType: "application/pdf",
+													filename,
+												}),
+											);
+											return null;
+										}
+										if (isDocxDocument({ mimeType, fileName: filename })) {
+											const text = await convertDocxToText(downloaded.buffer);
+											const truncated = truncateText(text, 8000);
+											extraContextParts.push(
+												`DOCX (${filename}):\n${truncated}`,
+											);
+										}
+									} catch (error) {
+										readErrors.push(
+											`${attachment.filename} (${String(error)})`,
+										);
 									}
-								} catch (error) {
-									readErrors.push(`${attachment.filename} (${String(error)})`);
-								}
-							}
+									return null;
+								},
+							);
 
 							const extraContext =
 								extraContextParts.length > 0
 									? extraContextParts.join("\n\n")
 									: undefined;
+							logDebug("attachment decisions", {
+								issueKey: pendingRequest.issueKey,
+								googleLinks: pendingRequest.googleLinks.length,
+								attachments: pendingRequest.attachments.length,
+								readFiles: fileParts.length + extraContextParts.length,
+								skippedReads,
+								readErrors,
+							});
 
 							const modelRefs = [
 								activeModelRef,
@@ -1880,7 +2128,8 @@ export async function createBot(options: CreateBotOptions) {
 				}
 			}
 			cancelFileStatus =
-				!skipFileStatus && files.length > 0
+				!skipFileStatus &&
+				(filesForModel.length > 0 || combinedExtraContext.length > 0)
 					? scheduleDelayedStatus(sendReply, "Обрабатываю файл…", 2000)
 					: null;
 			const allowWebSearch =
@@ -1888,7 +2137,7 @@ export async function createBot(options: CreateBotOptions) {
 					? webSearchEnabled
 					: WEB_SEARCH_ENABLED;
 			const generateAgent = async (agent: ToolLoopAgent) =>
-				generateAgentWithFiles(agent, promptText, files);
+				generateAgentWithFiles(agent, modelPrompt, filesForModel);
 			const historyMessages =
 				memoryId && Number.isFinite(HISTORY_MAX_MESSAGES)
 					? await loadHistoryMessages(
@@ -2070,7 +2319,7 @@ export async function createBot(options: CreateBotOptions) {
 								globalSoul: SOUL_PROMPT,
 								channelSoul: ctx.state.channelConfig?.systemPrompt,
 							});
-							const result = await generateAgent(agent);
+									const result = await generateAgent(agent);
 							cancelProcessing();
 							clearAllStatuses();
 							const replyText = result.text?.trim();
@@ -2315,7 +2564,7 @@ export async function createBot(options: CreateBotOptions) {
 				}
 				try {
 					setLogContext(ctx, { model_ref: ref, model_id: config.id });
-					const plan = await buildOrchestrationPlan(promptText, ctx);
+					const plan = await buildOrchestrationPlan(modelPrompt, ctx);
 					const orchestrationPolicy = resolveOrchestrationPolicy(ctx);
 					let orchestrationSummary = "";
 					if (plan.agents.length > 0) {
@@ -2333,11 +2582,18 @@ export async function createBot(options: CreateBotOptions) {
 							memory: buildMemorySubagentTools(allTools),
 						};
 						const orchestrationResult = await runOrchestration(plan, {
-							prompt: promptText,
+							prompt: modelPrompt,
 							modelId: config.id,
 							toolsByAgent,
 							isGroupChat: isGroupChat(ctx),
 							log: logger.info,
+							promptMode: "minimal",
+							promptContext: {
+								modelRef: ref,
+								modelName: config.label ?? config.id,
+								reasoning: resolveReasoningFor(config),
+								globalSoul: SOUL_PROMPT,
+							},
 							allowAgents: orchestrationPolicy.allowAgents,
 							denyAgents: orchestrationPolicy.denyAgents,
 							budgets: orchestrationPolicy.budgets,
@@ -2354,7 +2610,7 @@ export async function createBot(options: CreateBotOptions) {
 						historyText,
 						orchestrationSummary,
 					);
-					const agent = await createAgent(promptText, ref, config, {
+					const agent = await createAgent(modelPrompt, ref, config, {
 						onCandidates: (candidates) => {
 							if (!chatState) return;
 							chatState.lastCandidates = candidates;
@@ -2488,8 +2744,23 @@ export async function createBot(options: CreateBotOptions) {
 			const memoryId = ctx.from?.id?.toString() ?? chatId;
 			const userName = ctx.from?.first_name?.trim() || undefined;
 			const chatState = chatId ? getChatState(chatId) : null;
+			const docxExtracted = await extractDocxFromFileParts(files);
+			const filesForModel = docxExtracted.files;
+			const combinedExtraContext = docxExtracted.extraContextParts.filter(Boolean);
 			const promptText =
-				text || (files.length > 0 ? "Analyze the attached file." : text);
+				text ||
+				(filesForModel.length > 0 || combinedExtraContext.length > 0
+					? "Analyze the attached file."
+					: text);
+			const modelPrompt = combinedExtraContext.length
+				? [promptText, ...combinedExtraContext].join("\n\n")
+				: promptText;
+			if (docxExtracted.skipped.length > 0) {
+				logDebug("docx read skipped (stream)", {
+					count: docxExtracted.skipped.length,
+					items: docxExtracted.skipped,
+				});
+			}
 			const allowWebSearch =
 				typeof webSearchEnabled === "boolean"
 					? webSearchEnabled
@@ -2576,8 +2847,8 @@ export async function createBot(options: CreateBotOptions) {
 				}
 				return createAgentStreamWithTools(
 					agent,
-					promptText,
-					files,
+					modelPrompt,
+					filesForModel,
 					undefined,
 					abortSignal,
 				);
@@ -2636,8 +2907,8 @@ export async function createBot(options: CreateBotOptions) {
 				}
 				return createAgentStreamWithTools(
 					agent,
-					promptText,
-					files,
+					modelPrompt,
+					filesForModel,
 					undefined,
 					abortSignal,
 				);
@@ -2687,8 +2958,8 @@ export async function createBot(options: CreateBotOptions) {
 				}
 				return createAgentStreamWithTools(
 					agent,
-					promptText,
-					files,
+					modelPrompt,
+					filesForModel,
 					undefined,
 					abortSignal,
 				);
@@ -2738,8 +3009,8 @@ export async function createBot(options: CreateBotOptions) {
 				}
 				return createAgentStreamWithTools(
 					agent,
-					promptText,
-					files,
+					modelPrompt,
+					filesForModel,
 					undefined,
 					abortSignal,
 				);
@@ -2750,7 +3021,7 @@ export async function createBot(options: CreateBotOptions) {
 				return createTextStream("Model not configured.");
 			}
 			setLogContext(ctx, { model_ref: activeModelRef, model_id: config.id });
-			const plan = await buildOrchestrationPlan(promptText, ctx);
+			const plan = await buildOrchestrationPlan(modelPrompt, ctx);
 			const orchestrationPolicy = resolveOrchestrationPolicy(ctx);
 			let orchestrationSummary = "";
 			if (plan.agents.length > 0) {
@@ -2768,11 +3039,18 @@ export async function createBot(options: CreateBotOptions) {
 					memory: buildMemorySubagentTools(allTools),
 				};
 				const orchestrationResult = await runOrchestration(plan, {
-					prompt: promptText,
+					prompt: modelPrompt,
 					modelId: config.id,
 					toolsByAgent,
 					isGroupChat: isGroupChat(ctx),
 					log: logger.info,
+					promptMode: "minimal",
+					promptContext: {
+						modelRef: activeModelRef,
+						modelName: config.label ?? config.id,
+						reasoning: resolveReasoningFor(config),
+						globalSoul: SOUL_PROMPT,
+					},
 					allowAgents: orchestrationPolicy.allowAgents,
 					denyAgents: orchestrationPolicy.denyAgents,
 					budgets: orchestrationPolicy.budgets,
@@ -2788,7 +3066,7 @@ export async function createBot(options: CreateBotOptions) {
 				historyText,
 				orchestrationSummary,
 			);
-			const agent = await createAgent(promptText, activeModelRef, config, {
+			const agent = await createAgent(modelPrompt, activeModelRef, config, {
 				onCandidates: (candidates) => {
 					if (!chatState) return;
 					chatState.lastCandidates = candidates;
@@ -2811,8 +3089,8 @@ export async function createBot(options: CreateBotOptions) {
 			}
 			return createAgentStreamWithTools(
 				agent,
-				promptText,
-				files,
+				modelPrompt,
+				filesForModel,
 				undefined,
 				abortSignal,
 			);
@@ -2859,5 +3137,114 @@ export async function createBot(options: CreateBotOptions) {
 
 	const allowedUpdates = [...API_CONSTANTS.DEFAULT_UPDATE_TYPES];
 
-	return { bot, allowedUpdates, runLocalChat, runLocalChatStream };
+	async function buildPromptReport(params?: {
+		chatId?: string;
+		channelConfig?: {
+			systemPrompt?: string;
+			requireMention?: boolean;
+			allowUserIds?: string[];
+			skillsAllowlist?: string[];
+			skillsDenylist?: string[];
+		};
+		question?: string;
+		promptMode?: "full" | "minimal" | "none";
+	}) {
+		const question = params?.question ?? "Prompt report";
+		const modelRef = activeModelRef;
+		const modelConfig = activeModelConfig;
+		const allowWebSearch = WEB_SEARCH_ENABLED;
+		const webSearchMeta = {
+			name: "web_search",
+			description:
+				"Search the web for up-to-date information (OpenAI web_search).",
+			source: "web",
+			origin: "openai",
+		} as const;
+		const baseTools = AGENT_TOOL_LIST;
+		const filteredTools = allowWebSearch
+			? baseTools.some((tool) => tool.name === "web_search")
+				? baseTools
+				: [...baseTools, webSearchMeta]
+			: baseTools.filter((tool) => tool.name !== "web_search");
+		const toolLines = filteredTools
+			.map((toolItem) => {
+				const desc = toolItem.description ? ` - ${toolItem.description}` : "";
+				return `${toolItem.name}${desc}`;
+			})
+			.join("\n");
+		const timeZone = await resolveChatTimezone(undefined, params?.chatId);
+		const currentDateTime = timeZone
+			? `${formatUserDateTime(new Date(), timeZone)} (${timeZone})`
+			: "";
+		const runtimeLine = [
+			SERVICE_NAME ? `service=${SERVICE_NAME}` : "",
+			RELEASE_VERSION ? `version=${RELEASE_VERSION}` : "",
+			REGION ? `region=${REGION}` : "",
+			INSTANCE_ID ? `instance=${INSTANCE_ID}` : "",
+			modelConfig.label ? `model=${modelConfig.label}` : "",
+			modelRef ? `ref=${modelRef}` : "",
+			"channel=telegram",
+		]
+			.filter(Boolean)
+			.join(" | ");
+		const channelConfig = params?.channelConfig;
+		const normalizedChannelConfig = channelConfig
+			? {
+					id: "prompt-report",
+					enabled: true,
+					...channelConfig,
+				}
+			: undefined;
+		const skillsForChannel = filterSkillsForChannel({
+			skills: runtimeSkills,
+			channelConfig: normalizedChannelConfig,
+		});
+		const skillsPrompt = buildSkillsPrompt(skillsForChannel);
+		const prompt = buildAgentInstructions({
+			question,
+			modelRef,
+			modelName: modelConfig.label ?? modelConfig.id,
+			reasoning: resolveReasoningFor(modelConfig),
+			toolLines,
+			globalSoul: SOUL_PROMPT,
+			channelSoul: channelConfig?.systemPrompt,
+			projectContext: PROJECT_CONTEXT,
+			currentDateTime,
+			runtimeLine,
+			skillsPrompt,
+			promptMode: params?.promptMode ?? "full",
+		});
+		const projectContextFiles = (PROJECT_CONTEXT ?? []).map((entry) => ({
+			path: entry.path,
+			chars: entry.content.length,
+		}));
+		const projectContextChars = projectContextFiles.reduce(
+			(sum, file) => sum + file.chars,
+			0,
+		);
+		return {
+			generatedAt: Date.now(),
+			model: {
+				ref: modelRef,
+				id: modelConfig.id,
+				label: modelConfig.label ?? modelConfig.id,
+				reasoning: resolveReasoningFor(modelConfig),
+			},
+			promptMode: params?.promptMode ?? "full",
+			timeZone: timeZone ?? "",
+			currentDateTime,
+			runtimeLine,
+			sizes: {
+				totalChars: prompt.length,
+				toolLinesChars: toolLines.length,
+				toolCount: filteredTools.length,
+				skillsPromptChars: skillsPrompt.length,
+				projectContextChars,
+				soulChars: SOUL_PROMPT.length,
+			},
+			projectContextFiles,
+		};
+	}
+
+	return { bot, allowedUpdates, runLocalChat, runLocalChatStream, buildPromptReport };
 }

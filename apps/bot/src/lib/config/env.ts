@@ -19,6 +19,7 @@ export type BotEnvConfig = {
 	GEMINI_API_KEY?: string;
 	OPENAI_MODEL: string;
 	SOUL_PROMPT: string;
+	PROJECT_CONTEXT: Array<{ path: string; content: string }>;
 	ALLOWED_TG_IDS: string;
 	CRON_STATUS_TIMEZONE: string;
 	DEFAULT_TRACKER_QUEUE: string;
@@ -40,6 +41,7 @@ export type BotEnvConfig = {
 	IMAGE_MAX_BYTES: number;
 	DOCUMENT_MAX_BYTES: number;
 	ATTACHMENT_MAX_BYTES: number;
+	GEMINI_IMAGE_SIZE: string;
 	WEB_SEARCH_ENABLED: boolean;
 	WEB_SEARCH_CONTEXT_SIZE: string;
 	TOOL_RATE_LIMITS: string;
@@ -68,6 +70,22 @@ export type BotEnvConfig = {
 	INSTANCE_ID?: string;
 };
 
+function parseProjectContext(raw?: string) {
+	if (!raw) return [];
+	try {
+		const parsed = JSON.parse(raw) as Array<{ path?: unknown; content?: unknown }>;
+		if (!Array.isArray(parsed)) return [];
+		return parsed
+			.map((entry) => ({
+				path: typeof entry?.path === "string" ? entry.path : "",
+				content: typeof entry?.content === "string" ? entry.content : "",
+			}))
+			.filter((entry) => entry.path && entry.content);
+	} catch {
+		return [];
+	}
+}
+
 export function loadBotEnv(env: BotEnv): BotEnvConfig {
 	const BOT_TOKEN = env.BOT_TOKEN;
 	const TRACKER_TOKEN = env.TRACKER_TOKEN;
@@ -91,8 +109,9 @@ export function loadBotEnv(env: BotEnv): BotEnvConfig {
 		env.GOOGLE_API_KEY;
 	const OPENAI_MODEL = env.OPENAI_MODEL ?? "";
 	const SOUL_PROMPT = env.SOUL_PROMPT ?? "";
+	const PROJECT_CONTEXT = parseProjectContext(env.PROJECT_CONTEXT);
 	const ALLOWED_TG_IDS = env.ALLOWED_TG_IDS ?? "";
-	const CRON_STATUS_TIMEZONE = env.CRON_STATUS_TIMEZONE ?? "UTC";
+	const CRON_STATUS_TIMEZONE = env.CRON_STATUS_TIMEZONE ?? "Europe/Moscow";
 	const DEFAULT_TRACKER_QUEUE = env.DEFAULT_TRACKER_QUEUE ?? "PROJ";
 	const DEFAULT_ISSUE_PREFIX =
 		env.DEFAULT_ISSUE_PREFIX ?? DEFAULT_TRACKER_QUEUE;
@@ -142,6 +161,7 @@ export function loadBotEnv(env: BotEnv): BotEnvConfig {
 		env.ATTACHMENT_MAX_BYTES ?? "8000000",
 		10,
 	);
+	const GEMINI_IMAGE_SIZE = env.GEMINI_IMAGE_SIZE ?? "1K";
 	const WEB_SEARCH_ENABLED = env.WEB_SEARCH_ENABLED === "1";
 	const WEB_SEARCH_CONTEXT_SIZE = env.WEB_SEARCH_CONTEXT_SIZE ?? "low";
 	const TOOL_RATE_LIMITS = env.TOOL_RATE_LIMITS ?? "";
@@ -210,6 +230,7 @@ export function loadBotEnv(env: BotEnv): BotEnvConfig {
 		GEMINI_API_KEY,
 		OPENAI_MODEL,
 		SOUL_PROMPT,
+		PROJECT_CONTEXT,
 		ALLOWED_TG_IDS,
 		CRON_STATUS_TIMEZONE,
 		DEFAULT_TRACKER_QUEUE,
@@ -231,6 +252,7 @@ export function loadBotEnv(env: BotEnv): BotEnvConfig {
 		IMAGE_MAX_BYTES,
 		DOCUMENT_MAX_BYTES,
 		ATTACHMENT_MAX_BYTES,
+		GEMINI_IMAGE_SIZE,
 		WEB_SEARCH_ENABLED,
 		WEB_SEARCH_CONTEXT_SIZE,
 		TOOL_RATE_LIMITS,

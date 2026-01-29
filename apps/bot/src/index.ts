@@ -12,6 +12,8 @@ const runtimeSkills = await loadSkills();
 
 const DEBUG_LOG_FILE = process.env.DEBUG_LOG_FILE ?? "";
 const SOUL_FILE_PATH = path.resolve("config/SOUL.md");
+const PROJECT_CONTEXT_ENV = process.env.PROJECT_CONTEXT;
+const PROJECT_CONTEXT_FILES = ["AGENTS.md", "config/SOUL.md"];
 
 try {
 	const soul = fs.readFileSync(SOUL_FILE_PATH, "utf8").trim();
@@ -20,6 +22,23 @@ try {
 	}
 } catch {
 	// ignore missing SOUL.md in local dev
+}
+
+if (!PROJECT_CONTEXT_ENV) {
+	const entries: Array<{ path: string; content: string }> = [];
+	for (const filePath of PROJECT_CONTEXT_FILES) {
+		try {
+			const content = fs.readFileSync(path.resolve(filePath), "utf8").trim();
+			if (content) {
+				entries.push({ path: filePath, content });
+			}
+		} catch {
+			// ignore missing context files in local dev
+		}
+	}
+	if (entries.length > 0) {
+		process.env.PROJECT_CONTEXT = JSON.stringify(entries);
+	}
 }
 
 function createDebugAppender(filePath: string) {
@@ -38,12 +57,30 @@ function createDebugAppender(filePath: string) {
 
 const onDebugLog = createDebugAppender(DEBUG_LOG_FILE);
 
+const localSessions = new Map<string, { timeZone?: string }>();
+const sessionClient = {
+	get: async ({ key }: { key: string }) => {
+		return { entry: localSessions.get(key) };
+	},
+	patch: async ({ key, timeZone }: { key: string; timeZone?: string | null }) => {
+		const entry = localSessions.get(key) ?? {};
+		if (timeZone == null) {
+			delete entry.timeZone;
+		} else {
+			entry.timeZone = timeZone;
+		}
+		localSessions.set(key, entry);
+		return { ok: true, entry };
+	},
+};
+
 const { bot, allowedUpdates } = await createBot({
 	env: process.env,
 	modelsConfig,
 	runtimeSkills,
 	getUptimeSeconds: () => process.uptime(),
 	onDebugLog,
+	sessionClient,
 });
 
 process.once("SIGINT", () => {

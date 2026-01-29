@@ -7,6 +7,7 @@ import type { ApprovalStore } from "../tools/approvals.js";
 import type { ToolPolicy } from "../tools/policy.js";
 import type { ToolConflict, ToolMeta } from "../tools/registry.js";
 import type { BotContext, LogContext } from "./types.js";
+import { findCronJob, formatCronJob } from "./cron.js";
 
 type CommandDeps = {
 	bot: Bot<BotContext>;
@@ -91,10 +92,26 @@ type CommandDeps = {
 	posthogEnabled?: boolean;
 	webSearchEnabled?: boolean;
 	memoryEnabled?: boolean;
+	cronClient?: {
+		list: (params?: { includeDisabled?: boolean }) => Promise<{ jobs?: unknown[] }>;
+		add: (params: Record<string, unknown>) => Promise<unknown>;
+		remove: (params: { jobId: string }) => Promise<unknown>;
+		run: (params: { jobId: string; mode?: "due" | "force" }) => Promise<unknown>;
+		update: (params: {
+			id?: string;
+			jobId?: string;
+			patch: Record<string, unknown>;
+		}) => Promise<unknown>;
+		runs: (params: { id?: string; jobId?: string; limit?: number }) => Promise<unknown>;
+		status: () => Promise<unknown>;
+	};
+	defaultCronTimezone: string;
+	getChatTimezoneOverride: (ctx: BotContext) => Promise<string | undefined>;
+	setChatTimezone: (ctx: BotContext, timeZone: string | null) => Promise<boolean>;
 };
 
 export function registerCommands(deps: CommandDeps) {
-	const HELP_STATUS_CMD_RE = regex("^cmd:(help|status)$");
+	const HELP_STATUS_CMD_RE = regex("^cmd:(help|commands|status)$");
 	const {
 		bot,
 		startGreeting,
@@ -142,6 +159,10 @@ export function registerCommands(deps: CommandDeps) {
 		posthogEnabled,
 		webSearchEnabled,
 		memoryEnabled,
+		cronClient,
+		defaultCronTimezone,
+		getChatTimezoneOverride,
+		setChatTimezone,
 	} = deps;
 
 	bot.command("start", (ctx) => {
@@ -158,21 +179,48 @@ export function registerCommands(deps: CommandDeps) {
 	}) {
 		await sendText(
 			ctx,
+			"Я Omni — помогаю с задачами, аналитикой и поиском.\n\n" +
+				"Умею:\n" +
+				"— отчеты и напоминания по расписанию\n" +
+				"— Jira / Yandex Tracker\n" +
+				"— PostHog аналитика\n" +
+				"— поиск в интернете\n\n" +
+				"Примеры:\n" +
+				'"Сделай ежедневный отчет по PostHog в 11:00"\n' +
+				'"Проверь статус PROJ-1234 в Tracker"\n' +
+				'"Есть ли блокеры в текущем спринте Jira?"\n' +
+				'"Найди ближайшие HR-конференции в РФ"',
+		);
+	}
+
+	async function handleCommands(ctx: {
+		reply: (text: string) => Promise<unknown>;
+	}) {
+		await sendText(
+			ctx,
 			"Команды:\n" +
 				"— /start — начать сначала\n" +
 				"— /status — проверить работу бота\n" +
-				"— /help — эта справка\n\n" +
-				"Просто спросите, например:\n" +
-				'"Какой статус у PROJ-1234? в Yandex Tracker"\n' +
-				'"Дай топ-5 компаний активных в чатботах из Posthog?"\n' +
-				'"Есть ли блокеры в текущем спринте в Jira?"\n' +
-				'"Найди в интернете ближайшие HR-конференции в РФ"',
+				"— /cron — управление расписаниями\n" +
+				"— /timezone — установить или посмотреть часовой пояс\n" +
+				"— /help — описание возможностей\n\n" +
+				"Примеры cron:\n" +
+				"— /cron list\n" +
+				"— /cron run <id|name>\n" +
+				"— /cron stop <id|name>\n" +
+				"— /cron edit <id|name> every 60\n" +
+				"— /cron edit <id|name> cron 0 11 * * * Europe/Moscow",
 		);
 	}
 
 	bot.command("help", (ctx) => {
 		setLogContext(ctx, { command: "/help", message_type: "command" });
 		return handleHelp(ctx);
+	});
+
+	bot.command("commands", (ctx) => {
+		setLogContext(ctx, { command: "/commands", message_type: "command" });
+		return handleCommands(ctx);
 	});
 
 	async function handleTools(ctx: {
@@ -461,6 +509,315 @@ export function registerCommands(deps: CommandDeps) {
 		}
 	});
 
+	function shouldBlockCommand(ctx: BotContext) {
+		if (
+			isGroupChat(ctx) &&
+			shouldRequireMentionForChannel({
+				channelConfig: ctx.state.channelConfig,
+				defaultRequireMention: TELEGRAM_GROUP_REQUIRE_MENTION,
+			})
+		) {
+			const allowReply = isReplyToBotWithoutMention(ctx);
+			if (!allowReply && !isBotMentioned(ctx)) {
+				setLogContext(ctx, { outcome: "blocked", status_code: 403 });
+				return true;
+			}
+		}
+		return false;
+	}
+
+	type CronResolution =
+		| {
+				id: string;
+				job?: unknown;
+				error?: undefined;
+		  }
+		| {
+				error: "cron_not_configured" | "not_found" | "ambiguous";
+				id?: undefined;
+				job?: undefined;
+		  };
+
+	async function resolveCronJobTarget(target: string): Promise<CronResolution> {
+		if (!cronClient) return { error: "cron_not_configured" };
+		const payload = await cronClient.list({ includeDisabled: true });
+		const jobs = Array.isArray(payload?.jobs) ? payload.jobs : [];
+		const matches = findCronJob(jobs, target);
+		if (matches.length === 0) return { error: "not_found" };
+		if (matches.length > 1) return { error: "ambiguous" };
+		const job = matches[0] as { id?: string };
+		return { id: job.id ?? target, job };
+	}
+
+	bot.command("timezone", async (ctx) => {
+		setLogContext(ctx, { command: "/timezone", message_type: "command" });
+		if (shouldBlockCommand(ctx)) return;
+		if (!setChatTimezone) {
+			await sendText(ctx, "Timezone storage is not configured.");
+			return;
+		}
+		const text = ctx.message?.text ?? "";
+		const parts = text.split(" ");
+		const raw = parts.slice(1).join(" ").trim();
+		if (!raw) {
+			const override = await getChatTimezoneOverride(ctx);
+			const value = override ?? defaultCronTimezone;
+			const suffix = override ? " (custom)" : " (default)";
+			await sendText(ctx, `Timezone: ${value}${suffix}`);
+			return;
+		}
+		if (raw === "reset" || raw === "default") {
+			const ok = await setChatTimezone(ctx, null);
+			await sendText(
+				ctx,
+				ok ? `Timezone reset to default (${defaultCronTimezone}).` : "Failed to reset timezone.",
+			);
+			return;
+		}
+		const ok = await setChatTimezone(ctx, raw);
+		await sendText(
+			ctx,
+			ok ? `Timezone set to ${raw}.` : "Failed to set timezone.",
+		);
+	});
+
+	bot.command("cron", async (ctx) => {
+		setLogContext(ctx, { command: "/cron", message_type: "command" });
+		if (shouldBlockCommand(ctx)) return;
+		if (!cronClient) {
+			await sendText(ctx, "Cron is not configured.");
+			return;
+		}
+		const text = ctx.message?.text ?? "";
+		const parts = text.split(" ");
+		const sub = parts[1]?.trim().toLowerCase() ?? "";
+		const rest = parts.slice(2).join(" ").trim();
+
+		if (!sub || sub === "help") {
+			await sendText(
+				ctx,
+				"Использование:\n" +
+					"/cron list\n" +
+					"/cron status [id|name]\n" +
+					"/cron runs <id|name>\n" +
+					"/cron run <id|name>\n" +
+					"/cron stop <id|name>\n" +
+					"/cron start <id|name>\n" +
+					"/cron remove <id|name>\n" +
+					"/cron edit <id|name> cron <expr> [tz]\n" +
+					"/cron edit <id|name> every <minutes>",
+			);
+			return;
+		}
+
+		if (sub === "list") {
+			const payload = await cronClient.list({ includeDisabled: true });
+			const jobs = Array.isArray(payload?.jobs) ? payload.jobs : [];
+			if (jobs.length === 0) {
+				await sendText(ctx, "No cron jobs.");
+				return;
+			}
+			const lines = jobs.map((job) => formatCronJob(job));
+			await sendText(ctx, lines.join("\n"));
+			return;
+		}
+
+		if (sub === "status") {
+			if (!rest) {
+				const status = await cronClient.status();
+				await sendText(ctx, JSON.stringify(status, null, 2));
+				return;
+			}
+			const resolved = await resolveCronJobTarget(rest);
+			if (resolved.error === "not_found") {
+				await sendText(ctx, `No job found for ${rest}.`);
+				return;
+			}
+			if (resolved.error === "ambiguous") {
+				await sendText(ctx, "Multiple matches found. Please specify a job id.");
+				return;
+			}
+			if (resolved.error) {
+				await sendText(ctx, "Cron is not configured.");
+				return;
+			}
+			await sendText(ctx, formatCronJob(resolved.job));
+			return;
+		}
+
+		if (sub === "runs") {
+			if (!rest) {
+				await sendText(ctx, "Usage: /cron runs <id|name>");
+				return;
+			}
+			const resolved = await resolveCronJobTarget(rest);
+			if (resolved.error === "not_found") {
+				await sendText(ctx, `No job found for ${rest}.`);
+				return;
+			}
+			if (resolved.error === "ambiguous") {
+				await sendText(ctx, "Multiple matches found. Please specify a job id.");
+				return;
+			}
+			if (resolved.error) {
+				await sendText(ctx, "Cron is not configured.");
+				return;
+			}
+			const runs = await cronClient.runs({ id: resolved.id, limit: 10 });
+			await sendText(ctx, JSON.stringify(runs, null, 2));
+			return;
+		}
+
+		if (sub === "run") {
+			if (!rest) {
+				await sendText(ctx, "Usage: /cron run <id|name>");
+				return;
+			}
+			const resolved = await resolveCronJobTarget(rest);
+			if (resolved.error === "not_found") {
+				await sendText(ctx, `No job found for ${rest}.`);
+				return;
+			}
+			if (resolved.error === "ambiguous") {
+				await sendText(ctx, "Multiple matches found. Please specify a job id.");
+				return;
+			}
+			if (resolved.error) {
+				await sendText(ctx, "Cron is not configured.");
+				return;
+			}
+			await cronClient.run({ jobId: resolved.id, mode: "force" });
+			await sendText(ctx, `Triggered ${resolved.id}.`);
+			return;
+		}
+
+		if (sub === "stop" || sub === "start" || sub === "enable" || sub === "disable") {
+			if (!rest) {
+				await sendText(ctx, `Usage: /cron ${sub} <id|name>`);
+				return;
+			}
+			const resolved = await resolveCronJobTarget(rest);
+			if (resolved.error === "not_found") {
+				await sendText(ctx, `No job found for ${rest}.`);
+				return;
+			}
+			if (resolved.error === "ambiguous") {
+				await sendText(ctx, "Multiple matches found. Please specify a job id.");
+				return;
+			}
+			if (resolved.error) {
+				await sendText(ctx, "Cron is not configured.");
+				return;
+			}
+			const enabled = sub === "start" || sub === "enable";
+			const updated = await cronClient.update({
+				id: resolved.id,
+				patch: { enabled },
+			});
+			await sendText(
+				ctx,
+				updated ? `Updated: ${formatCronJob(updated)}` : "Updated.",
+			);
+			return;
+		}
+
+		if (sub === "remove" || sub === "delete") {
+			if (!rest) {
+				await sendText(ctx, `Usage: /cron ${sub} <id|name>`);
+				return;
+			}
+			const resolved = await resolveCronJobTarget(rest);
+			if (resolved.error === "not_found") {
+				await sendText(ctx, `No job found for ${rest}.`);
+				return;
+			}
+			if (resolved.error === "ambiguous") {
+				await sendText(ctx, "Multiple matches found. Please specify a job id.");
+				return;
+			}
+			if (resolved.error) {
+				await sendText(ctx, "Cron is not configured.");
+				return;
+			}
+			await cronClient.remove({ jobId: resolved.id });
+			await sendText(ctx, `Removed ${resolved.id}.`);
+			return;
+		}
+
+		if (sub === "edit") {
+			const editParts = rest.split(" ");
+			const target = editParts.shift()?.trim() ?? "";
+			const mode = editParts.shift()?.trim()?.toLowerCase() ?? "";
+			if (!target || !mode) {
+				await sendText(
+					ctx,
+					"Usage: /cron edit <id|name> cron <expr> [tz] | /cron edit <id|name> every <minutes>",
+				);
+				return;
+			}
+			const resolved = await resolveCronJobTarget(target);
+			if (resolved.error === "not_found") {
+				await sendText(ctx, `No job found for ${target}.`);
+				return;
+			}
+			if (resolved.error === "ambiguous") {
+				await sendText(ctx, "Multiple matches found. Please specify a job id.");
+				return;
+			}
+			if (resolved.error) {
+				await sendText(ctx, "Cron is not configured.");
+				return;
+			}
+			if (mode === "every") {
+				const minutesRaw = editParts[0] ?? "";
+				const minutes = Number.parseInt(minutesRaw, 10);
+				if (!Number.isFinite(minutes) || minutes <= 0) {
+					await sendText(ctx, "Invalid minutes for every cadence.");
+					return;
+				}
+				const updated = await cronClient.update({
+					id: resolved.id,
+					patch: { schedule: { kind: "every", everyMs: minutes * 60_000 } },
+				});
+				await sendText(
+					ctx,
+					updated ? `Updated: ${formatCronJob(updated)}` : "Updated.",
+				);
+				return;
+			}
+			if (mode === "cron") {
+				const tz = editParts[editParts.length - 1];
+				const expr =
+					editParts.length > 1
+						? editParts.slice(0, -1).join(" ")
+						: editParts.join(" ");
+				if (!expr.trim()) {
+					await sendText(ctx, "Missing cron expression.");
+					return;
+				}
+				const updated = await cronClient.update({
+					id: resolved.id,
+					patch: {
+						schedule: {
+							kind: "cron",
+							expr: expr.trim(),
+							tz: tz?.includes("/") ? tz : undefined,
+						},
+					},
+				});
+				await sendText(
+					ctx,
+					updated ? `Updated: ${formatCronJob(updated)}` : "Updated.",
+				);
+				return;
+			}
+			await sendText(ctx, "Unknown edit mode. Use 'cron' or 'every'.");
+			return;
+		}
+
+		await sendText(ctx, "Unknown /cron subcommand. Use /cron help.");
+	});
+
 	async function handleStatus(ctx: {
 		reply: (text: string) => Promise<unknown>;
 	}) {
@@ -499,79 +856,6 @@ export function registerCommands(deps: CommandDeps) {
 		);
 	});
 
-	const yandexTrackerTools = new Set(
-		runtimeSkills
-			.map((skill) => {
-				const ref = resolveToolRef(skill.tool);
-				if (ref.server !== "yandex-tracker") return null;
-				const normalized = normalizeToolName(ref.tool ?? "");
-				return normalized || null;
-			})
-			.filter((value): value is string => Boolean(value)),
-	);
-
-	bot.command("yandex-tracker", async (ctx) => {
-		setLogContext(ctx, {
-			command: "/yandex-tracker",
-			message_type: "command",
-		});
-		if (
-			isGroupChat(ctx) &&
-			shouldRequireMentionForChannel({
-				channelConfig: ctx.state.channelConfig,
-				defaultRequireMention: TELEGRAM_GROUP_REQUIRE_MENTION,
-			})
-		) {
-			const allowReply = isReplyToBotWithoutMention(ctx);
-			if (!allowReply && !isBotMentioned(ctx)) {
-				setLogContext(ctx, { outcome: "blocked", status_code: 403 });
-				return;
-			}
-		}
-		const text = ctx.message?.text ?? "";
-		const [, toolName, ...rest] = text.split(" ");
-		if (!toolName) {
-			await sendText(ctx, "Использование: /yandex-tracker <tool> <json>");
-			return;
-		}
-		const normalizedTool = normalizeToolName(toolName);
-		setLogContext(ctx, { tool: normalizedTool });
-		if (
-			yandexTrackerTools.size > 0 &&
-			!yandexTrackerTools.has(normalizedTool)
-		) {
-			await sendText(
-				ctx,
-				`Неподдерживаемый инструмент: ${toolName}. Используйте: ${Array.from(
-					yandexTrackerTools,
-				).join(", ")}`,
-			);
-			return;
-		}
-
-		const rawArgs = rest.join(" ").trim();
-		let args: Record<string, unknown> = {};
-		if (rawArgs) {
-			try {
-				args = JSON.parse(rawArgs) as Record<string, unknown>;
-			} catch (error) {
-				await sendText(ctx, `Некорректный JSON: ${String(error)}`);
-				return;
-			}
-		}
-
-		try {
-			const result = await trackerCallTool(normalizedTool, args, 8_000, ctx);
-			const text = formatToolResult(result);
-			if (text) {
-				await sendText(ctx, text);
-				return;
-			}
-			await sendText(ctx, "Инструмент выполнился, но не вернул текст.");
-		} catch (error) {
-			await sendText(ctx, `Ошибка вызова инструмента: ${String(error)}`);
-		}
-	});
 
 	async function safeAnswerCallback(ctx: {
 		answerCallbackQuery: () => Promise<unknown>;
@@ -606,6 +890,12 @@ export function registerCommands(deps: CommandDeps) {
 		if (command === "help") {
 			setLogContext(ctx, { command: "cmd:help" });
 			await handleHelp(ctx);
+			await refreshInlineKeyboard(ctx);
+			return;
+		}
+		if (command === "commands") {
+			setLogContext(ctx, { command: "cmd:commands" });
+			await handleCommands(ctx);
 			await refreshInlineKeyboard(ctx);
 			return;
 		}
