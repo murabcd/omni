@@ -44,7 +44,7 @@ export function buildAgentInstructions(
 						`${item.key} — ${item.summary || "(no summary)"}`.trim(),
 					),
 				"",
-				"Rule: If the user refers to these candidates, do NOT run tracker_search again.",
+				"Rule: If the user refers to these candidates, do NOT run yandex_tracker_search again.",
 				"Instead, use issue_get and issue_get_comments for the candidate keys.",
 				"",
 			].join("\n")
@@ -59,9 +59,9 @@ export function buildAgentInstructions(
 		"- Always include required params for each tool.",
 	];
 
-	if (options.toolLines.includes("tracker_search")) {
+	if (options.toolLines.includes("yandex_tracker_search")) {
 		toolSections.push(
-			"- Use `tracker_search` for Yandex Tracker keyword queries, `issue_get` for specific issues.",
+			"- Use `yandex_tracker_search` for Yandex Tracker keyword queries, `issue_get` for specific issues.",
 			"- If search returns ambiguous=true with candidates, ask the user to pick the correct issue key (list up to 3).",
 		);
 	}
@@ -102,6 +102,12 @@ export function buildAgentInstructions(
 	if (options.toolLines.includes("google_public_doc_read")) {
 		toolSections.push(
 			"- Use `google_public_doc_read`/`google_public_sheet_read` for publicly shared Google Docs/Sheets links (no OAuth).",
+		);
+	}
+
+	if (options.toolLines.includes("gemini_image_generate")) {
+		toolSections.push(
+			"- Use `gemini_image_generate` to create images from a text prompt. If the tool returns images, include a brief caption and mention the image is in the tool output.",
 		);
 	}
 
@@ -151,6 +157,7 @@ export type IssueInstructionOptions = {
 	issueKey: string;
 	issueText: string;
 	commentsText: string;
+	extraContext?: string;
 	userName?: string;
 	globalSoul?: string;
 	channelSoul?: string;
@@ -174,6 +181,8 @@ export function buildIssueAgentInstructions(
 		options.issueText || "(empty)",
 		"Comments (issue_get_comments):",
 		options.commentsText || "(empty)",
+		options.extraContext ? "Additional context:" : "",
+		options.extraContext ? options.extraContext : "",
 		"Rules:",
 		"- Use the provided issue data and comments to answer.",
 		"- Do not ask for issue_id; it is already provided.",
