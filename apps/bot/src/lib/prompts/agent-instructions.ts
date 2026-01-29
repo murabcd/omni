@@ -13,6 +13,11 @@ export type AgentInstructionOptions = {
 	systemPrompt?: string;
 	globalSoul?: string;
 	channelSoul?: string;
+	projectContext?: Array<{ path: string; content: string }>;
+	currentDateTime?: string;
+	runtimeLine?: string;
+	skillsPrompt?: string;
+	promptMode?: "full" | "minimal" | "none";
 };
 
 function buildSoulBlock(params: {
@@ -35,6 +40,7 @@ function buildSoulBlock(params: {
 export function buildAgentInstructions(
 	options: AgentInstructionOptions,
 ): string {
+	const promptMode = options.promptMode ?? "full";
 	const recentBlock = options.recentCandidates?.length
 		? [
 				"Recent candidates (most relevant first):",
@@ -51,6 +57,40 @@ export function buildAgentInstructions(
 		: "";
 
 	const soulBlock = buildSoulBlock(options);
+	const projectContext = (options.projectContext ?? [])
+		.map((entry) => ({
+			path: entry.path?.trim() ?? "",
+			content: entry.content?.trim() ?? "",
+		}))
+		.filter((entry) => entry.path && entry.content);
+	const projectContextBlock = projectContext.length
+		? [
+				"# Project Context",
+				"These files are injected to provide identity and workspace context.",
+				"",
+				...projectContext.flatMap((entry) => [
+					`## ${entry.path}`,
+					"",
+					entry.content,
+					"",
+				]),
+			].join("\n")
+		: "";
+	const skillsPrompt = options.skillsPrompt?.trim();
+	const skillsBlock = skillsPrompt
+		? [
+				"Skills (reference):",
+				"Use the appropriate tools based on these skill areas.",
+				skillsPrompt,
+				"",
+			].join("\n")
+		: "";
+	const timeBlock = options.currentDateTime?.trim()
+		? ["Current Date & Time:", options.currentDateTime.trim(), ""].join("\n")
+		: "";
+	const runtimeBlock = options.runtimeLine?.trim()
+		? ["Runtime:", options.runtimeLine.trim(), ""].join("\n")
+		: "";
 
 	const toolSections: string[] = [
 		"Tool Use:",
@@ -126,8 +166,29 @@ export function buildAgentInstructions(
 		options.toolLines.includes("cron_list")
 	) {
 		toolSections.push(
-			"- Use cron tools to schedule recurring reports or reminders.",
+			"- Use cron tools to schedule recurring reports or reminders. Ask for missing cadence/time/timezone; default timezone is Europe/Moscow, but confirm if user mentions a different location/timezone.",
 		);
+	}
+
+	if (promptMode === "none") {
+		return `User: ${options.question}`;
+	}
+
+	if (promptMode === "minimal") {
+		return [
+			buildSystemPrompt({
+				modelRef: options.modelRef,
+				modelName: options.modelName,
+				reasoning: options.reasoning,
+			}),
+			soulBlock ? `\n${soulBlock}` : "",
+			...toolSections,
+			"",
+			"Available tools:",
+			options.toolLines || "(none)",
+			"",
+			`User: ${options.question}`,
+		].join("\n");
 	}
 
 	return [
@@ -142,6 +203,10 @@ export function buildAgentInstructions(
 		"Available tools:",
 		options.toolLines || "(none)",
 		"",
+		skillsBlock,
+		timeBlock,
+		runtimeBlock,
+		projectContextBlock,
 		options.history ?? "",
 		options.userName ? `User name: ${options.userName}` : "",
 		recentBlock,
