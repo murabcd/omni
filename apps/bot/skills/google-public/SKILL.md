@@ -5,7 +5,7 @@ description: Public Google Docs/Sheets tools (no OAuth).
 
 # google-public
 
-Tools for reading publicly shared Google Docs/Sheets by link.
+Tools for reading publicly shared Google Docs/Sheets/Slides by link.
 
 Quick start
 - Telegram: `/skill <name> <json>`
@@ -21,3 +21,6 @@ Docs
 
 Sheets
 - `google_public_sheet_read`
+
+Slides
+- `google_public_slides_read`
