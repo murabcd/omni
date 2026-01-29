@@ -3,7 +3,6 @@ import { createTelegramHelpers } from "../src/lib/bot/telegram.js";
 
 describe("createTelegramHelpers sendText retries", () => {
 	it("retries transient sendMessage failures", async () => {
-		vi.useFakeTimers();
 		const logDebug = vi.fn();
 		const { sendText } = createTelegramHelpers({
 			textChunkLimit: 4000,
@@ -20,9 +19,18 @@ describe("createTelegramHelpers sendText retries", () => {
 			}),
 		};
 
-		const promise = sendText(ctx, "hello");
-		vi.runAllTimers();
-		await promise;
+		const setTimeoutSpy = vi
+			.spyOn(globalThis, "setTimeout")
+			.mockImplementation((handler) => {
+				if (typeof handler === "function") handler();
+				return 0 as unknown as ReturnType<typeof setTimeout>;
+			});
+
+		try {
+			await sendText(ctx, "hello");
+		} finally {
+			setTimeoutSpy.mockRestore();
+		}
 
 		expect(ctx.reply).toHaveBeenCalledTimes(3);
 		expect(logDebug).toHaveBeenCalledWith(
@@ -33,7 +41,6 @@ describe("createTelegramHelpers sendText retries", () => {
 			"telegram send retry",
 			expect.objectContaining({ label: "sendMessage", attempt: 2 }),
 		);
-		vi.useRealTimers();
 	});
 
 	it("falls back to plain text without retrying on HTML parse errors", async () => {
