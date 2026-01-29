@@ -9,6 +9,9 @@ export type ToolStatusOptions = {
 	posthogMessage?: string;
 	memoryMessage?: string;
 	cronMessage?: string;
+	wikiMessage?: string;
+	googleMessage?: string;
+	figmaMessage?: string;
 };
 
 export function createToolStatusHandler(
@@ -22,6 +25,9 @@ export function createToolStatusHandler(
 	const posthogMessage = options.posthogMessage ?? "Смотрю аналитику…";
 	const memoryMessage = options.memoryMessage ?? "Смотрю историю…";
 	const cronMessage = options.cronMessage ?? "Настраиваю расписание…";
+	const wikiMessage = options.wikiMessage ?? "Ищу в Yandex Wiki…";
+	const googleMessage = options.googleMessage ?? "Читаю Google Docs/Sheets…";
+	const figmaMessage = options.figmaMessage ?? "Смотрю в Figma…";
 	const toolStatusSent = new Set<string>();
 	const toolStatusTimers = new Map<string, ReturnType<typeof setTimeout>>();
 	const { record, shouldSend } = createMessagingDedupe();
@@ -34,6 +40,11 @@ export function createToolStatusHandler(
 	]);
 	const memoryTools = new Set(["searchMemories", "addMemory"]);
 	const cronTools = new Set(["cron_schedule", "cron_list", "cron_remove"]);
+	const googleTools = new Set([
+		"google_public_doc_read",
+		"google_public_sheet_read",
+		"google_public_slides_read",
+	]);
 
 	const scheduleStatus = (key: string, message: string) => {
 		if (toolStatusSent.has(key) || toolStatusTimers.has(key)) return;
@@ -62,6 +73,9 @@ export function createToolStatusHandler(
 		clearStatus("posthog");
 		clearStatus("memory");
 		clearStatus("cron");
+		clearStatus("wiki");
+		clearStatus("google");
+		clearStatus("figma");
 	};
 
 	const onToolStep = (toolNames: string[]) => {
@@ -75,18 +89,27 @@ export function createToolStatusHandler(
 		);
 		const hasMemory = toolNames.some((name) => memoryTools.has(name));
 		const hasCron = toolNames.some((name) => cronTools.has(name));
+		const hasWiki = toolNames.some((name) => name.startsWith("yandex_wiki_"));
+		const hasGoogle = toolNames.some((name) => googleTools.has(name));
+		const hasFigma = toolNames.some((name) => name.startsWith("figma_"));
 		if (hasWeb) scheduleStatus("web_search", webMessage);
 		if (hasTracker) scheduleStatus("yandex_tracker_search", trackerMessage);
 		if (hasJira) scheduleStatus("jira", jiraMessage);
 		if (hasPosthog) scheduleStatus("posthog", posthogMessage);
 		if (hasMemory) scheduleStatus("memory", memoryMessage);
 		if (hasCron) scheduleStatus("cron", cronMessage);
+		if (hasWiki) scheduleStatus("wiki", wikiMessage);
+		if (hasGoogle) scheduleStatus("google", googleMessage);
+		if (hasFigma) scheduleStatus("figma", figmaMessage);
 		if (!hasWeb) clearStatus("web_search");
 		if (!hasTracker) clearStatus("yandex_tracker_search");
 		if (!hasJira) clearStatus("jira");
 		if (!hasPosthog) clearStatus("posthog");
 		if (!hasMemory) clearStatus("memory");
 		if (!hasCron) clearStatus("cron");
+		if (!hasWiki) clearStatus("wiki");
+		if (!hasGoogle) clearStatus("google");
+		if (!hasFigma) clearStatus("figma");
 	};
 
 	const onToolStart = (toolName: string) => {
@@ -98,6 +121,10 @@ export function createToolStatusHandler(
 			scheduleStatus("posthog", posthogMessage);
 		if (memoryTools.has(toolName)) scheduleStatus("memory", memoryMessage);
 		if (cronTools.has(toolName)) scheduleStatus("cron", cronMessage);
+		if (toolName.startsWith("yandex_wiki_"))
+			scheduleStatus("wiki", wikiMessage);
+		if (googleTools.has(toolName)) scheduleStatus("google", googleMessage);
+		if (toolName.startsWith("figma_")) scheduleStatus("figma", figmaMessage);
 	};
 
 	return { onToolStart, onToolStep, clearAllStatuses };

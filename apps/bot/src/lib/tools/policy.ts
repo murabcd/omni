@@ -76,7 +76,11 @@ export const TOOL_GROUPS: Record<string, string[]> = {
 		"figma_file_comments_list",
 		"figma_project_files_list",
 	],
-	"group:google-public": ["google_public_doc_read", "google_public_sheet_read"],
+	"group:google-public": [
+		"google_public_doc_read",
+		"google_public_sheet_read",
+		"google_public_slides_read",
+	],
 	"group:image": ["gemini_image_generate"],
 	"group:runtime-skills": [],
 };

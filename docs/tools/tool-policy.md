@@ -63,3 +63,17 @@ TOOL_DENYLIST_CHAT_TOOLS=-1001234567890:group:web
 ## Conflict diagnostics
 
 When a conflict occurs, Omni logs a `tool_conflict` event and skips the duplicate tool. Use `/tools` to see the conflicts summary.
+
+## Tool status messages
+
+Omni emits status messages in Telegram/Admin chat when slow tools are running:
+
+- `web_search` → "Ищу в интернете…"
+- `yandex_tracker_*` → "Проверяю в Yandex Tracker…"
+- `jira_*` → "Проверяю в Jira…"
+- `yandex_wiki_*` → "Ищу в Yandex Wiki…"
+- `google_public_doc_read` / `google_public_sheet_read` → "Читаю Google Docs/Sheets…"
+- `figma_*` → "Смотрю в Figma…"
+- `posthog_*` (readonly) → "Смотрю аналитику…"
+- `searchMemories` / `addMemory` → "Смотрю историю…"
+- `cron_*` → "Настраиваю расписание…"
