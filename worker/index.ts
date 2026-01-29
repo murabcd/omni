@@ -11,6 +11,7 @@ import type { Update } from "grammy/types";
 import modelsConfig from "../apps/bot/config/models.json";
 import runtimeSkills from "../apps/bot/config/runtime-skills.json";
 import soulConfig from "../apps/bot/config/soul.json";
+import bootstrapConfig from "../apps/bot/config/bootstrap.json";
 import { createBot } from "../apps/bot/src/bot.js";
 import { authorizeAdminRequest } from "../apps/bot/src/lib/gateway/admin-auth.js";
 import {
@@ -43,6 +44,22 @@ import { SessionsDO } from "./sessions-do.js";
 
 const startTime = Date.now();
 const SOUL_PROMPT = typeof soulConfig?.text === "string" ? soulConfig.text : "";
+const PROJECT_CONTEXT = Array.isArray(bootstrapConfig?.files)
+	? bootstrapConfig.files
+			.filter(
+				(entry) =>
+					entry &&
+					entry.missing !== true &&
+					typeof entry.path === "string" &&
+					typeof entry.content === "string" &&
+					entry.path.trim() &&
+					entry.content.trim(),
+			)
+			.map((entry) => ({
+				path: entry.path.trim(),
+				content: entry.content.trim(),
+			}))
+	: [];
 let imageCleanupEnsured: Promise<void> | null = null;
 
 type Env = Record<string, string | undefined> & {
@@ -136,8 +153,13 @@ async function ensureImageCleanupJob(env: Env) {
 async function getBot(env: Record<string, string | undefined>) {
 	if (!botPromise) {
 		botPromise = (async () => {
-			const effectiveEnv =
-				SOUL_PROMPT.trim().length > 0 ? { ...env, SOUL_PROMPT } : env;
+			const effectiveEnv = {
+				...env,
+				...(SOUL_PROMPT.trim().length > 0 ? { SOUL_PROMPT } : {}),
+				...(PROJECT_CONTEXT.length > 0
+					? { PROJECT_CONTEXT: JSON.stringify(PROJECT_CONTEXT) }
+					: {}),
+			};
 			const typedEnv = env as Env;
 			const imageStore = getImageStore(typedEnv);
 			if (imageStore) {
@@ -172,6 +194,51 @@ async function getBot(env: Record<string, string | undefined>) {
 					}
 					return response.json();
 				},
+				update: async (params: {
+					id?: string;
+					jobId?: string;
+					patch: Record<string, unknown>;
+				}) => {
+					const response = await callCron(env as Env, "/update", params);
+					if (!response.ok) {
+						throw new Error("cron_update_failed");
+					}
+					return response.json();
+				},
+				runs: async (params: {
+					id?: string;
+					jobId?: string;
+					limit?: number;
+				}) => {
+					const response = await callCron(env as Env, "/runs", params);
+					if (!response.ok) {
+						throw new Error("cron_runs_failed");
+					}
+					return response.json();
+				},
+				status: async () => {
+					const response = await callCron(env as Env, "/status", {});
+					if (!response.ok) {
+						throw new Error("cron_status_failed");
+					}
+					return response.json();
+				},
+			};
+			const sessionClient = {
+				get: async (params: { key: string }) => {
+					const response = await callSessions(env as Env, "/get", params);
+					if (!response.ok) {
+						throw new Error("sessions_get_failed");
+					}
+					return response.json();
+				},
+				patch: async (params: { key: string; timeZone?: string | null }) => {
+					const response = await callSessions(env as Env, "/patch", params);
+					if (!response.ok) {
+						throw new Error("sessions_patch_failed");
+					}
+					return response.json();
+				},
 			};
 			const runtime = await createBot({
 				env: effectiveEnv,
@@ -179,6 +246,7 @@ async function getBot(env: Record<string, string | undefined>) {
 				runtimeSkills,
 				getUptimeSeconds,
 				cronClient,
+				sessionClient,
 				imageStore: imageStore ?? undefined,
 			});
 			await runtime.bot.init();
@@ -1047,6 +1115,55 @@ async function handleAdminRequest(request: WorkerRequest, env: Env) {
 			}),
 		);
 	}
+	if (path === "/admin/prompt-report" && request.method === "GET") {
+		try {
+			const channelKey = url.searchParams.get("channelKey")?.trim() ?? "";
+			const chatId = url.searchParams.get("chatId")?.trim() ?? "";
+			let channelConfig:
+				| {
+						systemPrompt?: string;
+						requireMention?: boolean;
+						allowUserIds?: string[];
+						skillsAllowlist?: string[];
+						skillsDenylist?: string[];
+				  }
+				| undefined;
+			if (channelKey) {
+				const response = await callChannels(env, "/get", { key: channelKey });
+				if (response.ok) {
+					const payload = (await response.json()) as {
+						entry?: {
+							systemPrompt?: string;
+							requireMention?: boolean;
+							allowUserIds?: string[];
+							skillsAllowlist?: string[];
+							skillsDenylist?: string[];
+						};
+					};
+					channelConfig = payload.entry;
+				}
+			}
+			const botRuntime = await getBot(env);
+			const report = await botRuntime.buildPromptReport({
+				chatId: chatId || undefined,
+				channelConfig,
+			});
+			return withCors(
+				new Response(JSON.stringify(report), {
+					status: 200,
+					headers: { "Content-Type": "application/json" },
+				}),
+			);
+		} catch (error) {
+			console.error("prompt_report_error", error);
+			return withCors(
+				new Response(JSON.stringify({ ok: false, error: String(error) }), {
+					status: 500,
+					headers: { "Content-Type": "application/json" },
+				}),
+			);
+		}
+	}
 	if (path === "/admin/cron/run" && request.method === "POST") {
 		try {
 			const reportParts = await buildDailyStatusReportParts({ env });
@@ -1358,6 +1475,55 @@ function handleGatewayWebSocket(
 					return;
 				}
 				sendResponse(id, true, await response.json());
+			} catch (error) {
+				sendResponse(id, false, undefined, toGatewayError(String(error)));
+			}
+			return;
+		}
+
+		if (method === "prompt.report") {
+			try {
+				const botRuntime = await getBot(env);
+				const rawParams = (params as
+					| {
+							chatId?: string;
+							channelKey?: string;
+							channelConfig?: {
+								systemPrompt?: string;
+								requireMention?: boolean;
+								allowUserIds?: string[];
+								skillsAllowlist?: string[];
+								skillsDenylist?: string[];
+							};
+							question?: string;
+							promptMode?: "full" | "minimal" | "none";
+					  }
+					| undefined) ?? {};
+				let channelConfig = rawParams.channelConfig;
+				if (!channelConfig && rawParams.channelKey) {
+					const response = await callChannels(env, "/get", {
+						key: rawParams.channelKey,
+					});
+					if (response.ok) {
+						const payload = (await response.json()) as {
+							entry?: {
+								systemPrompt?: string;
+								requireMention?: boolean;
+								allowUserIds?: string[];
+								skillsAllowlist?: string[];
+								skillsDenylist?: string[];
+							};
+						};
+						channelConfig = payload.entry;
+					}
+				}
+				const report = await botRuntime.buildPromptReport({
+					chatId: rawParams.chatId,
+					channelConfig,
+					question: rawParams.question,
+					promptMode: rawParams.promptMode,
+				});
+				sendResponse(id, true, report);
 			} catch (error) {
 				sendResponse(id, false, undefined, toGatewayError(String(error)));
 			}

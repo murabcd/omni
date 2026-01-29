@@ -16,6 +16,7 @@ export type SessionEntry = {
 	lastChannel?: string;
 	lastTo?: string;
 	deliveryContext?: Record<string, unknown>;
+	timeZone?: string;
 	updatedAt: number | null;
 	sessionId?: string;
 	systemSent?: boolean;
@@ -88,6 +89,8 @@ export class SessionsDO implements DurableObject {
 		switch (url.pathname) {
 			case "/list":
 				return this.list(body as Record<string, unknown>);
+			case "/get":
+				return this.get(body as Record<string, unknown>);
 			case "/patch":
 				return this.patch(body as Record<string, unknown>);
 			case "/reset":
@@ -168,6 +171,15 @@ export class SessionsDO implements DurableObject {
 		return Response.json(result);
 	}
 
+	private async get(params: Record<string, unknown>) {
+		const key = String(params.key ?? "").trim();
+		if (!key) return new Response("key required", { status: 400 });
+		const state = await this.load();
+		const entry = state.sessions[key];
+		if (!entry) return new Response("not_found", { status: 404 });
+		return Response.json({ ok: true, key, entry });
+	}
+
 	private async patch(params: Record<string, unknown>) {
 		const key = String(params.key ?? "").trim();
 		if (!key) return new Response("key required", { status: 400 });
@@ -243,6 +255,12 @@ export class SessionsDO implements DurableObject {
 				: typeof params.model === "string"
 					? params.model.trim() || undefined
 					: entry.model;
+		const timeZone =
+			params.timeZone === null
+				? undefined
+				: typeof params.timeZone === "string"
+					? params.timeZone.trim() || undefined
+					: entry.timeZone;
 		const next: SessionEntry = {
 			...entry,
 			label,
@@ -272,6 +290,7 @@ export class SessionsDO implements DurableObject {
 			execAsk,
 			execNode,
 			model,
+			timeZone,
 			updatedAt: now(),
 		};
 		state.sessions[key] = next;
@@ -388,6 +407,10 @@ export class SessionsDO implements DurableObject {
 				typeof params.lastTo === "string" && params.lastTo.trim()
 					? params.lastTo.trim()
 					: entry.lastTo,
+			timeZone:
+				typeof params.timeZone === "string" && params.timeZone.trim()
+					? params.timeZone.trim()
+					: entry.timeZone,
 			updatedAt: now(),
 			inputTokens:
 				typeof params.inputTokens === "number" ? params.inputTokens : entry.inputTokens,

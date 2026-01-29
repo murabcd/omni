@@ -49,6 +49,8 @@ export class ChannelsDO implements DurableObject {
 		switch (url.pathname) {
 			case "/list":
 				return this.list(body as Record<string, unknown>);
+			case "/get":
+				return this.get(body as Record<string, unknown>);
 			case "/touch":
 				return this.touch(body as Record<string, unknown>);
 			case "/patch":
@@ -82,6 +84,15 @@ export class ChannelsDO implements DurableObject {
 		entries.sort((a, b) => b.lastSeenAt - a.lastSeenAt);
 		const sliced = Number.isFinite(limit) && limit > 0 ? entries.slice(0, limit) : entries;
 		return Response.json({ entries: sliced });
+	}
+
+	private async get(params: Record<string, unknown>) {
+		const key = String(params.key ?? "").trim();
+		if (!key) return new Response("key required", { status: 400 });
+		const state = await this.load();
+		const entry = state.channels[key];
+		if (!entry) return new Response("not_found", { status: 404 });
+		return Response.json({ entry });
 	}
 
 	private async touch(params: Record<string, unknown>) {
