@@ -27,6 +27,7 @@ import {
 	parseTime,
 } from "../bot/cron.js";
 import type { BotContext } from "../bot/types.js";
+import type { ChannelConfig } from "../channels.js";
 import type { FigmaClient } from "../clients/figma.js";
 import type { JiraClient } from "../clients/jira.js";
 import type { TrackerClient } from "../clients/tracker.js";
@@ -42,6 +43,8 @@ import { type FilePart, toFilePart } from "../files.js";
 import type { ImageStore } from "../image-store.js";
 import { buildJiraJql, normalizeJiraIssue } from "../jira.js";
 import { buildAgentInstructions } from "../prompts/agent-instructions.js";
+import { buildSkillsPrompt } from "../prompts/skills-prompt.js";
+import { formatUserDateTime } from "../prompts/time.js";
 import { extractKeywords } from "../text/normalize.js";
 import {
 	isToolAllowedForSender,
@@ -62,9 +65,6 @@ import {
 } from "../tools/registry.js";
 import { sanitizeToolCallIdsForTranscript } from "../tools/tool-call-id.js";
 import { repairToolUseResultPairing } from "../tools/transcript-repair.js";
-import type { ChannelConfig } from "../channels.js";
-import { buildSkillsPrompt } from "../prompts/skills-prompt.js";
-import { formatUserDateTime } from "../prompts/time.js";
 
 export type AgentToolSet = Awaited<ReturnType<AgentToolsFactory>>;
 export type AgentToolCall = TypedToolCall<AgentToolSet>;
@@ -183,13 +183,20 @@ export type AgentToolsDeps = {
 		}) => Promise<{ jobs?: unknown[] }>;
 		add: (params: Record<string, unknown>) => Promise<unknown>;
 		remove: (params: { jobId: string }) => Promise<unknown>;
-		run: (params: { jobId: string; mode?: "due" | "force" }) => Promise<unknown>;
+		run: (params: {
+			jobId: string;
+			mode?: "due" | "force";
+		}) => Promise<unknown>;
 		update: (params: {
 			id?: string;
 			jobId?: string;
 			patch: Record<string, unknown>;
 		}) => Promise<unknown>;
-		runs: (params: { id?: string; jobId?: string; limit?: number }) => Promise<unknown>;
+		runs: (params: {
+			id?: string;
+			jobId?: string;
+			limit?: number;
+		}) => Promise<unknown>;
 		status: () => Promise<unknown>;
 	};
 	trackerClient: TrackerClient;
@@ -261,6 +268,7 @@ function resolveWebSearchContextSize(value: string): "low" | "medium" | "high" {
 const FIGMA_PATH_RE = regex("/(file|design)/([^/]+)");
 const DOC_PATH_RE = regex("/document/d/([^/]+)");
 const SHEET_PATH_RE = regex("/spreadsheets/d/([^/]+)");
+const SLIDES_PATH_RE = regex("/presentation/d/([^/]+)");
 const WIKI_URL_RE = regex.as("https?://[^\\s]+", "i");
 
 type TrackerSearchPayload = {
@@ -413,15 +421,15 @@ export function createAgentToolsFactory(
 									GEMINI_IMAGE_MODEL_ID,
 								) as unknown as LanguageModel,
 								prompt,
-									providerOptions: {
-										google: {
-											responseModalities: ["TEXT", "IMAGE"],
+								providerOptions: {
+									google: {
+										responseModalities: ["TEXT", "IMAGE"],
 										imageConfig: {
 											aspectRatio,
 											imageSize: deps.geminiImageSize ?? "1K",
 										},
-										},
 									},
+								},
 							});
 							const images: FilePart[] = [];
 							const imageFiles = (result.files ?? []).filter((file) =>
@@ -870,6 +878,52 @@ export function createAgentToolsFactory(
 						};
 					} catch (error) {
 						deps.logDebug("google_public_sheet_read error", {
+							error: String(error),
+						});
+						return { error: String(error) };
+					}
+				},
+			}),
+		);
+
+		registerTool(
+			{
+				name: "google_public_slides_read",
+				description: "Read a public Google Slides deck by shared link.",
+				source: "web",
+				origin: "google-public",
+			},
+			tool({
+				description: "Read a public Google Slides deck by shared link.",
+				inputSchema: z.object({
+					url: z.string().describe("Google Slides shared URL"),
+				}),
+				execute: async ({ url }) => {
+					try {
+						const parsed = new URL(url);
+						if (!parsed.hostname.endsWith("docs.google.com")) {
+							throw new Error("unsupported_host");
+						}
+						const match = parsed.pathname.match(SLIDES_PATH_RE);
+						const deckId = match?.[1];
+						if (!deckId) throw new Error("missing_slides_id");
+						const exportUrl = `https://docs.google.com/presentation/d/${deckId}/export?format=txt`;
+						const response = await fetch(exportUrl);
+						if (!response.ok) {
+							const body = await response.text();
+							throw new Error(
+								`slides_fetch_error:${response.status}:${response.statusText}:${body}`,
+							);
+						}
+						const text = await response.text();
+						return {
+							ok: true,
+							deckId,
+							chars: text.length,
+							text,
+						};
+					} catch (error) {
+						deps.logDebug("google_public_slides_read error", {
 							error: String(error),
 						});
 						return { error: String(error) };
@@ -1907,7 +1961,8 @@ export function createAgentToolsFactory(
 			registerTool(
 				{
 					name: "cron_update",
-					description: "Update a scheduled cron job (enable/disable or change schedule).",
+					description:
+						"Update a scheduled cron job (enable/disable or change schedule).",
 					source: "cron",
 					origin: "core",
 				},
@@ -2553,7 +2608,7 @@ export function createAgentFactory(deps: AgentDeps) {
 						skills: deps.runtimeSkills ?? [],
 						channelConfig,
 					})
-				: deps.runtimeSkills ?? [];
+				: (deps.runtimeSkills ?? []);
 		const skillsPrompt = buildSkillsPrompt(runtimeSkills);
 		const timeZone =
 			typeof deps.resolveChatTimezone === "function"

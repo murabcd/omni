@@ -6,8 +6,8 @@ import type { ChannelConfig } from "../channels.js";
 import type { ApprovalStore } from "../tools/approvals.js";
 import type { ToolPolicy } from "../tools/policy.js";
 import type { ToolConflict, ToolMeta } from "../tools/registry.js";
-import type { BotContext, LogContext } from "./types.js";
 import { findCronJob, formatCronJob } from "./cron.js";
+import type { BotContext, LogContext } from "./types.js";
 
 type CommandDeps = {
 	bot: Bot<BotContext>;
@@ -93,21 +93,33 @@ type CommandDeps = {
 	webSearchEnabled?: boolean;
 	memoryEnabled?: boolean;
 	cronClient?: {
-		list: (params?: { includeDisabled?: boolean }) => Promise<{ jobs?: unknown[] }>;
+		list: (params?: {
+			includeDisabled?: boolean;
+		}) => Promise<{ jobs?: unknown[] }>;
 		add: (params: Record<string, unknown>) => Promise<unknown>;
 		remove: (params: { jobId: string }) => Promise<unknown>;
-		run: (params: { jobId: string; mode?: "due" | "force" }) => Promise<unknown>;
+		run: (params: {
+			jobId: string;
+			mode?: "due" | "force";
+		}) => Promise<unknown>;
 		update: (params: {
 			id?: string;
 			jobId?: string;
 			patch: Record<string, unknown>;
 		}) => Promise<unknown>;
-		runs: (params: { id?: string; jobId?: string; limit?: number }) => Promise<unknown>;
+		runs: (params: {
+			id?: string;
+			jobId?: string;
+			limit?: number;
+		}) => Promise<unknown>;
 		status: () => Promise<unknown>;
 	};
 	defaultCronTimezone: string;
 	getChatTimezoneOverride: (ctx: BotContext) => Promise<string | undefined>;
-	setChatTimezone: (ctx: BotContext, timeZone: string | null) => Promise<boolean>;
+	setChatTimezone: (
+		ctx: BotContext,
+		timeZone: string | null,
+	) => Promise<boolean>;
 };
 
 export function registerCommands(deps: CommandDeps) {
@@ -200,6 +212,7 @@ export function registerCommands(deps: CommandDeps) {
 			ctx,
 			"Команды:\n" +
 				"— /start — начать сначала\n" +
+				"— /commands — список команд\n" +
 				"— /status — проверить работу бота\n" +
 				"— /cron — управление расписаниями\n" +
 				"— /timezone — установить или посмотреть часовой пояс\n" +
@@ -570,7 +583,9 @@ export function registerCommands(deps: CommandDeps) {
 			const ok = await setChatTimezone(ctx, null);
 			await sendText(
 				ctx,
-				ok ? `Timezone reset to default (${defaultCronTimezone}).` : "Failed to reset timezone.",
+				ok
+					? `Timezone reset to default (${defaultCronTimezone}).`
+					: "Failed to reset timezone.",
 			);
 			return;
 		}
@@ -691,7 +706,12 @@ export function registerCommands(deps: CommandDeps) {
 			return;
 		}
 
-		if (sub === "stop" || sub === "start" || sub === "enable" || sub === "disable") {
+		if (
+			sub === "stop" ||
+			sub === "start" ||
+			sub === "enable" ||
+			sub === "disable"
+		) {
 			if (!rest) {
 				await sendText(ctx, `Usage: /cron ${sub} <id|name>`);
 				return;
@@ -855,7 +875,6 @@ export function registerCommands(deps: CommandDeps) {
 			"Я Omni, персональный ассистент для задач, аналитики и поиска информации.",
 		);
 	});
-
 
 	async function safeAnswerCallback(ctx: {
 		answerCallbackQuery: () => Promise<unknown>;

@@ -63,6 +63,8 @@ export type BotEnvConfig = {
 	AGENT_DEFAULT_MAX_STEPS: number;
 	AGENT_DEFAULT_TIMEOUT_MS: number;
 	AGENT_CONFIG_OVERRIDES: string;
+	SUBAGENT_MODEL_PROVIDER?: string;
+	SUBAGENT_MODEL_ID?: string;
 	SERVICE_NAME: string;
 	RELEASE_VERSION?: string;
 	COMMIT_HASH?: string;
@@ -73,7 +75,10 @@ export type BotEnvConfig = {
 function parseProjectContext(raw?: string) {
 	if (!raw) return [];
 	try {
-		const parsed = JSON.parse(raw) as Array<{ path?: unknown; content?: unknown }>;
+		const parsed = JSON.parse(raw) as Array<{
+			path?: unknown;
+			content?: unknown;
+		}>;
 		if (!Array.isArray(parsed)) return [];
 		return parsed
 			.map((entry) => ({
@@ -205,6 +210,8 @@ export function loadBotEnv(env: BotEnv): BotEnvConfig {
 		10,
 	);
 	const AGENT_CONFIG_OVERRIDES = env.AGENT_CONFIG_OVERRIDES ?? "";
+	const SUBAGENT_MODEL_PROVIDER = env.SUBAGENT_MODEL_PROVIDER ?? "";
+	const SUBAGENT_MODEL_ID = env.SUBAGENT_MODEL_ID ?? "";
 	const SERVICE_NAME = env.SERVICE_NAME ?? "omni";
 	const RELEASE_VERSION = env.RELEASE_VERSION ?? env.APP_VERSION ?? undefined;
 	const COMMIT_HASH = env.COMMIT_HASH ?? env.GIT_COMMIT ?? undefined;
@@ -274,6 +281,8 @@ export function loadBotEnv(env: BotEnv): BotEnvConfig {
 		AGENT_DEFAULT_MAX_STEPS,
 		AGENT_DEFAULT_TIMEOUT_MS,
 		AGENT_CONFIG_OVERRIDES,
+		SUBAGENT_MODEL_PROVIDER,
+		SUBAGENT_MODEL_ID,
 		SERVICE_NAME,
 		RELEASE_VERSION,
 		COMMIT_HASH,

@@ -1,3 +1,4 @@
+import { createGoogleGenerativeAI } from "@ai-sdk/google";
 import { openai } from "@ai-sdk/openai";
 import { sequentialize } from "@grammyjs/runner";
 import { apiThrottler } from "@grammyjs/transformer-throttler";
@@ -62,9 +63,7 @@ import {
 	type TrackerToolResult,
 } from "./lib/clients/tracker.js";
 import { createWikiClient } from "./lib/clients/wiki.js";
-import { buildAgentInstructions } from "./lib/prompts/agent-instructions.js";
-import { buildSkillsPrompt } from "./lib/prompts/skills-prompt.js";
-import { formatUserDateTime } from "./lib/prompts/time.js";
+import { mapWithConcurrency } from "./lib/concurrency.js";
 import { type BotEnv, loadBotEnv } from "./lib/config/env.js";
 import {
 	getChatState,
@@ -91,11 +90,13 @@ import {
 	filterPosthogTools,
 	POSTHOG_READONLY_TOOL_NAMES,
 } from "./lib/posthog-tools.js";
+import { buildAgentInstructions } from "./lib/prompts/agent-instructions.js";
+import { buildSkillsPrompt } from "./lib/prompts/skills-prompt.js";
+import { formatUserDateTime } from "./lib/prompts/time.js";
 import {
 	extractIssueKeysFromText,
 	truncateText,
 } from "./lib/text/normalize.js";
-import { mapWithConcurrency } from "./lib/concurrency.js";
 import { createToolStatusHandler } from "./lib/tool-status.js";
 import { parseSenderToolAccess } from "./lib/tools/access.js";
 import {
@@ -169,7 +170,10 @@ export type CreateBotOptions = {
 	};
 	sessionClient?: {
 		get: (params: { key: string }) => Promise<unknown>;
-		patch: (params: { key: string; timeZone?: string | null }) => Promise<unknown>;
+		patch: (params: {
+			key: string;
+			timeZone?: string | null;
+		}) => Promise<unknown>;
 	};
 };
 
@@ -239,6 +243,8 @@ export async function createBot(options: CreateBotOptions) {
 		AGENT_DEFAULT_MAX_STEPS,
 		AGENT_DEFAULT_TIMEOUT_MS,
 		AGENT_CONFIG_OVERRIDES,
+		SUBAGENT_MODEL_PROVIDER,
+		SUBAGENT_MODEL_ID,
 		SERVICE_NAME,
 		RELEASE_VERSION,
 		COMMIT_HASH,
@@ -415,6 +421,15 @@ export async function createBot(options: CreateBotOptions) {
 			{
 				name: "google_public_sheet_read",
 				description: "Read a public Google Sheet by shared link.",
+				source: "web",
+				origin: "google-public",
+			},
+			agentTools,
+		);
+		register(
+			{
+				name: "google_public_slides_read",
+				description: "Read a public Google Slides deck by shared link.",
 				source: "web",
 				origin: "google-public",
 			},
@@ -886,6 +901,32 @@ export async function createBot(options: CreateBotOptions) {
 		return activeReasoningOverride ?? config.reasoning ?? "standard";
 	}
 
+	function normalizeSubagentProvider(
+		raw?: string,
+	): "openai" | "google" | undefined {
+		const value = raw?.trim().toLowerCase();
+		if (!value) return undefined;
+		if (value === "google" || value === "gemini") return "google";
+		if (value === "openai") return "openai";
+		return undefined;
+	}
+
+	const subagentProvider = normalizeSubagentProvider(SUBAGENT_MODEL_PROVIDER);
+	const subagentModelId = SUBAGENT_MODEL_ID?.trim() || undefined;
+	const googleModelFactory = GEMINI_API_KEY
+		? createGoogleGenerativeAI({ apiKey: GEMINI_API_KEY })
+		: null;
+
+	const getSubagentModel = (provider: "openai" | "google", modelId: string) => {
+		if (provider === "google") {
+			if (!googleModelFactory) {
+				throw new Error("gemini_api_key_missing");
+			}
+			return googleModelFactory(modelId);
+		}
+		return openai(modelId);
+	};
+
 	function resolveChatToolPolicy(ctx?: BotContext) {
 		if (!ctx) return undefined;
 		const chatPolicy = isGroupChat(ctx) ? toolPolicyGroup : toolPolicyDm;
@@ -1355,7 +1396,9 @@ export async function createBot(options: CreateBotOptions) {
 			const truncated = text ? truncateText(text, 8000) : "";
 			return {
 				files: [],
-				extraContextParts: truncated ? [`DOCX (${filename}):\n${truncated}`] : [],
+				extraContextParts: truncated
+					? [`DOCX (${filename}):\n${truncated}`]
+					: [],
 				skipped,
 				supported: true,
 			};
@@ -1412,6 +1455,20 @@ export async function createBot(options: CreateBotOptions) {
 			const text = await response.text();
 			return { type: "sheet", id, text };
 		}
+		if (path.includes("/presentation/d/")) {
+			const id = path.split("/presentation/d/")[1]?.split("/")[0];
+			if (!id) throw new Error("missing_slides_id");
+			const exportUrl = `https://docs.google.com/presentation/d/${id}/export?format=txt`;
+			const response = await fetch(exportUrl);
+			if (!response.ok) {
+				const body = await response.text();
+				throw new Error(
+					`slides_fetch_error:${response.status}:${response.statusText}:${body}`,
+				);
+			}
+			const text = await response.text();
+			return { type: "slides", id, text };
+		}
 		throw new Error("unsupported_google_doc");
 	}
 
@@ -1423,7 +1480,9 @@ export async function createBot(options: CreateBotOptions) {
 		return result.value ?? "";
 	}
 
-	function decodeDataUrl(url: string): { buffer: Uint8Array; mimeType?: string } | null {
+	function decodeDataUrl(
+		url: string,
+	): { buffer: Uint8Array; mimeType?: string } | null {
 		if (!url.startsWith("data:")) return null;
 		const [meta, data] = url.split(",", 2);
 		if (!meta || !data) return null;
@@ -1974,8 +2033,7 @@ export async function createBot(options: CreateBotOptions) {
 											attachment.id,
 											15_000,
 										);
-										const filename =
-											downloaded.filename ?? attachment.filename;
+										const filename = downloaded.filename ?? attachment.filename;
 										const mimeType =
 											downloaded.contentType ?? attachment.mimeType;
 										sendFiles.push({
@@ -2319,7 +2377,7 @@ export async function createBot(options: CreateBotOptions) {
 								globalSoul: SOUL_PROMPT,
 								channelSoul: ctx.state.channelConfig?.systemPrompt,
 							});
-									const result = await generateAgent(agent);
+							const result = await generateAgent(agent);
 							cancelProcessing();
 							clearAllStatuses();
 							const replyText = result.text?.trim();
@@ -2594,6 +2652,9 @@ export async function createBot(options: CreateBotOptions) {
 								reasoning: resolveReasoningFor(config),
 								globalSoul: SOUL_PROMPT,
 							},
+							getModel: getSubagentModel,
+							defaultSubagentModelProvider: subagentProvider,
+							defaultSubagentModelId: subagentModelId,
 							allowAgents: orchestrationPolicy.allowAgents,
 							denyAgents: orchestrationPolicy.denyAgents,
 							budgets: orchestrationPolicy.budgets,
@@ -2746,7 +2807,8 @@ export async function createBot(options: CreateBotOptions) {
 			const chatState = chatId ? getChatState(chatId) : null;
 			const docxExtracted = await extractDocxFromFileParts(files);
 			const filesForModel = docxExtracted.files;
-			const combinedExtraContext = docxExtracted.extraContextParts.filter(Boolean);
+			const combinedExtraContext =
+				docxExtracted.extraContextParts.filter(Boolean);
 			const promptText =
 				text ||
 				(filesForModel.length > 0 || combinedExtraContext.length > 0
@@ -3051,6 +3113,9 @@ export async function createBot(options: CreateBotOptions) {
 						reasoning: resolveReasoningFor(config),
 						globalSoul: SOUL_PROMPT,
 					},
+					getModel: getSubagentModel,
+					defaultSubagentModelProvider: subagentProvider,
+					defaultSubagentModelId: subagentModelId,
 					allowAgents: orchestrationPolicy.allowAgents,
 					denyAgents: orchestrationPolicy.denyAgents,
 					budgets: orchestrationPolicy.budgets,
@@ -3246,5 +3311,11 @@ export async function createBot(options: CreateBotOptions) {
 		};
 	}
 
-	return { bot, allowedUpdates, runLocalChat, runLocalChatStream, buildPromptReport };
+	return {
+		bot,
+		allowedUpdates,
+		runLocalChat,
+		runLocalChatStream,
+		buildPromptReport,
+	};
 }

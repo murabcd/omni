@@ -62,7 +62,13 @@ const sessionClient = {
 	get: async ({ key }: { key: string }) => {
 		return { entry: localSessions.get(key) };
 	},
-	patch: async ({ key, timeZone }: { key: string; timeZone?: string | null }) => {
+	patch: async ({
+		key,
+		timeZone,
+	}: {
+		key: string;
+		timeZone?: string | null;
+	}) => {
 		const entry = localSessions.get(key) ?? {};
 		if (timeZone == null) {
 			delete entry.timeZone;
