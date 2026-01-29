@@ -50,6 +50,14 @@ fallback and debugging, but the UI uses WebSocket by default.
 Auth is required via `ADMIN_API_TOKEN` (entered in the UI). The gateway checks
 `ADMIN_ALLOWLIST` if it is set.
 
+Additional debug endpoints:
+- `GET /admin/prompt-report` returns a prompt size breakdown.
+- Add `channelKey=<key>` and `chatId=<id>` to simulate per-channel prompts.
+
+Gateway WebSocket debug methods:
+- `prompt.report` returns the same prompt report payload and accepts
+  `{ channelKey, chatId }`.
+
 ## Admin chat
 
 The chat panel streams responses from the bot pipeline (same tools, prompts, and
@@ -72,6 +80,7 @@ Required env (Worker):
 - `IMAGE_SIGNING_SECRET` (secret; used to sign URLs)
 - `PUBLIC_BASE_URL` (public worker URL, no trailing slash)
 - `IMAGE_RETENTION_DAYS` (optional, defaults to 7)
+- `GEMINI_IMAGE_SIZE` (optional: `1K`, `2K`, `4K`; defaults to `1K`)
 
 The R2 bucket binding is `omni` (see `worker/wrangler.toml`).
 

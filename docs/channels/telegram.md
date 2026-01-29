@@ -48,9 +48,10 @@ to `<b>bold</b>` and escapes other HTML for safety.
 ## Attachments
 
 - Images are supported from `message:photo`.
-- PDF documents are supported from `message:document`.
-- Non-PDF documents are ignored (reply: "Поддерживаются только PDF документы.").
-- Tracker issue attachments (PDF/DOCX) are offered after the first answer and read only with explicit consent.
+- PDF and DOCX documents are supported from `message:document`.
+- Non-PDF/DOCX documents are ignored (reply: "Поддерживаются только PDF или DOCX документы.").
+- Direct chat uploads are read automatically.
+- Tracker issue attachments (PDF/DOCX) and Google Docs/Sheets links are offered after the first answer and read only with explicit consent.
 
 Limits:
 - `IMAGE_MAX_BYTES` (default: 5MB)
