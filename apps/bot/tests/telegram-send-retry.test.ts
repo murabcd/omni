@@ -21,7 +21,7 @@ describe("createTelegramHelpers sendText retries", () => {
 		};
 
 		const promise = sendText(ctx, "hello");
-		await vi.runAllTimersAsync();
+		vi.runAllTimers();
 		await promise;
 
 		expect(ctx.reply).toHaveBeenCalledTimes(3);
