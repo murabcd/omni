@@ -32,10 +32,12 @@ describe("extractGoogleLinks", () => {
 		const text =
 			"See https://docs.google.com/document/d/abc123/edit and " +
 			"https://docs.google.com/spreadsheets/d/xyz789/edit?gid=0 " +
+			"and https://docs.google.com/presentation/d/slide123/edit " +
 			"and again https://docs.google.com/document/d/abc123/edit.";
 		const links = extractGoogleLinks(text).sort();
 		expect(links).toEqual([
 			"https://docs.google.com/document/d/abc123/edit",
+			"https://docs.google.com/presentation/d/slide123/edit",
 			"https://docs.google.com/spreadsheets/d/xyz789/edit?gid=0",
 		]);
 	});
@@ -106,7 +108,7 @@ describe("buildAttachmentPrompt", () => {
 		const prompt = buildAttachmentPrompt(request);
 		expect(prompt).toContain("Вложения (PDF/DOCX):");
 		expect(prompt).toContain("spec.pdf");
-		expect(prompt).toContain("Google Docs/Sheets ссылки:");
+		expect(prompt).toContain("Google Docs/Sheets/Slides ссылки:");
 		expect(prompt).toContain("docs.google.com/document/d/abc123");
 		expect(prompt).toContain("Прочитать и учесть их в ответе? (да/нет)");
 	});

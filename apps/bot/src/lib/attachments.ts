@@ -10,6 +10,10 @@ const GOOGLE_SHEET_URL_RE = regex.as(
 	"https?://docs\\.google\\.com/spreadsheets/d/[^\\s)]+",
 	"gi",
 );
+const GOOGLE_SLIDES_URL_RE = regex.as(
+	"https?://docs\\.google\\.com/presentation/d/[^\\s)]+",
+	"gi",
+);
 
 export type AttachmentCandidate = {
 	id: string;
@@ -72,6 +76,12 @@ export function extractGoogleLinks(text: string): string[] {
 			links.add(cleaned);
 		}
 	}
+	for (const match of text.matchAll(GOOGLE_SLIDES_URL_RE)) {
+		if (match[0]) {
+			const cleaned = match[0].replace(/[).,;:!?]+$/g, "");
+			links.add(cleaned);
+		}
+	}
 	return Array.from(links);
 }
 
@@ -122,7 +132,7 @@ export function buildAttachmentPrompt(request: PendingAttachmentRequest) {
 	const sections = [
 		request.attachments.length > 0 ? `Вложения (PDF/DOCX):\n${fileList}` : "",
 		request.googleLinks.length > 0
-			? `Google Docs/Sheets ссылки:\n${linksList}`
+			? `Google Docs/Sheets/Slides ссылки:\n${linksList}`
 			: "",
 	].filter(Boolean);
 	return [
