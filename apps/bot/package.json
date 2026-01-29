@@ -4,11 +4,12 @@
 	"version": "0.1.0",
 	"type": "module",
 	"scripts": {
-		"dev": "bun run build:skills && bun run build:soul && tsx src/index.ts",
+		"dev": "bun run build:skills && bun run build:soul && bun run build:bootstrap && tsx src/index.ts",
 		"start": "node --enable-source-maps dist/index.js",
-		"build": "tsx scripts/build-runtime-skills.ts && tsx scripts/build-soul.ts && tsc -p tsconfig.json",
+		"build": "tsx scripts/build-runtime-skills.ts && tsx scripts/build-soul.ts && tsx scripts/build-bootstrap.ts && tsc -p tsconfig.json",
 		"build:skills": "tsx scripts/build-runtime-skills.ts",
 		"build:soul": "tsx scripts/build-soul.ts",
+		"build:bootstrap": "tsx scripts/build-bootstrap.ts",
 		"check": "biome check --write src tests scripts config",
 		"type-check": "tsc --noEmit -p tsconfig.json",
 		"test": "vitest run --config vitest.config.ts"
