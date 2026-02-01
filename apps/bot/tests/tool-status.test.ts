@@ -28,6 +28,7 @@ describe("createToolStatusHandler", () => {
 		const sendReply = vi.fn();
 		const { onToolStep } = createToolStatusHandler(sendReply, {
 			delayMs: 1500,
+			trackerMessage: "Проверяю в Yandex Tracker…",
 		});
 
 		onToolStep(["yandex_tracker_search"]);
@@ -42,11 +43,26 @@ describe("createToolStatusHandler", () => {
 		const sendReply = vi.fn();
 		const { onToolStep } = createToolStatusHandler(sendReply, {
 			delayMs: 1500,
+			firecrawlMessage: "Собираю данные с сайтов…",
 		});
 
 		onToolStep(["firecrawl_search"]);
 		vi.advanceTimersByTime(1500);
 		expect(sendReply).toHaveBeenCalledWith("Собираю данные с сайтов…");
+
+		vi.useRealTimers();
+	});
+
+	it("does not send without configured message", () => {
+		vi.useFakeTimers();
+		const sendReply = vi.fn();
+		const { onToolStep } = createToolStatusHandler(sendReply, {
+			delayMs: 1500,
+		});
+
+		onToolStep(["yandex_tracker_search", "firecrawl_search"]);
+		vi.advanceTimersByTime(1500);
+		expect(sendReply).not.toHaveBeenCalled();
 
 		vi.useRealTimers();
 	});
