@@ -3,6 +3,7 @@ import type { Bot, InlineKeyboard } from "grammy";
 import type { ModelsFile } from "../../models-core.js";
 import type { RuntimeSkill } from "../../skills-core.js";
 import type { ChannelConfig } from "../channels.js";
+import type { ChatStateStore } from "../context/chat-state.js";
 import type { ApprovalStore } from "../tools/approvals.js";
 import type { ToolPolicy } from "../tools/policy.js";
 import type { ToolConflict, ToolMeta } from "../tools/registry.js";
@@ -94,6 +95,7 @@ type CommandDeps = {
 	posthogEnabled?: boolean;
 	webSearchEnabled?: boolean;
 	memoryEnabled?: boolean;
+	chatStateStore: ChatStateStore;
 	cronClient?: {
 		list: (params?: {
 			includeDisabled?: boolean;
@@ -175,6 +177,7 @@ export function registerCommands(deps: CommandDeps) {
 		posthogEnabled,
 		webSearchEnabled,
 		memoryEnabled,
+		chatStateStore,
 		cronClient,
 		defaultCronTimezone,
 		getChatTimezoneOverride,
@@ -199,7 +202,8 @@ export function registerCommands(deps: CommandDeps) {
 				"— yandex wiki (по ссылке/id/slug, без поиска)\n" +
 				"— figma\n" +
 				"— posthog аналитика\n" +
-				"— поиск в интернете\n\n" +
+				"— поиск в интернете\n" +
+				"— исследование через /research\n\n" +
 				"Примеры:\n" +
 				'"сделай ежедневный отчет по posthog в 11:00"\n' +
 				'"проверь статус proj-1234 в tracker"\n' +
@@ -218,6 +222,7 @@ export function registerCommands(deps: CommandDeps) {
 				"— /start — начать сначала\n" +
 				"— /commands — список команд\n" +
 				"— /status — проверить работу бота\n" +
+				"— /research — режим исследования\n" +
 				"— /cron — управление расписаниями\n" +
 				"— /timezone — установить или посмотреть часовой пояс\n" +
 				"— /help — описание возможностей\n\n",
@@ -232,6 +237,27 @@ export function registerCommands(deps: CommandDeps) {
 	bot.command("commands", (ctx) => {
 		setLogContext(ctx, { command: "/commands", message_type: "command" });
 		return handleCommands(ctx);
+	});
+
+	bot.command("research", async (ctx) => {
+		setLogContext(ctx, { command: "/research", message_type: "command" });
+		const chatId = ctx.chat?.id?.toString() ?? "";
+		if (!chatId) return sendText(ctx, "Не удалось определить чат.");
+		const chatState = await chatStateStore.get(chatId);
+		chatState.research = {
+			active: true,
+			notes: [],
+			files: [],
+			createdAt: Date.now(),
+		};
+		await chatStateStore.set(chatId, chatState);
+		return sendText(
+			ctx,
+			"Ок, включил режим исследования.\n\n" +
+				"Пришли вводные: цель, ссылки, список участников, критерии отбора.\n" +
+				"Когда будешь готов — напиши «готово», и я начну.\n" +
+				"Чтобы отменить — напиши «отмена».",
+		);
 	});
 
 	async function handleTools(ctx: {

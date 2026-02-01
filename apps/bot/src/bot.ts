@@ -68,9 +68,13 @@ import { createWikiClient } from "./lib/clients/wiki.js";
 import { mapWithConcurrency } from "./lib/concurrency.js";
 import { type BotEnv, loadBotEnv } from "./lib/config/env.js";
 import {
-	getChatState,
-	type PendingAttachmentRequest,
+	type ChatStateStore,
+	createInMemoryChatStateStore,
 } from "./lib/context/chat-state.js";
+import type {
+	ChatState,
+	PendingAttachmentRequest,
+} from "./lib/context/chat-state-types.js";
 import {
 	appendHistoryMessage,
 	clearHistoryMessages as clearSessionHistory,
@@ -96,6 +100,7 @@ import { buildAgentInstructions } from "./lib/prompts/agent-instructions.js";
 import { buildSkillsPrompt } from "./lib/prompts/skills-prompt.js";
 import { formatUserDateTime } from "./lib/prompts/time.js";
 import type { TextStore } from "./lib/storage/text-store.js";
+import { markdownToTelegramChunks } from "./lib/telegram/format.js";
 import {
 	extractIssueKeysFromText,
 	truncateText,
@@ -208,6 +213,7 @@ export type CreateBotOptions = {
 			timeZone?: string | null;
 		}) => Promise<unknown>;
 	};
+	chatStateStore?: ChatStateStore;
 };
 
 export async function createBot(options: CreateBotOptions) {
@@ -256,6 +262,7 @@ export async function createBot(options: CreateBotOptions) {
 		WEB_SEARCH_CONTEXT_SIZE,
 		BROWSER_ENABLED,
 		BROWSER_ALLOWLIST,
+		FIRECRAWL_API_KEY,
 		TOOL_RATE_LIMITS,
 		TOOL_APPROVAL_REQUIRED,
 		TOOL_APPROVAL_TTL_MS,
@@ -285,6 +292,8 @@ export async function createBot(options: CreateBotOptions) {
 	} = envConfig;
 
 	const sessionClient = options.sessionClient;
+	const chatStateStore =
+		options.chatStateStore ?? createInMemoryChatStateStore();
 	const ATTACHMENT_MAX_COUNT = 3;
 	const ATTACHMENT_CONSENT_TTL_MS = 10 * 60 * 1000;
 	const toolPolicies = parseToolPolicyVariants(env);
@@ -1157,11 +1166,13 @@ export async function createBot(options: CreateBotOptions) {
 		debugLogs: DEBUG_LOGS,
 		webSearchEnabled: WEB_SEARCH_ENABLED,
 		webSearchContextSize: WEB_SEARCH_CONTEXT_SIZE,
+		firecrawlEnabled: Boolean(FIRECRAWL_API_KEY),
 		browserEnabled: BROWSER_ENABLED,
 		browserAllowlist: BROWSER_ALLOWLIST.split(",")
 			.map((value) => value.trim())
 			.filter(Boolean),
 		browserSendFile: sendBrowserScreenshot,
+		sendGeneratedFile,
 		defaultTrackerQueue: DEFAULT_TRACKER_QUEUE,
 		cronStatusTimezone: CRON_STATUS_TIMEZONE,
 		resolveChatTimezone,
@@ -1369,6 +1380,9 @@ export async function createBot(options: CreateBotOptions) {
 		.text("Команды", "cmd:commands")
 		.text("Статус", "cmd:status");
 
+	const RESEARCH_READY_RE = /^(готово|поехали|начинай|старт|run|go)$/i;
+	const RESEARCH_CANCEL_RE = /^(отмена|стоп|cancel|stop)$/i;
+
 	const START_GREETING =
 		"Привет!\n\n" +
 		"Я Omni, персональный ассистент.\n" +
@@ -1441,6 +1455,7 @@ export async function createBot(options: CreateBotOptions) {
 		posthogEnabled: Boolean(POSTHOG_PERSONAL_API_KEY),
 		webSearchEnabled: WEB_SEARCH_ENABLED,
 		memoryEnabled: Boolean(workspaceStore),
+		chatStateStore,
 		cronClient: options.cronClient,
 		defaultCronTimezone: CRON_STATUS_TIMEZONE,
 		getChatTimezoneOverride,
@@ -1755,6 +1770,24 @@ export async function createBot(options: CreateBotOptions) {
 		}
 	}
 
+	async function sendGeneratedFile(params: {
+		ctx?: BotContext;
+		buffer: Uint8Array;
+		filename: string;
+		mimeType: string;
+	}) {
+		if (!params.ctx?.chat?.id) return;
+		if (!("api" in params.ctx) || !params.ctx.api?.sendDocument) return;
+		try {
+			await params.ctx.api.sendDocument(
+				params.ctx.chat.id,
+				new InputFile(params.buffer, params.filename),
+			);
+		} catch (error) {
+			logDebug("send generated file failed", { error: String(error) });
+		}
+	}
+
 	async function sendBrowserScreenshot(params: {
 		ctx?: BotContext;
 		path: string;
@@ -1795,6 +1828,137 @@ export async function createBot(options: CreateBotOptions) {
 	type LocalChatStreamResult = {
 		stream: ReadableStream<UIMessageChunk>;
 	};
+
+	async function streamTelegramReply(params: {
+		ctx: BotContext;
+		replyOptions?: Record<string, unknown>;
+		stream: ReadableStream<UIMessageChunk>;
+		textChunkLimit: number;
+		appendSources: (text: string, sources?: Array<{ url?: string }>) => string;
+	}) {
+		const { ctx, replyOptions, stream, textChunkLimit, appendSources } = params;
+		if (!ctx.chat?.id || !("api" in ctx) || !ctx.api?.editMessageText) {
+			return null;
+		}
+		const limit =
+			Number.isFinite(textChunkLimit) && textChunkLimit > 0
+				? textChunkLimit
+				: 4000;
+		const sent = await ctx.reply("…", replyOptions);
+		const messageId =
+			sent && typeof sent === "object" && "message_id" in sent
+				? (sent as { message_id?: number }).message_id
+				: undefined;
+		if (!messageId) return null;
+		const chatId = ctx.chat.id;
+
+		let fullText = "";
+		const sources: Array<{ url?: string }> = [];
+		let pendingText = "";
+		let lastSentText = "";
+		let editTimer: ReturnType<typeof setTimeout> | null = null;
+		let editInFlight = false;
+		let editStopped = false;
+		const editThrottleMs = 300;
+
+		const scheduleEdit = () => {
+			if (editStopped || editTimer) return;
+			editTimer = setTimeout(() => {
+				void flushEdit();
+			}, editThrottleMs);
+		};
+
+		const flushEdit = async () => {
+			if (editStopped || editInFlight) return;
+			if (editTimer) {
+				clearTimeout(editTimer);
+				editTimer = null;
+			}
+			const nextText = pendingText.trimEnd();
+			if (!nextText || nextText === lastSentText) return;
+			editInFlight = true;
+			try {
+				await ctx.api.editMessageText(chatId, messageId, nextText);
+				lastSentText = nextText;
+			} catch {
+				editStopped = true;
+			} finally {
+				editInFlight = false;
+				if (!editStopped && pendingText && pendingText !== lastSentText) {
+					scheduleEdit();
+				}
+			}
+		};
+
+		const reader = stream.getReader();
+		try {
+			while (true) {
+				const { value, done } = await reader.read();
+				if (done) break;
+				if (!value) continue;
+				if (value.type === "text-delta") {
+					const delta = (value as { delta?: string }).delta ?? "";
+					if (delta) {
+						fullText += delta;
+						pendingText = fullText.slice(0, limit);
+						scheduleEdit();
+					}
+				} else if (
+					value.type === "source-url" ||
+					value.type === "source-document"
+				) {
+					const source = value as { value?: { url?: unknown } };
+					const url =
+						source?.value &&
+						typeof source.value.url === "string" &&
+						source.value.url.trim()
+							? source.value.url.trim()
+							: undefined;
+					if (url) sources.push({ url });
+				}
+			}
+		} finally {
+			try {
+				await flushEdit();
+			} catch {
+				// ignore
+			}
+		}
+
+		const trimmed = fullText.trim();
+		if (!trimmed) {
+			await ctx.api.editMessageText(chatId, messageId, "Ошибка: пустой ответ.");
+			return { text: "", reply: "", sources: [] };
+		}
+
+		const reply = appendSources(trimmed, sources);
+		const chunks = markdownToTelegramChunks(reply, limit);
+		if (chunks.length === 0) {
+			await ctx.api.editMessageText(chatId, messageId, reply);
+			return { text: trimmed, reply, sources };
+		}
+		const first = chunks[0];
+		try {
+			await ctx.api.editMessageText(chatId, messageId, first.html, {
+				parse_mode: "HTML",
+			});
+		} catch {
+			await ctx.api.editMessageText(chatId, messageId, first.text);
+		}
+		if (chunks.length > 1) {
+			for (const chunk of chunks.slice(1)) {
+				try {
+					await ctx.reply(chunk.html, {
+						...(replyOptions ?? {}),
+						parse_mode: "HTML",
+					});
+				} catch {
+					await ctx.reply(chunk.text, replyOptions);
+				}
+			}
+		}
+		return { text: trimmed, reply, sources };
+	}
 
 	async function runLocalChat(
 		options: LocalChatOptions,
@@ -1862,7 +2026,7 @@ export async function createBot(options: CreateBotOptions) {
 		const files = options.files ?? [];
 		const webSearchEnabled = options.webSearchEnabled;
 		if (!text && files.length === 0) {
-			return { stream: createTextStream("Пустое сообщение.") };
+			return { stream: createTextStream("Empty message.") };
 		}
 
 		const ctx = {
@@ -2053,26 +2217,29 @@ export async function createBot(options: CreateBotOptions) {
 			? { reply_to_message_id: replyToMessageId }
 			: undefined;
 		const sendReply = (message: string) => sendText(ctx, message, replyOptions);
+		const isAdminChat = ctx.chat?.id?.toString() === "admin";
+		let chatId = "";
+		let chatState: ChatState | null = null;
+		let chatStateDirty = false;
+		const markChatStateDirty = () => {
+			chatStateDirty = true;
+		};
+		const updateChatState = (updater: (state: ChatState) => void) => {
+			if (!chatState) return;
+			updater(chatState);
+			markChatStateDirty();
+		};
+		const persistChatState = async () => {
+			if (!chatId || !chatState || !chatStateDirty) return;
+			await chatStateStore.set(chatId, chatState);
+			chatStateDirty = false;
+		};
 		const { onToolStart, onToolStep, clearAllStatuses } =
 			createToolStatusHandler(sendReply);
 		let stopTyping: (() => void) | null = null;
 		let cancelFileStatus: (() => void) | null = null;
-		let processingTimer: ReturnType<typeof setTimeout> | null = null;
-		const cancelProcessing = () => {
-			if (processingTimer) {
-				clearTimeout(processingTimer);
-				processingTimer = null;
-			}
-		};
-		const scheduleProcessing = () => {
-			if (processingTimer) return;
-			processingTimer = setTimeout(() => {
-				void sendReply("Готовлю ответ…");
-			}, 9000);
-		};
 		let queueFollowup: ((toolNames: string[]) => void) | null = null;
 		const handleToolStep = (toolNames: string[]) => {
-			cancelProcessing();
 			onToolStep?.(toolNames);
 			queueFollowup?.(toolNames);
 		};
@@ -2101,8 +2268,7 @@ export async function createBot(options: CreateBotOptions) {
 				}
 			}
 			stopTyping = startTypingHeartbeat(ctx);
-			scheduleProcessing();
-			const chatId = ctx.chat?.id?.toString() ?? "";
+			chatId = ctx.chat?.id?.toString() ?? "";
 			const { workspaceId, sessionKey, workspaceSnapshot, historyText } =
 				await buildConversationContext({
 					ctx,
@@ -2111,7 +2277,7 @@ export async function createBot(options: CreateBotOptions) {
 					sessionKey: ctx.state.sessionKeyOverride,
 				});
 			const userName = ctx.from?.first_name?.trim() || undefined;
-			const chatState = chatId ? getChatState(chatId) : null;
+			chatState = chatId ? await chatStateStore.get(chatId) : null;
 			const turnDepth = ctx.state.turnDepth ?? 0;
 			const baseChatType =
 				(ctx.chat?.type as "private" | "group" | "supergroup" | "channel") ??
@@ -2161,12 +2327,127 @@ export async function createBot(options: CreateBotOptions) {
 					text,
 				});
 			};
+			const generateAgentWithFiles = async (
+				agent: ToolLoopAgent,
+				prompt: string,
+				agentFiles: FilePart[],
+			) => {
+				if (agentFiles.length === 0) {
+					return agent.generate({ prompt });
+				}
+				const messages = await convertToModelMessages([
+					buildUserUIMessage(prompt, agentFiles),
+				]);
+				return agent.generate({ messages });
+			};
 			const docxExtracted = await extractDocxFromFileParts(files);
 			const filesForModel = docxExtracted.files;
 			const combinedExtraContext = [
 				...extraContextParts,
 				...docxExtracted.extraContextParts,
 			].filter(Boolean);
+			if (chatState?.research?.active) {
+				if (RESEARCH_CANCEL_RE.test(text)) {
+					updateChatState((state) => {
+						state.research = undefined;
+					});
+					await sendReply(
+						isAdminChat
+							? "Research cancelled."
+							: "Ок, отменил исследование. Если захочешь начать заново — напиши /research.",
+					);
+					return;
+				}
+				if (RESEARCH_READY_RE.test(text)) {
+					const notes = [...chatState.research.notes, ...combinedExtraContext];
+					const pendingFiles = [...chatState.research.files, ...filesForModel];
+					updateChatState((state) => {
+						state.research = undefined;
+					});
+					const languageHint = isAdminChat
+						? "Respond in English."
+						: "Respond in Russian.";
+					const researchPrompt = [
+						"You are a research assistant.",
+						languageHint,
+						"Use Firecrawl tools to gather sources, then deliver a concise, structured answer.",
+						"If the result is a list of companies/events/speakers, generate a CSV and call research_export_csv.",
+						notes.length > 0 ? `User notes:\n${notes.join("\n")}` : "",
+					]
+						.filter(Boolean)
+						.join("\n\n");
+					cancelFileStatus =
+						pendingFiles.length > 0
+							? scheduleDelayedStatus(
+									sendReply,
+									isAdminChat ? "Processing files…" : "Обрабатываю файлы…",
+									2000,
+								)
+							: null;
+					const allowWebSearch =
+						typeof webSearchEnabled === "boolean"
+							? webSearchEnabled
+							: WEB_SEARCH_ENABLED;
+					const modelConfig = getModelConfig(activeModelRef);
+					if (!modelConfig) {
+						await sendReply(
+							isAdminChat ? "Model not configured." : "Модель не настроена.",
+						);
+						return;
+					}
+					const agent = await createAgent(
+						researchPrompt,
+						activeModelRef,
+						modelConfig,
+						{
+							chatId,
+							ctx,
+							webSearchEnabled: allowWebSearch,
+							recentCandidates: chatState?.lastCandidates ?? [],
+							history: historyText,
+						},
+					);
+					const result = await generateAgentWithFiles(
+						agent,
+						researchPrompt,
+						pendingFiles,
+					);
+					clearAllStatuses();
+					const replyText = result.text?.trim();
+					const sources = (result as { sources?: Array<{ url?: string }> })
+						.sources;
+					const reply = replyText
+						? appendSources(replyText, sources)
+						: replyText;
+					if (reply) {
+						recordHistory("user", researchPrompt);
+						recordHistory("assistant", reply);
+						await sendReply(reply);
+					}
+					return;
+				}
+				if (text) {
+					updateChatState((state) => {
+						state.research?.notes.push(text);
+					});
+				}
+				if (combinedExtraContext.length > 0) {
+					updateChatState((state) => {
+						state.research?.notes.push(...combinedExtraContext);
+					});
+				}
+				if (filesForModel.length > 0) {
+					updateChatState((state) => {
+						state.research?.files.push(...filesForModel);
+					});
+				}
+				await sendReply(
+					isAdminChat
+						? 'Noted. Send more details or say "ready" to start.'
+						: "Принял. Добавь детали или напиши «готово», и я начну.",
+				);
+				return;
+			}
 			const promptText =
 				text ||
 				(filesForModel.length > 0 || combinedExtraContext.length > 0
@@ -2181,38 +2462,24 @@ export async function createBot(options: CreateBotOptions) {
 					items: docxExtracted.skipped,
 				});
 			}
-			const generateAgentWithFiles = async (
-				agent: ToolLoopAgent,
-				prompt: string,
-				agentFiles: FilePart[],
-			) => {
-				if (agentFiles.length === 0) {
-					return agent.generate({ prompt });
-				}
-				const messages = await convertToModelMessages([
-					buildUserUIMessage(prompt, agentFiles),
-				]);
-				return agent.generate({ messages });
-			};
-
 			const pendingRequest = chatState?.pendingAttachmentRequest;
 			if (pendingRequest) {
 				const age = Date.now() - pendingRequest.createdAt;
-				if (age > ATTACHMENT_CONSENT_TTL_MS && chatState) {
-					chatState.pendingAttachmentRequest = undefined;
+				if (age > ATTACHMENT_CONSENT_TTL_MS) {
+					updateChatState((state) => {
+						state.pendingAttachmentRequest = undefined;
+					});
 				} else {
 					const consent = parseConsent(text);
 					if (consent) {
-						if (chatState) {
-							chatState.pendingAttachmentRequest = undefined;
-						}
+						updateChatState((state) => {
+							state.pendingAttachmentRequest = undefined;
+						});
 						if (consent === "no") {
-							cancelProcessing();
 							clearAllStatuses();
 							await sendReply("Ок, без вложений.");
 							return;
 						}
-						cancelProcessing();
 						clearAllStatuses();
 						await sendReply("Ок, читаю материалы…");
 						try {
@@ -2405,8 +2672,10 @@ export async function createBot(options: CreateBotOptions) {
 							await sendReply(`Ошибка: ${String(error)}`);
 							return;
 						}
-					} else if (chatState && text) {
-						chatState.pendingAttachmentRequest = undefined;
+					} else if (text) {
+						updateChatState((state) => {
+							state.pendingAttachmentRequest = undefined;
+						});
 					}
 				}
 			}
@@ -2480,7 +2749,6 @@ export async function createBot(options: CreateBotOptions) {
 								channelSoul: ctx.state.channelConfig?.systemPrompt,
 							});
 							const result = await generateAgent(agent);
-							cancelProcessing();
 							clearAllStatuses();
 							const replyText = result.text?.trim();
 							const sources = (result as { sources?: Array<{ url?: string }> })
@@ -2492,15 +2760,15 @@ export async function createBot(options: CreateBotOptions) {
 								lastError = new Error("empty_response");
 								continue;
 							}
-							if (chatState) {
-								chatState.lastCandidates = issuesData.map((issue) => ({
+							updateChatState((state) => {
+								state.lastCandidates = issuesData.map((issue) => ({
 									key: issue.key,
 									summary: "",
 									score: 0,
 								}));
-								chatState.lastPrimaryKey = issuesData[0]?.key ?? null;
-								chatState.lastUpdatedAt = Date.now();
-							}
+								state.lastPrimaryKey = issuesData[0]?.key ?? null;
+								state.lastUpdatedAt = Date.now();
+							});
 							const primaryIssue = issuesData[0];
 							const issueKey = primaryIssue?.key ?? null;
 							const issueText = primaryIssue?.issueText ?? "";
@@ -2508,18 +2776,18 @@ export async function createBot(options: CreateBotOptions) {
 							recordHistory("user", promptText);
 							recordHistory("assistant", reply);
 							await sendReply(reply);
-							if (chatState) {
-								const request = await collectAttachmentRequest({
-									issueKey,
-									question: promptText,
-									issueText,
-									commentsText,
-									ctx,
+							const request = await collectAttachmentRequest({
+								issueKey,
+								question: promptText,
+								issueText,
+								commentsText,
+								ctx,
+							});
+							if (request) {
+								updateChatState((state) => {
+									state.pendingAttachmentRequest = request;
 								});
-								if (request) {
-									chatState.pendingAttachmentRequest = request;
-									await sendReply(buildAttachmentPrompt(request));
-								}
+								await sendReply(buildAttachmentPrompt(request));
 							}
 							return;
 						} catch (error) {
@@ -2582,7 +2850,6 @@ export async function createBot(options: CreateBotOptions) {
 								channelSoul: ctx.state.channelConfig?.systemPrompt,
 							});
 							const result = await generateAgent(agent);
-							cancelProcessing();
 							clearAllStatuses();
 							const replyText = result.text?.trim();
 							const sources = (result as { sources?: Array<{ url?: string }> })
@@ -2594,15 +2861,15 @@ export async function createBot(options: CreateBotOptions) {
 								lastError = new Error("empty_response");
 								continue;
 							}
-							if (chatState) {
-								chatState.lastCandidates = issuesData.map((issue) => ({
+							updateChatState((state) => {
+								state.lastCandidates = issuesData.map((issue) => ({
 									key: issue.key,
 									summary: "",
 									score: 0,
 								}));
-								chatState.lastPrimaryKey = issuesData[0]?.key ?? null;
-								chatState.lastUpdatedAt = Date.now();
-							}
+								state.lastPrimaryKey = issuesData[0]?.key ?? null;
+								state.lastUpdatedAt = Date.now();
+							});
 							recordHistory("user", promptText);
 							recordHistory("assistant", reply);
 							await sendReply(reply);
@@ -2666,7 +2933,6 @@ export async function createBot(options: CreateBotOptions) {
 								channelSoul: ctx.state.channelConfig?.systemPrompt,
 							});
 							const result = await generateAgent(agent);
-							cancelProcessing();
 							clearAllStatuses();
 							const replyText = result.text?.trim();
 							const sources = (result as { sources?: Array<{ url?: string }> })
@@ -2678,13 +2944,13 @@ export async function createBot(options: CreateBotOptions) {
 								lastError = new Error("empty_response");
 								continue;
 							}
-							if (chatState) {
-								chatState.lastCandidates = [
+							updateChatState((state) => {
+								state.lastCandidates = [
 									{ key: issueKey, summary: "", score: 0 },
 								];
-								chatState.lastPrimaryKey = issueKey;
-								chatState.lastUpdatedAt = Date.now();
-							}
+								state.lastPrimaryKey = issueKey;
+								state.lastUpdatedAt = Date.now();
+							});
 							recordHistory("user", promptText);
 							recordHistory("assistant", reply);
 							await sendReply(reply);
@@ -2745,7 +3011,6 @@ export async function createBot(options: CreateBotOptions) {
 								channelSoul: ctx.state.channelConfig?.systemPrompt,
 							});
 							const result = await generateAgent(agent);
-							cancelProcessing();
 							clearAllStatuses();
 							const replyText = result.text?.trim();
 							const sources = (result as { sources?: Array<{ url?: string }> })
@@ -2757,13 +3022,13 @@ export async function createBot(options: CreateBotOptions) {
 								lastError = new Error("empty_response");
 								continue;
 							}
-							if (chatState) {
-								chatState.lastCandidates = [
+							updateChatState((state) => {
+								state.lastCandidates = [
 									{ key: issueKey, summary: "", score: 0 },
 								];
-								chatState.lastPrimaryKey = issueKey;
-								chatState.lastUpdatedAt = Date.now();
-							}
+								state.lastPrimaryKey = issueKey;
+								state.lastUpdatedAt = Date.now();
+							});
 							recordHistory("user", promptText);
 							recordHistory("assistant", reply);
 							await sendReply(reply);
@@ -2847,10 +3112,11 @@ export async function createBot(options: CreateBotOptions) {
 					);
 					const agent = await createAgent(modelPrompt, ref, config, {
 						onCandidates: (candidates) => {
-							if (!chatState) return;
-							chatState.lastCandidates = candidates;
-							chatState.lastPrimaryKey = candidates[0]?.key ?? null;
-							chatState.lastUpdatedAt = Date.now();
+							updateChatState((state) => {
+								state.lastCandidates = candidates;
+								state.lastPrimaryKey = candidates[0]?.key ?? null;
+								state.lastUpdatedAt = Date.now();
+							});
 						},
 						recentCandidates: chatState?.lastCandidates,
 						history: mergedHistory,
@@ -2858,7 +3124,6 @@ export async function createBot(options: CreateBotOptions) {
 						chatId,
 						userName,
 						onToolStart: (toolName) => {
-							cancelProcessing();
 							onToolStart?.(toolName);
 						},
 						onToolStep: handleToolStep,
@@ -2866,8 +3131,32 @@ export async function createBot(options: CreateBotOptions) {
 						ctx,
 						webSearchEnabled: allowWebSearch,
 					});
+					const stream = createAgentStreamWithTools(
+						agent,
+						modelPrompt,
+						filesForModel,
+						handleToolStep,
+					);
+					const streamed = await streamTelegramReply({
+						ctx,
+						replyOptions,
+						stream,
+						textChunkLimit: TELEGRAM_TEXT_CHUNK_LIMIT,
+						appendSources,
+					});
+					if (streamed) {
+						clearAllStatuses();
+						const reply = streamed.reply;
+						if (!reply) {
+							lastError = new Error("empty_response");
+							continue;
+						}
+						recordHistory("user", promptText);
+						recordHistory("assistant", reply);
+						return;
+					}
+
 					const result = await generateAgent(agent);
-					cancelProcessing();
 					clearAllStatuses();
 					if (DEBUG_LOGS) {
 						const steps =
@@ -2918,12 +3207,11 @@ export async function createBot(options: CreateBotOptions) {
 			setLogError(ctx, lastError ?? "unknown_error");
 			await sendReply(`Ошибка: ${String(lastError ?? "unknown")}`);
 		} catch (error) {
-			cancelProcessing();
 			clearAllStatuses();
 			setLogError(ctx, error);
 			await sendReply(`Ошибка: ${String(error)}`);
 		} finally {
-			cancelProcessing();
+			await persistChatState();
 			clearAllStatuses();
 			cancelFileStatus?.();
 			stopTyping?.();
@@ -2938,6 +3226,13 @@ export async function createBot(options: CreateBotOptions) {
 		abortSignal?: AbortSignal,
 	): Promise<ReadableStream<UIMessageChunk>> {
 		const modelNotConfigured = "Модель не настроена.";
+		let chatId = "";
+		let chatState: ChatState | null = null;
+		const updateChatState = (updater: (state: ChatState) => void) => {
+			if (!chatId || !chatState) return;
+			updater(chatState);
+			void chatStateStore.set(chatId, chatState);
+		};
 		const text = rawText.trim();
 		if (
 			(!text && files.length === 0) ||
@@ -2969,7 +3264,7 @@ export async function createBot(options: CreateBotOptions) {
 					return createTextStream("Нужно упоминание.");
 				}
 			}
-			const chatId = ctx.chat?.id?.toString() ?? "";
+			chatId = ctx.chat?.id?.toString() ?? "";
 			const { workspaceId, sessionKey, workspaceSnapshot, historyText } =
 				await buildConversationContext({
 					ctx,
@@ -2978,7 +3273,7 @@ export async function createBot(options: CreateBotOptions) {
 					sessionKey: ctx.state.sessionKeyOverride,
 				});
 			const userName = ctx.from?.first_name?.trim() || undefined;
-			const chatState = chatId ? getChatState(chatId) : null;
+			chatState = chatId ? await chatStateStore.get(chatId) : null;
 			const turnDepth = ctx.state.turnDepth ?? 0;
 			const baseChatType =
 				(ctx.chat?.type as "private" | "group" | "supergroup" | "channel") ??
@@ -3106,15 +3401,15 @@ export async function createBot(options: CreateBotOptions) {
 					globalSoul: workspaceSnapshot?.soul ?? SOUL_PROMPT,
 					channelSoul: ctx.state.channelConfig?.systemPrompt,
 				});
-				if (chatState) {
-					chatState.lastCandidates = issuesData.map((issue) => ({
+				updateChatState((state) => {
+					state.lastCandidates = issuesData.map((issue) => ({
 						key: issue.key,
 						summary: "",
 						score: 0,
 					}));
-					chatState.lastPrimaryKey = issuesData[0]?.key ?? null;
-					chatState.lastUpdatedAt = Date.now();
-				}
+					state.lastPrimaryKey = issuesData[0]?.key ?? null;
+					state.lastUpdatedAt = Date.now();
+				});
 				recordHistory("user", promptText);
 				return createAgentStreamWithTools(
 					agent,
@@ -3160,15 +3455,15 @@ export async function createBot(options: CreateBotOptions) {
 					globalSoul: workspaceSnapshot?.soul ?? SOUL_PROMPT,
 					channelSoul: ctx.state.channelConfig?.systemPrompt,
 				});
-				if (chatState) {
-					chatState.lastCandidates = issuesData.map((issue) => ({
+				updateChatState((state) => {
+					state.lastCandidates = issuesData.map((issue) => ({
 						key: issue.key,
 						summary: "",
 						score: 0,
 					}));
-					chatState.lastPrimaryKey = issuesData[0]?.key ?? null;
-					chatState.lastUpdatedAt = Date.now();
-				}
+					state.lastPrimaryKey = issuesData[0]?.key ?? null;
+					state.lastUpdatedAt = Date.now();
+				});
 				recordHistory("user", promptText);
 				return createAgentStreamWithTools(
 					agent,
@@ -3209,11 +3504,11 @@ export async function createBot(options: CreateBotOptions) {
 					globalSoul: workspaceSnapshot?.soul ?? SOUL_PROMPT,
 					channelSoul: ctx.state.channelConfig?.systemPrompt,
 				});
-				if (chatState) {
-					chatState.lastCandidates = [{ key: issueKey, summary: "", score: 0 }];
-					chatState.lastPrimaryKey = issueKey;
-					chatState.lastUpdatedAt = Date.now();
-				}
+				updateChatState((state) => {
+					state.lastCandidates = [{ key: issueKey, summary: "", score: 0 }];
+					state.lastPrimaryKey = issueKey;
+					state.lastUpdatedAt = Date.now();
+				});
 				recordHistory("user", promptText);
 				return createAgentStreamWithTools(
 					agent,
@@ -3254,11 +3549,11 @@ export async function createBot(options: CreateBotOptions) {
 					globalSoul: workspaceSnapshot?.soul ?? SOUL_PROMPT,
 					channelSoul: ctx.state.channelConfig?.systemPrompt,
 				});
-				if (chatState) {
-					chatState.lastCandidates = [{ key: issueKey, summary: "", score: 0 }];
-					chatState.lastPrimaryKey = issueKey;
-					chatState.lastUpdatedAt = Date.now();
-				}
+				updateChatState((state) => {
+					state.lastCandidates = [{ key: issueKey, summary: "", score: 0 }];
+					state.lastPrimaryKey = issueKey;
+					state.lastUpdatedAt = Date.now();
+				});
 				recordHistory("user", promptText);
 				return createAgentStreamWithTools(
 					agent,
@@ -3324,10 +3619,11 @@ export async function createBot(options: CreateBotOptions) {
 			);
 			const agent = await createAgent(modelPrompt, activeModelRef, config, {
 				onCandidates: (candidates) => {
-					if (!chatState) return;
-					chatState.lastCandidates = candidates;
-					chatState.lastPrimaryKey = candidates[0]?.key ?? null;
-					chatState.lastUpdatedAt = Date.now();
+					updateChatState((state) => {
+						state.lastCandidates = candidates;
+						state.lastPrimaryKey = candidates[0]?.key ?? null;
+						state.lastUpdatedAt = Date.now();
+					});
 				},
 				recentCandidates: chatState?.lastCandidates,
 				history: mergedHistory,

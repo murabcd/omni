@@ -22,6 +22,8 @@ import {
 } from "../apps/bot/src/lib/gateway/config.js";
 import { allowTelegramUpdate } from "../apps/bot/src/lib/gateway/telegram-allowlist.js";
 import { appendHistoryMessage } from "../apps/bot/src/lib/context/session-history.js";
+import { createEmptyChatState } from "../apps/bot/src/lib/context/chat-state.js";
+import type { ChatState } from "../apps/bot/src/lib/context/chat-state-types.js";
 import { buildSessionKey } from "../apps/bot/src/lib/context/session-key.js";
 import { buildDailyStatusReportParts } from "../apps/bot/src/lib/reports/daily-status.js";
 import { markdownToTelegramHtmlChunks } from "../apps/bot/src/lib/telegram/format.js";
@@ -268,6 +270,39 @@ async function getBot(env: Record<string, string | undefined>) {
 					return response.json();
 				},
 			};
+			const chatStateStore = {
+				get: async (chatId: string) => {
+					const response = await callSessions(env as Env, "/chat-state/get", {
+						chatId,
+					});
+					if (!response.ok) {
+						throw new Error("chat_state_get_failed");
+					}
+					const payload = (await response.json()) as {
+						state?: ChatState | null;
+					};
+					return payload.state ?? createEmptyChatState();
+				},
+				set: async (chatId: string, state: ChatState) => {
+					const response = await callSessions(env as Env, "/chat-state/set", {
+						chatId,
+						state,
+					});
+					if (!response.ok) {
+						throw new Error("chat_state_set_failed");
+					}
+					return response.json();
+				},
+				clear: async (chatId: string) => {
+					const response = await callSessions(env as Env, "/chat-state/clear", {
+						chatId,
+					});
+					if (!response.ok) {
+						throw new Error("chat_state_clear_failed");
+					}
+					return response.json();
+				},
+			};
 			const queueTurn = async (payload: Record<string, unknown>) => {
 				const response = await enqueueTurn(typedEnv, payload);
 				if (!response.ok) {
@@ -281,6 +316,7 @@ async function getBot(env: Record<string, string | undefined>) {
 				getUptimeSeconds,
 				cronClient,
 				sessionClient,
+				chatStateStore,
 				imageStore: imageStore ?? undefined,
 				workspaceStore: createR2TextStore(typedEnv.omni),
 				workspaceDefaults: buildWorkspaceDefaults({

@@ -1,42 +1,28 @@
-export type CandidateIssue = {
-	key: string | null;
-	summary: string;
-	score: number;
+import { type ChatState, createEmptyChatState } from "./chat-state-types.js";
+
+export type ChatStateStore = {
+	get: (chatId: string) => Promise<ChatState>;
+	set: (chatId: string, state: ChatState) => Promise<void>;
+	clear: (chatId: string) => Promise<void>;
 };
 
-export type ChatState = {
-	lastCandidates: CandidateIssue[];
-	lastPrimaryKey: string | null;
-	lastUpdatedAt: number;
-	pendingAttachmentRequest?: PendingAttachmentRequest;
-};
-
-export type PendingAttachment = {
-	id: string;
-	filename: string;
-	mimeType: string;
-	size?: number;
-};
-
-export type PendingAttachmentRequest = {
-	issueKey: string;
-	question: string;
-	attachments: PendingAttachment[];
-	googleLinks: string[];
-	createdAt: number;
-};
-
-const chatStates = new Map<string, ChatState>();
-
-export function getChatState(chatId: string): ChatState {
-	const existing = chatStates.get(chatId);
-	if (existing) return existing;
-	const fresh: ChatState = {
-		lastCandidates: [],
-		lastPrimaryKey: null,
-		lastUpdatedAt: 0,
-		pendingAttachmentRequest: undefined,
+export function createInMemoryChatStateStore(): ChatStateStore {
+	const chatStates = new Map<string, ChatState>();
+	return {
+		get: async (chatId) => {
+			const existing = chatStates.get(chatId);
+			if (existing) return existing;
+			const fresh = createEmptyChatState();
+			chatStates.set(chatId, fresh);
+			return fresh;
+		},
+		set: async (chatId, state) => {
+			chatStates.set(chatId, state);
+		},
+		clear: async (chatId) => {
+			chatStates.delete(chatId);
+		},
 	};
-	chatStates.set(chatId, fresh);
-	return fresh;
 }
+
+export { type ChatState, createEmptyChatState } from "./chat-state-types.js";

@@ -1,5 +1,5 @@
 import { regex } from "arkregex";
-import type { PendingAttachmentRequest } from "./context/chat-state.js";
+import type { PendingAttachmentRequest } from "./context/chat-state-types.js";
 import { isDocxDocument, isPdfDocument } from "./files.js";
 
 const GOOGLE_DOC_URL_RE = regex.as(

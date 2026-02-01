@@ -1,4 +1,5 @@
 import type { DurableObjectState, DurableObject } from "@cloudflare/workers-types";
+import type { ChatState } from "../apps/bot/src/lib/context/chat-state-types.js";
 
 export type SessionKind = "direct" | "group" | "global" | "unknown";
 
@@ -68,6 +69,7 @@ type StoredSessions = {
 	sessions: Record<string, SessionEntry>;
 	turnQueue: TurnQueueItem[];
 	processedTurnIds: string[];
+	chatStates?: Record<string, ChatStateEntry>;
 };
 
 const STORE_KEY = "sessions";
@@ -75,6 +77,12 @@ const STORE_PATH = "do://sessions";
 const TURN_QUEUE_LOCK_MS = 60_000;
 const TURN_QUEUE_MAX = 5_000;
 const TURN_PROCESSED_MAX = 2_000;
+const CHAT_STATE_TTL_MS = 24 * 60 * 60 * 1000;
+
+type ChatStateEntry = {
+	state: ChatState;
+	updatedAt: number;
+};
 
 function now() {
 	return Date.now();
@@ -132,6 +140,12 @@ export class SessionsDO implements DurableObject {
 				return this.markTurnProcessed(body as Record<string, unknown>);
 			case "/turns/list":
 				return this.listTurns(body as Record<string, unknown>);
+			case "/chat-state/get":
+				return this.getChatState(body as Record<string, unknown>);
+			case "/chat-state/set":
+				return this.setChatState(body as Record<string, unknown>);
+			case "/chat-state/clear":
+				return this.clearChatState(body as Record<string, unknown>);
 			default:
 				return new Response("Not Found", { status: 404 });
 		}
@@ -142,6 +156,7 @@ export class SessionsDO implements DurableObject {
 			sessions: {},
 			turnQueue: [],
 			processedTurnIds: [],
+			chatStates: {},
 		};
 		return {
 			sessions: stored.sessions ?? {},
@@ -149,11 +164,65 @@ export class SessionsDO implements DurableObject {
 			processedTurnIds: Array.isArray(stored.processedTurnIds)
 				? stored.processedTurnIds
 				: [],
+			chatStates: stored.chatStates ?? {},
 		};
 	}
 
 	private async save(next: StoredSessions) {
 		await this.state.storage.put(STORE_KEY, next);
+	}
+
+	private isChatStateExpired(entry: ChatStateEntry, ttlMs: number) {
+		return now() - entry.updatedAt > ttlMs;
+	}
+
+	private async getChatState(params: Record<string, unknown>) {
+		const chatId = String(params.chatId ?? "").trim();
+		if (!chatId) return new Response("chatId required", { status: 400 });
+		const ttlMs = Number.isFinite(Number(params.ttlMs))
+			? Number(params.ttlMs)
+			: CHAT_STATE_TTL_MS;
+		const state = await this.load();
+		const entry = state.chatStates?.[chatId];
+		if (!entry) return Response.json({ ok: true, chatId, state: null });
+		if (this.isChatStateExpired(entry, ttlMs)) {
+			delete state.chatStates?.[chatId];
+			await this.save(state);
+			return Response.json({ ok: true, chatId, state: null, expired: true });
+		}
+		return Response.json({
+			ok: true,
+			chatId,
+			state: entry.state,
+			updatedAt: entry.updatedAt,
+		});
+	}
+
+	private async setChatState(params: Record<string, unknown>) {
+		const chatId = String(params.chatId ?? "").trim();
+		if (!chatId) return new Response("chatId required", { status: 400 });
+		if (!params.state || typeof params.state !== "object") {
+			return new Response("state required", { status: 400 });
+		}
+		const state = await this.load();
+		if (!state.chatStates) state.chatStates = {};
+		state.chatStates[chatId] = {
+			state: params.state as ChatState,
+			updatedAt: now(),
+		};
+		await this.save(state);
+		return Response.json({ ok: true, chatId });
+	}
+
+	private async clearChatState(params: Record<string, unknown>) {
+		const chatId = String(params.chatId ?? "").trim();
+		if (!chatId) return new Response("chatId required", { status: 400 });
+		const state = await this.load();
+		if (state.chatStates && chatId in state.chatStates) {
+			delete state.chatStates[chatId];
+			await this.save(state);
+		}
+		return Response.json({ ok: true, chatId });
 	}
 
 	private async list(params: Record<string, unknown>) {
