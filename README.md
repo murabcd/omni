@@ -55,8 +55,8 @@ Integration with REST API connectors via [AI SDK](https://sdk.vercel.ai/docs) fo
   - Read-only analytics queries via the Agent Toolkit
   - Trends, insights, and event/property lookups
 - Workspace Memory (R2)
-  - AGENTS/SOUL/TOOLS/MEMORY stored in R2 per workspace
-  - Session history stored in R2 for continuity
+  - AGENTS and SOUL stored in R2 per workspace
+  - Daily memory files + session history stored in R2 for continuity
 - [Figma API](https://www.figma.com/developers/api)
   - Read-only file metadata, nodes, comments, and project listings
   - Personal access token auth
