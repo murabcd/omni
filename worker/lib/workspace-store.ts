@@ -35,8 +35,12 @@ export function createR2TextStore(bucket: R2Bucket): TextStore {
 				for (const object of result.objects) {
 					keys.push(object.key);
 				}
-				cursor = result.cursor;
 				truncated = result.truncated;
+				if (truncated && "cursor" in result) {
+					cursor = result.cursor;
+				} else {
+					cursor = undefined;
+				}
 			}
 			return keys;
 		},
