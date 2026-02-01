@@ -39,10 +39,7 @@ describe("createFigmaClient", () => {
 				(globalThis as typeof globalThis & { fetch?: typeof fetch }).fetch =
 					originalFetch;
 			} else {
-				Reflect.deleteProperty(
-					globalThis as Record<string, unknown>,
-					"fetch",
-				);
+				Reflect.deleteProperty(globalThis as Record<string, unknown>, "fetch");
 			}
 			vi.useRealTimers();
 		}
