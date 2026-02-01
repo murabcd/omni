@@ -1,0 +1,5 @@
+{
+	"name": "firecrawl_status",
+	"description": "Check Firecrawl job status.",
+	"tool": "firecrawl.firecrawl_status"
+}

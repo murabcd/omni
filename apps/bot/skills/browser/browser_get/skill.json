@@ -1,0 +1,5 @@
+{
+	"name": "browser_get",
+	"description": "Get data from the page or element.",
+	"tool": "browser.browser_get"
+}

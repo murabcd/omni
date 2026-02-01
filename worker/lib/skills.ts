@@ -156,6 +156,26 @@ function resolveSkillRequirements(toolRef: string) {
 			},
 		};
 	}
+	if (server === "firecrawl") {
+		return {
+			requirements: {
+				bins: [],
+				env: ["FIRECRAWL_API_KEY"],
+				config: [],
+				os: [],
+			},
+		};
+	}
+	if (server === "browser") {
+		return {
+			requirements: {
+				bins: ["agent-browser"],
+				env: ["BROWSER_ENABLED"],
+				config: [],
+				os: [],
+			},
+		};
+	}
 	return {
 		requirements: { bins: [], env: [], config: [], os: [] },
 	};
@@ -215,6 +235,16 @@ function buildMissingEnv(params: {
 		}
 		if (params.effectiveEnv.WEB_SEARCH_ENABLED !== "1") {
 			missing.push("WEB_SEARCH_ENABLED");
+		}
+	}
+	if (params.server === "firecrawl") {
+		if (!params.effectiveEnv.FIRECRAWL_API_KEY) {
+			missing.push("FIRECRAWL_API_KEY");
+		}
+	}
+	if (params.server === "browser") {
+		if (params.effectiveEnv.BROWSER_ENABLED !== "1") {
+			missing.push("BROWSER_ENABLED");
 		}
 	}
 	return missing;

@@ -1,0 +1,5 @@
+{
+	"name": "firecrawl_cancel",
+	"description": "Cancel Firecrawl job.",
+	"tool": "firecrawl.firecrawl_cancel"
+}

@@ -1,0 +1,5 @@
+{
+	"name": "firecrawl_map",
+	"description": "Discover URLs on a site via Firecrawl.",
+	"tool": "firecrawl.firecrawl_map"
+}

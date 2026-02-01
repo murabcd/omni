@@ -1,0 +1,5 @@
+{
+	"name": "browser_frame",
+	"description": "Switch to an iframe by selector.",
+	"tool": "browser.browser_frame"
+}

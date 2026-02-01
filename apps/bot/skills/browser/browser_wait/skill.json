@@ -1,0 +1,5 @@
+{
+	"name": "browser_wait",
+	"description": "Wait for a selector or a timeout.",
+	"tool": "browser.browser_wait"
+}

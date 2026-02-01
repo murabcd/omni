@@ -1,0 +1,5 @@
+{
+	"name": "browser_screenshot",
+	"description": "Capture a screenshot.",
+	"tool": "browser.browser_screenshot"
+}

@@ -1,0 +1,5 @@
+{
+	"name": "browser_close",
+	"description": "Close the browser session.",
+	"tool": "browser.browser_close"
+}

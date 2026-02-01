@@ -1,0 +1,5 @@
+{
+	"name": "firecrawl_poll",
+	"description": "Poll Firecrawl async jobs.",
+	"tool": "firecrawl.firecrawl_poll"
+}

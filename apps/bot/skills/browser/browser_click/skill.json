@@ -1,0 +1,5 @@
+{
+	"name": "browser_click",
+	"description": "Click an element by selector or ref.",
+	"tool": "browser.browser_click"
+}

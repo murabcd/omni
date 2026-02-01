@@ -1,0 +1,5 @@
+{
+	"name": "browser_type",
+	"description": "Type into an element by selector or ref.",
+	"tool": "browser.browser_type"
+}

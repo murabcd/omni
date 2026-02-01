@@ -1,0 +1,5 @@
+{
+	"name": "firecrawl_crawl",
+	"description": "Crawl multiple pages via Firecrawl (async).",
+	"tool": "firecrawl.firecrawl_crawl"
+}

@@ -1,0 +1,5 @@
+{
+	"name": "firecrawl_scrape",
+	"description": "Scrape a single URL via Firecrawl.",
+	"tool": "firecrawl.firecrawl_scrape"
+}

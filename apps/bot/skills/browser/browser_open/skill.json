@@ -1,0 +1,5 @@
+{
+	"name": "browser_open",
+	"description": "Open a URL in the browser.",
+	"tool": "browser.browser_open"
+}

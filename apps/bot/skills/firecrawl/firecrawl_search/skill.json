@@ -1,0 +1,5 @@
+{
+	"name": "firecrawl_search",
+	"description": "Search the web via Firecrawl.",
+	"tool": "firecrawl.firecrawl_search"
+}

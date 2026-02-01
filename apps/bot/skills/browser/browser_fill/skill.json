@@ -1,0 +1,5 @@
+{
+	"name": "browser_fill",
+	"description": "Fill an input by selector or ref.",
+	"tool": "browser.browser_fill"
+}

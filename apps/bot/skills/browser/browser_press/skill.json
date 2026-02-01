@@ -1,0 +1,5 @@
+{
+	"name": "browser_press",
+	"description": "Press a keyboard key (e.g., Enter).",
+	"tool": "browser.browser_press"
+}

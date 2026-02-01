@@ -9,6 +9,8 @@ const SKILL_PATH_BY_SERVER: Record<string, string> = {
 	"google-public": "apps/bot/skills/google-public/SKILL.md",
 	memory: "apps/bot/skills/memory/SKILL.md",
 	web: "apps/bot/skills/web/SKILL.md",
+	browser: "apps/bot/skills/browser/SKILL.md",
+	firecrawl: "apps/bot/skills/firecrawl/SKILL.md",
 };
 
 const SKILL_DESCRIPTION_BY_SERVER: Record<string, string> = {
@@ -20,6 +22,8 @@ const SKILL_DESCRIPTION_BY_SERVER: Record<string, string> = {
 	"google-public": "Read public Google Docs/Sheets.",
 	memory: "Long-term memory search and storage.",
 	web: "Web search for up-to-date info.",
+	browser: "Browser automation (agent-browser).",
+	firecrawl: "Firecrawl web research and crawling.",
 };
 
 export function buildSkillsPrompt(skills: RuntimeSkill[]) {

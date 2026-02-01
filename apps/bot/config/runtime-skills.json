@@ -10,6 +10,61 @@
 		"tool": "posthog.actions-get-all"
 	},
 	{
+		"name": "browser_click",
+		"description": "Click an element by selector or ref.",
+		"tool": "browser.browser_click"
+	},
+	{
+		"name": "browser_close",
+		"description": "Close the browser session.",
+		"tool": "browser.browser_close"
+	},
+	{
+		"name": "browser_fill",
+		"description": "Fill an input by selector or ref.",
+		"tool": "browser.browser_fill"
+	},
+	{
+		"name": "browser_frame",
+		"description": "Switch to an iframe by selector.",
+		"tool": "browser.browser_frame"
+	},
+	{
+		"name": "browser_get",
+		"description": "Get data from the page or element.",
+		"tool": "browser.browser_get"
+	},
+	{
+		"name": "browser_open",
+		"description": "Open a URL in the browser.",
+		"tool": "browser.browser_open"
+	},
+	{
+		"name": "browser_press",
+		"description": "Press a keyboard key (e.g., Enter).",
+		"tool": "browser.browser_press"
+	},
+	{
+		"name": "browser_screenshot",
+		"description": "Capture a screenshot.",
+		"tool": "browser.browser_screenshot"
+	},
+	{
+		"name": "browser_snapshot",
+		"description": "Get accessibility snapshot of the page.",
+		"tool": "browser.browser_snapshot"
+	},
+	{
+		"name": "browser_type",
+		"description": "Type into an element by selector or ref.",
+		"tool": "browser.browser_type"
+	},
+	{
+		"name": "browser_wait",
+		"description": "Wait for a selector or a timeout.",
+		"tool": "browser.browser_wait"
+	},
+	{
 		"name": "dashboard-get",
 		"description": "PostHog read-only tool",
 		"tool": "posthog.dashboard-get"
@@ -88,6 +143,51 @@
 		"name": "figma_project_files_list",
 		"description": "List files in a Figma project.",
 		"tool": "figma.figma_project_files_list"
+	},
+	{
+		"name": "firecrawl_batch_scrape",
+		"description": "Scrape multiple URLs via Firecrawl (async).",
+		"tool": "firecrawl.firecrawl_batch_scrape"
+	},
+	{
+		"name": "firecrawl_cancel",
+		"description": "Cancel Firecrawl job.",
+		"tool": "firecrawl.firecrawl_cancel"
+	},
+	{
+		"name": "firecrawl_crawl",
+		"description": "Crawl multiple pages via Firecrawl (async).",
+		"tool": "firecrawl.firecrawl_crawl"
+	},
+	{
+		"name": "firecrawl_extract",
+		"description": "Extract structured data via Firecrawl (async).",
+		"tool": "firecrawl.firecrawl_extract"
+	},
+	{
+		"name": "firecrawl_map",
+		"description": "Discover URLs on a site via Firecrawl.",
+		"tool": "firecrawl.firecrawl_map"
+	},
+	{
+		"name": "firecrawl_poll",
+		"description": "Poll Firecrawl async jobs.",
+		"tool": "firecrawl.firecrawl_poll"
+	},
+	{
+		"name": "firecrawl_scrape",
+		"description": "Scrape a single URL via Firecrawl.",
+		"tool": "firecrawl.firecrawl_scrape"
+	},
+	{
+		"name": "firecrawl_search",
+		"description": "Search the web via Firecrawl.",
+		"tool": "firecrawl.firecrawl_search"
+	},
+	{
+		"name": "firecrawl_status",
+		"description": "Check Firecrawl job status.",
+		"tool": "firecrawl.firecrawl_status"
 	},
 	{
 		"name": "get_global_fields",
@@ -218,7 +318,11 @@
 		"description": "Search issues using Yandex Tracker Query Language.",
 		"tool": "yandex-tracker.issues_find",
 		"args": {
-			"fields": ["key", "summary", "created_at"],
+			"fields": [
+				"key",
+				"summary",
+				"created_at"
+			],
 			"per_page": 100
 		}
 	},
@@ -347,7 +451,10 @@
 		"description": "List all available Yandex Tracker queues.",
 		"tool": "yandex-tracker.queues_get_all",
 		"args": {
-			"fields": ["key", "name"],
+			"fields": [
+				"key",
+				"name"
+			],
 			"per_page": 100
 		}
 	},

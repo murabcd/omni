@@ -1,0 +1,5 @@
+{
+	"name": "firecrawl_extract",
+	"description": "Extract structured data via Firecrawl (async).",
+	"tool": "firecrawl.firecrawl_extract"
+}

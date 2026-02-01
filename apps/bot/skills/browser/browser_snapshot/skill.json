@@ -1,0 +1,5 @@
+{
+	"name": "browser_snapshot",
+	"description": "Get accessibility snapshot of the page.",
+	"tool": "browser.browser_snapshot"
+}
