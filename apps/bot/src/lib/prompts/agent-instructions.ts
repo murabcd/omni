@@ -17,8 +17,6 @@ export type AgentInstructionOptions = {
 	workspaceSnapshot?: {
 		agents?: string;
 		soul?: string;
-		tools?: string;
-		memoryCore?: string;
 		memoryToday?: string;
 		memoryYesterday?: string;
 		memoryTodayPath?: string;
@@ -55,12 +53,6 @@ function buildWorkspaceBlock(options: AgentInstructionOptions): string {
 	const blocks: string[] = [];
 	if (snapshot.agents?.trim()) {
 		blocks.push("## AGENTS.md", snapshot.agents.trim(), "");
-	}
-	if (snapshot.tools?.trim()) {
-		blocks.push("## TOOLS.md", snapshot.tools.trim(), "");
-	}
-	if (snapshot.memoryCore?.trim()) {
-		blocks.push("## MEMORY.md", snapshot.memoryCore.trim(), "");
 	}
 	if (snapshot.memoryToday?.trim()) {
 		const path = snapshot.memoryTodayPath ?? "memory/today.md";
