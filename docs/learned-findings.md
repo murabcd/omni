@@ -1,7 +1,7 @@
 ---
 summary: "Guidance for what to store as durable learnings"
 read_when:
-  - Deciding whether to call addMemory
+  - Deciding whether to call memory_append
 ---
 # Learned Findings Guidance
 

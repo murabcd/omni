@@ -54,9 +54,9 @@ Integration with REST API connectors via [AI SDK](https://sdk.vercel.ai/docs) fo
 - [PostHog](https://posthog.com)
   - Read-only analytics queries via the Agent Toolkit
   - Trends, insights, and event/property lookups
-- [Supermemory](https://supermemory.ai)
-  - Persistent, per-user memory
-  - Semantic retrieval for relevant past context
+- Workspace Memory (R2)
+  - AGENTS/SOUL/TOOLS/MEMORY stored in R2 per workspace
+  - Session history stored in R2 for continuity
 - [Figma API](https://www.figma.com/developers/api)
   - Read-only file metadata, nodes, comments, and project listings
   - Personal access token auth
@@ -84,7 +84,6 @@ npx wrangler secret put WIKI_TOKEN --config worker/wrangler.toml
 npx wrangler secret put POSTHOG_PERSONAL_API_KEY --config worker/wrangler.toml
 npx wrangler secret put FIGMA_TOKEN --config worker/wrangler.toml
 npx wrangler secret put OPENAI_API_KEY --config worker/wrangler.toml
-npx wrangler secret put SUPERMEMORY_API_KEY --config worker/wrangler.toml
 npx wrangler secret put IMAGE_SIGNING_SECRET --config worker/wrangler.toml
 ```
 

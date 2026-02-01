@@ -44,7 +44,7 @@ Supported groups:
 - `group:tracker` → Yandex Tracker tools (`yandex_tracker_search`, `issues_find`, `issue_get`, `issue_get_comments`, `issue_get_url`)
 - `group:jira` → Jira tools (`jira_search`, `jira_issues_find`, `jira_issue_get`, `jira_issue_get_comments`, `jira_sprint_issues`)
 - `group:posthog` → PostHog read-only tools
-- `group:memory` → Supermemory tools (`searchMemories`, `addMemory`)
+- `group:memory` → workspace memory tools (`memory_read`, `memory_append`, `memory_write`, `memory_search`, `session_history`)
 - `group:runtime-skills` → reserved
 
 Examples:
@@ -69,12 +69,12 @@ When a conflict occurs, Omni logs a `tool_conflict` event and skips the duplicat
 
 Omni emits status messages in Telegram/Admin chat when slow tools are running:
 
-- `web_search` → "Ищу в интернете…"
-- `yandex_tracker_*` → "Проверяю в Yandex Tracker…"
-- `jira_*` → "Проверяю в Jira…"
-- `yandex_wiki_*` → "Ищу в Yandex Wiki…"
-- `google_public_doc_read` / `google_public_sheet_read` → "Читаю ссылку…"
-- `figma_*` → "Смотрю в Figma…"
-- `posthog_*` (readonly) → "Смотрю аналитику…"
-- `searchMemories` / `addMemory` → "Смотрю историю…"
-- `cron_*` → "Настраиваю расписание…"
+- `web_search` → "Searching the web…"
+- `yandex_tracker_*` → "Checking Yandex Tracker…"
+- `jira_*` → "Checking Jira…"
+- `yandex_wiki_*` → "Checking Yandex Wiki…"
+- `google_public_doc_read` / `google_public_sheet_read` → "Reading link…"
+- `figma_*` → "Checking Figma…"
+- `posthog_*` (readonly) → "Checking analytics…"
+- `memory_*` / `session_history` → "Reviewing history…"
+- `cron_*` → "Configuring schedule…"

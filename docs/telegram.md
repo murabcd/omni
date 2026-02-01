@@ -22,8 +22,8 @@ To disable mention gating in groups, set `TELEGRAM_GROUP_REQUIRE_MENTION=0`.
 
 Omni applies a chat-scoped tool policy:
 
-- 1‑1 chats: all tools are available (web + Supermemory included).
-- Group chats: `web_search`, `searchMemories`, and `addMemory` are disabled.
+- 1‑1 chats: all tools are available (web + memory included).
+- Group chats: `web_search`, `memory_read`, `memory_append`, `memory_write`, `memory_search`, and `session_history` are disabled.
 
 Use `/tools` to see the active tool list for the current chat.
 

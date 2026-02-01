@@ -52,7 +52,7 @@ formatting, the bot falls back to plain text.
 
 - Images are supported from `message:photo`.
 - PDF and DOCX documents are supported from `message:document`.
-- Non-PDF/DOCX documents are ignored (reply: "Поддерживаются только PDF или DOCX документы.").
+- Non-PDF/DOCX documents are ignored (reply: "Only PDF or DOCX documents are supported.").
 - Direct chat uploads are read automatically.
 - Tracker issue attachments (PDF/DOCX) and Google Docs/Sheets links are offered after the first answer and read only with explicit consent.
 

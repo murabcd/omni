@@ -31,4 +31,4 @@ If any of these are missing, Jira tools are not registered.
 ## Notes
 
 - Comments and descriptions are flattened from Atlassian Document Format (ADF) into plain text.
-- Group chats still block web search and Supermemory tools, but Jira tools remain available.
+- Group chats still block web search and memory tools, but Jira tools remain available.

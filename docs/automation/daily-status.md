@@ -8,9 +8,9 @@ read_when:
 Omni can post a daily Jira status report to a Telegram chat using Cloudflare
 Worker Cron Triggers. The report is split by teams and includes:
 
-- Прогресс за вчера
-- Сейчас в работе
-- Блокеры/риски
+- Progress since yesterday
+- In progress now
+- Blockers/risks
 
 ## Scheduling
 
