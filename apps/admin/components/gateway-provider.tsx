@@ -170,9 +170,7 @@ const GatewayContext = createContext<GatewayContextValue | null>(null);
 
 function resolveDefaultBaseUrl(envBase: string) {
 	if (envBase) return envBase;
-	if (typeof window === "undefined") return "";
-	const proto = window.location.protocol === "https:" ? "https" : "http";
-	return `${proto}://${window.location.host}`;
+	return "";
 }
 
 function loadSettings(): AdminSettings | null {
