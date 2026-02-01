@@ -21,14 +21,19 @@ import {
 	sanitizeGatewayConfig,
 } from "../apps/bot/src/lib/gateway/config.js";
 import { allowTelegramUpdate } from "../apps/bot/src/lib/gateway/telegram-allowlist.js";
+import { appendHistoryMessage } from "../apps/bot/src/lib/context/session-history.js";
+import { buildSessionKey } from "../apps/bot/src/lib/context/session-key.js";
 import { buildDailyStatusReportParts } from "../apps/bot/src/lib/reports/daily-status.js";
 import { markdownToTelegramHtmlChunks } from "../apps/bot/src/lib/telegram/format.js";
+import { buildWorkspaceDefaults } from "../apps/bot/src/lib/workspace/defaults.js";
+import { resolveWorkspaceId } from "../apps/bot/src/lib/workspace/paths.js";
 import { ChannelsDO } from "./channels-do.js";
 import { CronDO } from "./cron-do.js";
 import {
 	authorizeGatewayToken,
 	buildAdminStatusPayload,
 } from "./lib/gateway.js";
+import { dispatchHooks, parseHooksConfig, type HookAction } from "./lib/hooks.js";
 import {
 	cleanupExpiredImagePrefixes,
 	createR2ImageStore,
@@ -40,6 +45,7 @@ import {
 	SKILLS_CONFIG_KEY,
 	serializeSkillsConfig,
 } from "./lib/skills.js";
+import { createR2TextStore } from "./lib/workspace-store.js";
 import { SessionsDO } from "./sessions-do.js";
 
 const startTime = Date.now();
@@ -77,6 +83,9 @@ type BotRuntime = Awaited<ReturnType<typeof createBot>>;
 let botPromise: Promise<BotRuntime> | null = null;
 const streamAbortControllers = new Map<string, AbortController>();
 let activeGatewayConnections = 0;
+const gatewayChatSockets = new Set<ServerWebSocket>();
+let hooksCache: { raw: string; hooks: ReturnType<typeof parseHooksConfig> } | null =
+	null;
 
 export function registerStreamAbort(
 	registry: Map<string, AbortController>,
@@ -259,6 +268,12 @@ async function getBot(env: Record<string, string | undefined>) {
 					return response.json();
 				},
 			};
+			const queueTurn = async (payload: Record<string, unknown>) => {
+				const response = await enqueueTurn(typedEnv, payload);
+				if (!response.ok) {
+					throw new Error("turn_enqueue_failed");
+				}
+			};
 			const runtime = await createBot({
 				env: effectiveEnv,
 				modelsConfig,
@@ -267,6 +282,29 @@ async function getBot(env: Record<string, string | undefined>) {
 				cronClient,
 				sessionClient,
 				imageStore: imageStore ?? undefined,
+				workspaceStore: createR2TextStore(typedEnv.omni),
+				workspaceDefaults: buildWorkspaceDefaults({
+					soul: SOUL_PROMPT,
+					projectContext: PROJECT_CONTEXT,
+				}),
+				queueTurn,
+				onToolEvent: async (event) => {
+					if (!event.chatId || !event.chatType) return;
+					const hooks = await resolveHooks(typedEnv);
+					const actions = dispatchHooks(hooks, {
+						event: "tool.finish",
+						chatId: event.chatId,
+						chatType: event.chatType,
+						toolName: event.toolName,
+					});
+					await handleHookActions({
+						env: typedEnv,
+						runtime,
+						actions,
+						chatId: event.chatId,
+						chatType: event.chatType,
+					});
+				},
 			});
 			await runtime.bot.init();
 			return runtime;
@@ -306,6 +344,22 @@ async function callSessions(
 	);
 }
 
+async function enqueueTurn(env: Env, payload: Record<string, unknown>) {
+	return callSessions(env, "/turns/enqueue", payload);
+}
+
+async function dequeueTurn(env: Env) {
+	return callSessions(env, "/turns/dequeue", {});
+}
+
+async function requeueTurn(env: Env, payload: Record<string, unknown>) {
+	return callSessions(env, "/turns/requeue", payload);
+}
+
+async function markTurnProcessed(env: Env, id: string) {
+	return callSessions(env, "/turns/processed", { id });
+}
+
 async function callCron(
 	env: Env,
 	path: string,
@@ -336,6 +390,109 @@ async function callChannels(
 		}),
 		5_000,
 	);
+}
+
+function buildTelegramSessionKey(chatId: string, chatType: string) {
+	const normalizedType =
+		chatType === "group" || chatType === "supergroup" || chatType === "channel"
+			? chatType
+			: "private";
+	return buildSessionKey({
+		channel: "telegram",
+		chatType: normalizedType,
+		chatId,
+	});
+}
+
+function isNumericChatId(chatId: string) {
+	return /^-?\d+$/.test(chatId.trim());
+}
+
+async function runSubagentTask(params: {
+	runtime: BotRuntime;
+	env: Env;
+	chatId: string;
+	chatType: string;
+	prompt: string;
+	channelConfig?: Record<string, unknown>;
+	announcePrefix?: string;
+}) {
+	const jobId = crypto.randomUUID();
+	const workspaceId = resolveWorkspaceId(params.chatId);
+	const subSessionKey = buildTelegramSessionKey(
+		`${params.chatId}:sub:${jobId}`,
+		params.chatType,
+	);
+	const result = await params.runtime.runLocalChat({
+		text: params.prompt,
+		chatId: `sub:${params.chatId}:${jobId}`,
+		userId: "subagent",
+		userName: "Subagent",
+		chatType: "private",
+		workspaceId,
+		sessionKey: subSessionKey,
+		channelConfig: params.channelConfig,
+		systemEvent: true,
+	});
+	const messages = result.messages ?? [];
+	let last = "";
+	for (let i = messages.length - 1; i >= 0; i -= 1) {
+		const candidate = messages[i]?.trim() ?? "";
+		if (candidate) {
+			last = candidate;
+			break;
+		}
+	}
+	const prefix = (params.announcePrefix ?? "Результат подзадачи:").trim();
+	const announceText = `${prefix}${prefix.endsWith(" ") ? "" : " "}${last || "Нет ответа."}`;
+	const sessionKey = buildTelegramSessionKey(params.chatId, params.chatType);
+	await enqueueTurn(params.env, {
+		sessionKey,
+		chatId: params.chatId,
+		chatType: params.chatType,
+		text: announceText,
+		kind: "announce",
+		channelConfig: params.channelConfig,
+		meta: { subagentId: jobId },
+	});
+}
+
+async function handleHookActions(params: {
+	env: Env;
+	runtime: BotRuntime;
+	actions: HookAction[];
+	chatId?: string;
+	chatType?: string;
+	channelConfig?: Record<string, unknown>;
+}) {
+	const { actions, chatId, chatType } = params;
+	if (!actions.length || !chatId || !chatType) return;
+	for (const action of actions) {
+		if (action.type === "enqueue_turn") {
+			const sessionKey = buildTelegramSessionKey(chatId, chatType);
+			await enqueueTurn(params.env, {
+				sessionKey,
+				chatId,
+				chatType,
+				text: action.text,
+				kind: action.kind ?? "hook",
+				channelConfig: params.channelConfig,
+			});
+		} else if (action.type === "spawn_subagent") {
+			const sessionKey = buildTelegramSessionKey(chatId, chatType);
+			await enqueueTurn(params.env, {
+				sessionKey,
+				chatId,
+				chatType,
+				text: action.prompt,
+				kind: "subagent",
+				channelConfig: params.channelConfig,
+				meta: action.announcePrefix
+					? { announcePrefix: action.announcePrefix }
+					: undefined,
+			});
+		}
+	}
 }
 
 async function withTimeout<T>(
@@ -567,6 +724,16 @@ async function readGatewayConfig(env: Env): Promise<GatewayConfig> {
 		console.error("gateway_config_read_error", error);
 		return {};
 	}
+}
+
+async function resolveHooks(env: Env) {
+	const config = await readGatewayConfig(env);
+	const effectiveEnv = applyGatewayConfig(env, config) as Env;
+	const raw = effectiveEnv.HOOKS_CONFIG?.trim() ?? "";
+	if (hooksCache && hooksCache.raw === raw) return hooksCache.hooks;
+	const hooks = parseHooksConfig(raw);
+	hooksCache = { raw, hooks };
+	return hooks;
 }
 
 async function writeGatewayConfig(env: Env, config: GatewayConfig) {
@@ -895,6 +1062,10 @@ const RETRY_MAX_MS = 60_000;
 const PROCESSED_IDS_MAX = 1_000;
 const PROCESS_BUDGET_MS = 1_500;
 const QUEUE_LOCK_MS = 60_000;
+const TURN_MAX_ATTEMPTS = 3;
+const TURN_RETRY_BASE_MS = 1_000;
+const TURN_RETRY_MAX_MS = 60_000;
+const TURN_PROCESS_BUDGET_MS = 1_200;
 
 export class TelegramUpdatesDO implements DurableObject {
 	private state: DurableObjectState;
@@ -1123,6 +1294,55 @@ export class TelegramUpdatesProcessorDO implements DurableObject {
 		});
 	}
 
+	private async processTurnQueue(runtime: BotRuntime): Promise<void> {
+		const startedAt = Date.now();
+		while (Date.now() - startedAt < TURN_PROCESS_BUDGET_MS) {
+			const response = await dequeueTurn(this.env);
+			if (!response.ok) break;
+			const payload = await response.json();
+			const ok = payload?.ok === true;
+			if (!ok) {
+				if (payload?.nextAt) {
+					await this.state.storage.setAlarm(payload.nextAt);
+				}
+				break;
+			}
+			const item = payload.item as
+				| {
+						id: string;
+						chatId: string;
+						chatType: string;
+						text: string;
+						kind: string;
+						turnDepth?: number;
+						channelConfig?: Record<string, unknown>;
+						meta?: Record<string, unknown>;
+						attempt: number;
+						nextAt: number;
+				  }
+				| undefined;
+			if (!item?.id) break;
+			try {
+				await handleTurnItem(this.env, runtime, item);
+				await markTurnProcessed(this.env, item.id);
+			} catch (error) {
+				item.attempt = (item.attempt ?? 0) + 1;
+				if (item.attempt >= TURN_MAX_ATTEMPTS) {
+					await markTurnProcessed(this.env, item.id);
+					continue;
+				}
+				const delay = Math.min(
+					TURN_RETRY_BASE_MS * 2 ** (item.attempt - 1),
+					TURN_RETRY_MAX_MS,
+				);
+				item.nextAt = Date.now() + delay;
+				await requeueTurn(this.env, item as Record<string, unknown>);
+				await this.state.storage.setAlarm(item.nextAt);
+				break;
+			}
+		}
+	}
+
 	private async processQueue(): Promise<void> {
 		if (this.processing) return;
 		this.processing = true;
@@ -1166,6 +1386,8 @@ export class TelegramUpdatesProcessorDO implements DurableObject {
 					});
 					await runtime.bot.handleUpdate(item.update);
 					await touchTelegramSession(this.env, item.update);
+					await dispatchTelegramHooks(this.env, runtime, item.update);
+					await this.processTurnQueue(runtime);
 					logBotInvocation("bot_invocation_end", item.update, {
 						route: "processed",
 						stream: false,
@@ -1202,6 +1424,198 @@ export class TelegramUpdatesProcessorDO implements DurableObject {
 			this.processing = false;
 		}
 	}
+}
+
+function extractTelegramMessage(update: Update) {
+	const payload = update as Update & Record<string, unknown>;
+	const message =
+		(payload.message as
+			| { chat?: { id?: number; type?: string }; text?: string; caption?: string }
+			| undefined) ??
+		(payload.edited_message as
+			| { chat?: { id?: number; type?: string }; text?: string; caption?: string }
+			| undefined) ??
+		(payload.channel_post as
+			| { chat?: { id?: number; type?: string }; text?: string; caption?: string }
+			| undefined) ??
+		(payload.edited_channel_post as
+			| { chat?: { id?: number; type?: string }; text?: string; caption?: string }
+			| undefined) ??
+		(
+			payload.callback_query as
+				| { message?: { chat?: { id?: number; type?: string }; text?: string } }
+				| undefined
+		)?.message ??
+		undefined;
+	const chatId = message?.chat?.id;
+	const chatType = message?.chat?.type ?? "private";
+	const text = message?.text ?? message?.caption ?? "";
+	return {
+		chatId: typeof chatId === "number" ? String(chatId) : "",
+		chatType,
+		text,
+		channelConfig:
+			(payload as { __channelConfig?: Record<string, unknown> }).__channelConfig,
+	};
+}
+
+async function dispatchTelegramHooks(
+	env: Env,
+	runtime: BotRuntime,
+	update: Update,
+) {
+	const { chatId, chatType, text, channelConfig } = extractTelegramMessage(update);
+	if (!chatId || !text) return;
+	const hooks = await resolveHooks(env);
+	const actions = dispatchHooks(hooks, {
+		event: "telegram.message",
+		chatId,
+		chatType,
+		text,
+	});
+	await handleHookActions({
+		env,
+		runtime,
+		actions,
+		chatId,
+		chatType,
+		channelConfig,
+	});
+}
+
+function buildSystemUpdate(params: {
+	chatId: string;
+	chatType: string;
+	text: string;
+	channelConfig?: Record<string, unknown>;
+	turnDepth?: number;
+}) {
+	const chatIdNum = Number(params.chatId);
+	if (!Number.isFinite(chatIdNum)) return null;
+	const messageId = Math.floor(Date.now() % 1_000_000_000);
+	const update: Update & {
+		__systemEvent?: boolean;
+		__turnDepth?: number;
+		__channelConfig?: Record<string, unknown>;
+	} = {
+		update_id: Date.now(),
+		message: {
+			message_id: messageId,
+			date: Math.floor(Date.now() / 1000),
+			chat: {
+				id: chatIdNum,
+				type: params.chatType as "private" | "group" | "supergroup" | "channel",
+			},
+			from: {
+				id: 0,
+				is_bot: true,
+				first_name: "Omni",
+			},
+			text: params.text,
+		},
+	};
+	update.__systemEvent = true;
+	if (typeof params.turnDepth === "number") {
+		update.__turnDepth = params.turnDepth;
+	}
+	if (params.channelConfig) {
+		update.__channelConfig = params.channelConfig;
+	}
+	return update;
+}
+
+async function handleTurnItem(
+	env: Env,
+	runtime: BotRuntime,
+	item: {
+		id: string;
+		chatId: string;
+		chatType: string;
+		text: string;
+		kind: string;
+		channelConfig?: Record<string, unknown>;
+		turnDepth?: number;
+		meta?: Record<string, unknown>;
+	},
+) {
+	if (item.kind === "announce") {
+		if (isNumericChatId(item.chatId)) {
+			const token = env.BOT_TOKEN?.trim();
+			if (!token) {
+				throw new Error("bot_token_missing");
+			}
+			await sendTelegramMessage(token, item.chatId, item.text);
+		} else {
+			broadcastAdminChatEvent({
+				chatId: item.chatId,
+				message: {
+					role: "assistant",
+					text: item.text,
+					createdAt: Date.now(),
+				},
+			});
+		}
+		const store = createR2TextStore(env.omni);
+		const workspaceId = resolveWorkspaceId(item.chatId);
+		const sessionKey = buildTelegramSessionKey(item.chatId, item.chatType);
+		await appendHistoryMessage(store, workspaceId, sessionKey, {
+			timestamp: new Date().toISOString(),
+			role: "assistant",
+			text: item.text,
+		});
+		return;
+	}
+	if (item.kind === "subagent") {
+		await runSubagentTask({
+			runtime,
+			env,
+			chatId: item.chatId,
+			chatType: item.chatType,
+			prompt: item.text,
+			channelConfig: item.channelConfig,
+			announcePrefix:
+				typeof item.meta?.announcePrefix === "string"
+					? item.meta.announcePrefix
+					: undefined,
+		});
+		return;
+	}
+	if (!isNumericChatId(item.chatId)) {
+		const result = await runtime.runLocalChat({
+			text: item.text,
+			chatId: item.chatId,
+			userId: "system",
+			userName: "System",
+			chatType: "private",
+			systemEvent: true,
+		});
+		const messages = result.messages ?? [];
+		for (const message of messages) {
+			const trimmed = message.trim();
+			if (!trimmed) continue;
+			broadcastAdminChatEvent({
+				chatId: item.chatId,
+				message: {
+					role: "assistant",
+					text: trimmed,
+					createdAt: Date.now(),
+				},
+			});
+		}
+		return;
+	}
+	const update = buildSystemUpdate({
+		chatId: item.chatId,
+		chatType: item.chatType,
+		text: item.text,
+		channelConfig: item.channelConfig,
+		turnDepth: item.turnDepth,
+	});
+	if (!update) {
+		throw new Error("invalid_system_update");
+	}
+	await runtime.bot.handleUpdate(update);
+	await touchTelegramSession(env, update);
 }
 
 function logBotInvocation(
@@ -1391,8 +1805,10 @@ function handleGatewayWebSocket(
 
 	server.accept();
 	activeGatewayConnections += 1;
+	gatewayChatSockets.add(server);
 	server.addEventListener("close", () => {
 		activeGatewayConnections = Math.max(0, activeGatewayConnections - 1);
+		gatewayChatSockets.delete(server);
 	});
 
 	const send = (frame: unknown) => {
@@ -1948,6 +2364,22 @@ function handleGatewayWebSocket(
 						}),
 					);
 					const runtime = await getBot(env);
+					if (text) {
+						const hooks = await resolveHooks(env);
+						const actions = dispatchHooks(hooks, {
+							event: "admin.message",
+							chatId,
+							chatType,
+							text,
+						});
+						await handleHookActions({
+							env,
+							runtime,
+							actions,
+							chatId,
+							chatType,
+						});
+					}
 					const result = await runtime.runLocalChat({
 						text,
 						files,
@@ -2010,6 +2442,22 @@ function handleGatewayWebSocket(
 						}),
 					);
 					const runtime = await getBot(env);
+					if (text) {
+						const hooks = await resolveHooks(env);
+						const actions = dispatchHooks(hooks, {
+							event: "admin.message",
+							chatId,
+							chatType,
+							text,
+						});
+						await handleHookActions({
+							env,
+							runtime,
+							actions,
+							chatId,
+							chatType,
+						});
+					}
 					const result = await runtime.runLocalChatStream(
 						{
 							text,
@@ -2096,6 +2544,24 @@ function handleGatewayWebSocket(
 			webSocket: client,
 		} as ResponseInit & { webSocket: WebSocket }),
 	);
+}
+
+function broadcastAdminChatEvent(payload: {
+	chatId: string;
+	message: { role: "assistant" | "user"; text: string; createdAt?: number };
+}) {
+	const frame = {
+		type: "chat",
+		chatId: payload.chatId,
+		message: payload.message,
+	};
+	for (const socket of gatewayChatSockets) {
+		try {
+			socket.send(JSON.stringify(frame));
+		} catch {
+			// ignore send errors
+		}
+	}
 }
 
 function withCors(response: Response) {

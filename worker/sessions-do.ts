@@ -48,12 +48,33 @@ export type SessionsListResult = {
 	sessions: SessionEntry[];
 };
 
+export type TurnQueueItem = {
+	id: string;
+	sessionKey: string;
+	chatId: string;
+	chatType: "private" | "group" | "supergroup" | "channel";
+	text: string;
+	kind: "system" | "hook" | "followup" | "announce" | "subagent";
+	createdAt: number;
+	nextAt: number;
+	attempt: number;
+	lockedUntil?: number;
+	channelConfig?: Record<string, unknown>;
+	turnDepth?: number;
+	meta?: Record<string, unknown>;
+};
+
 type StoredSessions = {
 	sessions: Record<string, SessionEntry>;
+	turnQueue: TurnQueueItem[];
+	processedTurnIds: string[];
 };
 
 const STORE_KEY = "sessions";
 const STORE_PATH = "do://sessions";
+const TURN_QUEUE_LOCK_MS = 60_000;
+const TURN_QUEUE_MAX = 5_000;
+const TURN_PROCESSED_MAX = 2_000;
 
 function now() {
 	return Date.now();
@@ -101,6 +122,16 @@ export class SessionsDO implements DurableObject {
 				return this.resolve(body as Record<string, unknown>);
 			case "/touch":
 				return this.touch(body as Record<string, unknown>);
+			case "/turns/enqueue":
+				return this.enqueueTurn(body as Record<string, unknown>);
+			case "/turns/dequeue":
+				return this.dequeueTurn();
+			case "/turns/requeue":
+				return this.requeueTurn(body as Record<string, unknown>);
+			case "/turns/processed":
+				return this.markTurnProcessed(body as Record<string, unknown>);
+			case "/turns/list":
+				return this.listTurns(body as Record<string, unknown>);
 			default:
 				return new Response("Not Found", { status: 404 });
 		}
@@ -109,9 +140,15 @@ export class SessionsDO implements DurableObject {
 	private async load(): Promise<StoredSessions> {
 		const stored = (await this.state.storage.get<StoredSessions>(STORE_KEY)) ?? {
 			sessions: {},
+			turnQueue: [],
+			processedTurnIds: [],
 		};
 		return {
 			sessions: stored.sessions ?? {},
+			turnQueue: Array.isArray(stored.turnQueue) ? stored.turnQueue : [],
+			processedTurnIds: Array.isArray(stored.processedTurnIds)
+				? stored.processedTurnIds
+				: [],
 		};
 	}
 
@@ -450,5 +487,158 @@ export class SessionsDO implements DurableObject {
 		state.sessions[key] = next;
 		await this.save(state);
 		return Response.json({ ok: true });
+	}
+
+	private normalizeTurn(params: Record<string, unknown>): TurnQueueItem | null {
+		const sessionKey = String(params.sessionKey ?? "").trim();
+		const chatId = String(params.chatId ?? "").trim();
+		const chatTypeRaw = String(params.chatType ?? "").trim();
+		const text = typeof params.text === "string" ? params.text.trim() : "";
+		if (!sessionKey || !chatId || !text) return null;
+		const chatType =
+			chatTypeRaw === "group" ||
+			chatTypeRaw === "supergroup" ||
+			chatTypeRaw === "channel"
+				? chatTypeRaw
+				: "private";
+		const kindRaw = typeof params.kind === "string" ? params.kind.trim() : "";
+		const kind =
+			kindRaw === "hook" ||
+			kindRaw === "followup" ||
+			kindRaw === "announce" ||
+			kindRaw === "subagent"
+				? kindRaw
+				: "system";
+		const createdAt = typeof params.createdAt === "number" ? params.createdAt : now();
+		const nextAt = typeof params.nextAt === "number" ? params.nextAt : createdAt;
+		const id =
+			typeof params.id === "string" && params.id.trim()
+				? params.id.trim()
+				: `${createdAt}-${crypto.randomUUID()}`;
+		return {
+			id,
+			sessionKey,
+			chatId,
+			chatType,
+			text,
+			kind,
+			createdAt,
+			nextAt,
+			attempt: 0,
+			channelConfig:
+				params.channelConfig && typeof params.channelConfig === "object"
+					? (params.channelConfig as Record<string, unknown>)
+					: undefined,
+			turnDepth:
+				typeof params.turnDepth === "number" ? params.turnDepth : undefined,
+			meta:
+				params.meta && typeof params.meta === "object"
+					? (params.meta as Record<string, unknown>)
+					: undefined,
+		};
+	}
+
+	private async enqueueTurn(params: Record<string, unknown>) {
+		const nextItem = this.normalizeTurn(params);
+		if (!nextItem) return new Response("invalid_turn", { status: 400 });
+		const state = await this.load();
+		if (state.processedTurnIds.includes(nextItem.id)) {
+			return Response.json({ ok: true, skipped: true });
+		}
+		if (state.turnQueue.some((item) => item.id === nextItem.id)) {
+			return Response.json({ ok: true, skipped: true });
+		}
+		state.turnQueue.push(nextItem);
+		if (state.turnQueue.length > TURN_QUEUE_MAX) {
+			state.turnQueue = state.turnQueue.slice(-TURN_QUEUE_MAX);
+		}
+		await this.save(state);
+		return Response.json({ ok: true, id: nextItem.id });
+	}
+
+	private async dequeueTurn() {
+		const state = await this.load();
+		if (state.turnQueue.length === 0) {
+			return Response.json({ ok: false, nextAt: null });
+		}
+		const nowTs = now();
+		let bestIndex = -1;
+		let bestNextAt = Number.POSITIVE_INFINITY;
+		for (let i = 0; i < state.turnQueue.length; i += 1) {
+			const candidate = state.turnQueue[i];
+			if (!candidate) continue;
+			if (candidate.nextAt > nowTs) continue;
+			if (candidate.lockedUntil && candidate.lockedUntil > nowTs) continue;
+			if (candidate.nextAt < bestNextAt) {
+				bestNextAt = candidate.nextAt;
+				bestIndex = i;
+			}
+		}
+		const item = bestIndex >= 0 ? state.turnQueue[bestIndex] : null;
+		if (!item) {
+			state.turnQueue.sort((a, b) => a.nextAt - b.nextAt);
+			const nextItem = state.turnQueue[0];
+			return Response.json({
+				ok: false,
+				nextAt: nextItem ? nextItem.nextAt : null,
+			});
+		}
+		item.lockedUntil = nowTs + TURN_QUEUE_LOCK_MS;
+		await this.save(state);
+		return Response.json({ ok: true, item });
+	}
+
+	private async requeueTurn(params: Record<string, unknown>) {
+		const body = params as Partial<TurnQueueItem>;
+		if (!body?.id || !body.sessionKey) {
+			return new Response("invalid_turn", { status: 400 });
+		}
+		const state = await this.load();
+		const existing = state.turnQueue.find((item) => item.id === body.id);
+		if (existing) {
+			existing.attempt =
+				typeof body.attempt === "number" ? body.attempt : existing.attempt;
+			existing.nextAt =
+				typeof body.nextAt === "number" ? body.nextAt : existing.nextAt;
+			existing.lockedUntil = undefined;
+		} else {
+			state.turnQueue.push({
+				...(body as TurnQueueItem),
+				lockedUntil: undefined,
+				attempt: typeof body.attempt === "number" ? body.attempt : 0,
+				nextAt: typeof body.nextAt === "number" ? body.nextAt : now(),
+			});
+		}
+		await this.save(state);
+		return Response.json({ ok: true });
+	}
+
+	private async markTurnProcessed(params: Record<string, unknown>) {
+		const id = String(params.id ?? "").trim();
+		if (!id) return new Response("id required", { status: 400 });
+		const state = await this.load();
+		state.turnQueue = state.turnQueue.filter((item) => item.id !== id);
+		state.processedTurnIds.push(id);
+		if (state.processedTurnIds.length > TURN_PROCESSED_MAX) {
+			state.processedTurnIds = state.processedTurnIds.slice(
+				-state.processedTurnIds.length + TURN_PROCESSED_MAX,
+			);
+		}
+		await this.save(state);
+		return Response.json({ ok: true });
+	}
+
+	private async listTurns(params: Record<string, unknown>) {
+		const state = await this.load();
+		const limit = Number.parseInt(String(params.limit ?? ""), 10);
+		const items =
+			Number.isFinite(limit) && limit > 0
+				? state.turnQueue.slice(0, limit)
+				: state.turnQueue;
+		return Response.json({
+			ok: true,
+			count: state.turnQueue.length,
+			items,
+		});
 	}
 }
