@@ -23,6 +23,7 @@ const GATEWAY_CONFIG_KEYS = [
 	"SUBAGENT_MODEL_PROVIDER",
 	"SUBAGENT_MODEL_ID",
 	"SKILLS_CONFIG",
+	"HOOKS_CONFIG",
 ] as const;
 
 type GatewayConfigKey = (typeof GATEWAY_CONFIG_KEYS)[number];
