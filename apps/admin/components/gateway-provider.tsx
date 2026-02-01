@@ -120,6 +120,12 @@ type GatewayContextValue = {
 		installId: string;
 		timeoutMs?: number;
 	}) => Promise<{ ok?: boolean; message?: string }>;
+	subscribeChatEvents: (
+		listener: (payload: {
+			chatId: string;
+			message?: { role?: "assistant" | "user"; text?: string; createdAt?: number };
+		}) => void,
+	) => () => void;
 	sessionsList: (params?: {
 		activeMinutes?: number | string;
 		limit?: number | string;
@@ -532,6 +538,19 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
 		[ensureConnected],
 	);
 
+	const subscribeChatEvents = useCallback(
+		(
+			listener: (payload: {
+				chatId: string;
+				message?: { role?: "assistant" | "user"; text?: string; createdAt?: number };
+			}) => void,
+		) => {
+			if (!clientRef.current) return () => {};
+			return clientRef.current.onChatEvent(listener);
+		},
+		[],
+	);
+
 	const value = useMemo(
 		() => ({
 			baseUrl,
@@ -562,6 +581,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
 			skillsStatus,
 			skillsUpdate,
 			skillsInstall,
+			subscribeChatEvents,
 			sessionsList,
 			sessionsPatch,
 			sessionsReset,
@@ -595,6 +615,7 @@ export function GatewayProvider({ children }: { children: React.ReactNode }) {
 			skillsStatus,
 			skillsUpdate,
 			skillsInstall,
+			subscribeChatEvents,
 			sessionsList,
 			sessionsPatch,
 			sessionsReset,

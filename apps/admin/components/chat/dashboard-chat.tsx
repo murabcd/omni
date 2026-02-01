@@ -29,7 +29,7 @@ export function DashboardChat({
 	const scrollRef = useRef<HTMLDivElement>(null);
 	const inputRef = useRef<HTMLDivElement>(null);
 	const router = useRouter();
-	const { streamChat, abortChat, config } = useGateway();
+	const { streamChat, abortChat, config, subscribeChatEvents } = useGateway();
 	const [hasSentPending, setHasSentPending] = useState(false);
 	const [inputHeight, setInputHeight] = useState(0);
 
@@ -41,7 +41,8 @@ export function DashboardChat({
 		[streamChat, abortChat],
 	);
 
-	const { messages, sendMessage, status, stop } = useChat<AdminUIMessage>({
+	const { messages, sendMessage, status, stop, setMessages } =
+		useChat<AdminUIMessage>({
 		id: chatId,
 		transport,
 	});
@@ -92,6 +93,25 @@ export function DashboardChat({
 			viewport.scrollTop = viewport.scrollHeight;
 		}
 	}, [messagesLength, hasMessages, getScrollViewport]);
+
+	useEffect(() => {
+		const unsubscribe = subscribeChatEvents((payload) => {
+			if (payload.chatId !== chatId) return;
+			const text = payload.message?.text?.trim() ?? "";
+			if (!text) return;
+			setMessages((prev) => [
+				...prev,
+				{
+					id: generateId(),
+					role: payload.message?.role === "user" ? "user" : "assistant",
+					parts: [{ type: "text", text }],
+				} satisfies AdminUIMessage,
+			]);
+		});
+		return () => {
+			unsubscribe();
+		};
+	}, [chatId, setMessages, subscribeChatEvents]);
 
 	const handleSubmit = useCallback(
 		async (message: PromptInputMessage & { webSearchEnabled?: boolean }) => {

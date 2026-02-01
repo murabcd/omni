@@ -25,6 +25,12 @@ export type GatewayEventFrame = {
 	error?: { message?: string };
 };
 
+export type GatewayChatFrame = {
+	type: "chat";
+	chatId: string;
+	message?: { role?: "assistant" | "user"; text?: string; createdAt?: number };
+};
+
 export type GatewayConfig = Record<string, string>;
 
 export type GatewayConnectPayload = {
@@ -50,6 +56,7 @@ export class GatewayClient {
 	private pending = new Map<string, PendingRequest>();
 	private opening: Promise<void> | null = null;
 	private streams = new Map<string, ReadableStreamDefaultController<unknown>>();
+	private chatListeners = new Set<(payload: GatewayChatFrame) => void>();
 
 	constructor(
 		private opts: {
@@ -93,7 +100,7 @@ export class GatewayClient {
 		} catch {
 			return;
 		}
-		const frame = parsed as GatewayResponseFrame | GatewayEventFrame;
+		const frame = parsed as GatewayResponseFrame | GatewayEventFrame | GatewayChatFrame;
 		if (frame.type === "res" && typeof frame.id === "string") {
 			const pending = this.pending.get(frame.id);
 			if (!pending) return;
@@ -102,6 +109,12 @@ export class GatewayClient {
 				pending.resolve(frame.payload);
 			} else {
 				pending.reject(new Error(frame.error?.message ?? "request_failed"));
+			}
+			return;
+		}
+		if (frame.type === "chat" && typeof frame.chatId === "string") {
+			for (const listener of this.chatListeners) {
+				listener(frame);
 			}
 			return;
 		}
@@ -312,6 +325,13 @@ export class GatewayClient {
 		timeoutMs?: number;
 	}): Promise<{ ok?: boolean; message?: string }> {
 		return this.request("skills.install", params);
+	}
+
+	onChatEvent(listener: (payload: GatewayChatFrame) => void) {
+		this.chatListeners.add(listener);
+		return () => {
+			this.chatListeners.delete(listener);
+		};
 	}
 
 	close() {
