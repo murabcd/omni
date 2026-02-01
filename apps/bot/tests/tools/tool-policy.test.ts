@@ -18,4 +18,12 @@ describe("tool policy groups", () => {
 		expect(expanded).toContain("jira_issue_get_comments");
 		expect(expanded).toContain("jira_sprint_issues");
 	});
+
+	it("expands firecrawl group to include research tools", () => {
+		const expanded = expandToolGroups(["group:firecrawl"]);
+		expect(expanded).toContain("firecrawl_search");
+		expect(expanded).toContain("firecrawl_scrape");
+		expect(expanded).toContain("firecrawl_crawl");
+		expect(expanded).toContain("research_export_csv");
+	});
 });

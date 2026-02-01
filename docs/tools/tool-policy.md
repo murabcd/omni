@@ -41,6 +41,7 @@ Chat‑specific allow/deny lists are merged on top of the base lists.
 Supported groups:
 
 - `group:web` → `web_search`
+- `group:firecrawl` → Firecrawl tools (`firecrawl_*`, `research_export_csv`)
 - `group:tracker` → Yandex Tracker tools (`yandex_tracker_search`, `issues_find`, `issue_get`, `issue_get_comments`, `issue_get_url`)
 - `group:jira` → Jira tools (`jira_search`, `jira_issues_find`, `jira_issue_get`, `jira_issue_get_comments`, `jira_sprint_issues`)
 - `group:posthog` → PostHog read-only tools
@@ -70,6 +71,7 @@ When a conflict occurs, Omni logs a `tool_conflict` event and skips the duplicat
 Omni emits status messages in Telegram/Admin chat when slow tools are running:
 
 - `web_search` → "Searching the web…"
+- `firecrawl_*` → "Collecting data from websites…"
 - `yandex_tracker_*` → "Checking Yandex Tracker…"
 - `jira_*` → "Checking Jira…"
 - `yandex_wiki_*` → "Checking Yandex Wiki…"

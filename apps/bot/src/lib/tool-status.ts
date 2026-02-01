@@ -4,6 +4,7 @@ import { createMessagingDedupe } from "./tools/messaging-dedupe.js";
 export type ToolStatusOptions = {
 	delayMs?: number;
 	webMessage?: string;
+	firecrawlMessage?: string;
 	trackerMessage?: string;
 	jiraMessage?: string;
 	posthogMessage?: string;
@@ -19,15 +20,16 @@ export function createToolStatusHandler(
 	options: ToolStatusOptions = {},
 ) {
 	const delayMs = options.delayMs ?? 1500;
-	const webMessage = options.webMessage ?? "Ищу в интернете…";
-	const trackerMessage = options.trackerMessage ?? "Проверяю в Yandex Tracker…";
-	const jiraMessage = options.jiraMessage ?? "Проверяю в Jira…";
-	const posthogMessage = options.posthogMessage ?? "Смотрю аналитику…";
-	const memoryMessage = options.memoryMessage ?? "Смотрю историю…";
-	const cronMessage = options.cronMessage ?? "Настраиваю расписание…";
-	const wikiMessage = options.wikiMessage ?? "Ищу в Yandex Wiki…";
-	const googleMessage = options.googleMessage ?? "Читаю ссылку…";
-	const figmaMessage = options.figmaMessage ?? "Смотрю в Figma…";
+	const webMessage = options.webMessage;
+	const firecrawlMessage = options.firecrawlMessage;
+	const trackerMessage = options.trackerMessage;
+	const jiraMessage = options.jiraMessage;
+	const posthogMessage = options.posthogMessage;
+	const memoryMessage = options.memoryMessage;
+	const cronMessage = options.cronMessage;
+	const wikiMessage = options.wikiMessage;
+	const googleMessage = options.googleMessage;
+	const figmaMessage = options.figmaMessage;
 	const toolStatusSent = new Set<string>();
 	const toolStatusTimers = new Map<string, ReturnType<typeof setTimeout>>();
 	const { record, shouldSend } = createMessagingDedupe();
@@ -52,7 +54,8 @@ export function createToolStatusHandler(
 		"google_public_slides_read",
 	]);
 
-	const scheduleStatus = (key: string, message: string) => {
+	const scheduleStatus = (key: string, message?: string) => {
+		if (!message || !message.trim()) return;
 		if (toolStatusSent.has(key) || toolStatusTimers.has(key)) return;
 		const timer = setTimeout(() => {
 			if (!shouldSend(message)) return;
@@ -74,6 +77,7 @@ export function createToolStatusHandler(
 
 	const clearAllStatuses = () => {
 		clearStatus("web_search");
+		clearStatus("firecrawl");
 		clearStatus("yandex_tracker_search");
 		clearStatus("jira");
 		clearStatus("posthog");
@@ -86,6 +90,9 @@ export function createToolStatusHandler(
 
 	const onToolStep = (toolNames: string[]) => {
 		const hasWeb = toolNames.includes("web_search");
+		const hasFirecrawl = toolNames.some((name) =>
+			name.startsWith("firecrawl_"),
+		);
 		const hasTracker = toolNames.some((name) =>
 			name.startsWith("yandex_tracker_"),
 		);
@@ -99,6 +106,7 @@ export function createToolStatusHandler(
 		const hasGoogle = toolNames.some((name) => googleTools.has(name));
 		const hasFigma = toolNames.some((name) => name.startsWith("figma_"));
 		if (hasWeb) scheduleStatus("web_search", webMessage);
+		if (hasFirecrawl) scheduleStatus("firecrawl", firecrawlMessage);
 		if (hasTracker) scheduleStatus("yandex_tracker_search", trackerMessage);
 		if (hasJira) scheduleStatus("jira", jiraMessage);
 		if (hasPosthog) scheduleStatus("posthog", posthogMessage);
@@ -108,6 +116,7 @@ export function createToolStatusHandler(
 		if (hasGoogle) scheduleStatus("google", googleMessage);
 		if (hasFigma) scheduleStatus("figma", figmaMessage);
 		if (!hasWeb) clearStatus("web_search");
+		if (!hasFirecrawl) clearStatus("firecrawl");
 		if (!hasTracker) clearStatus("yandex_tracker_search");
 		if (!hasJira) clearStatus("jira");
 		if (!hasPosthog) clearStatus("posthog");
@@ -120,6 +129,8 @@ export function createToolStatusHandler(
 
 	const onToolStart = (toolName: string) => {
 		if (toolName === "web_search") scheduleStatus("web_search", webMessage);
+		if (toolName.startsWith("firecrawl_"))
+			scheduleStatus("firecrawl", firecrawlMessage);
 		if (toolName.startsWith("yandex_tracker_"))
 			scheduleStatus("yandex_tracker_search", trackerMessage);
 		if (jiraTools.has(toolName)) scheduleStatus("jira", jiraMessage);

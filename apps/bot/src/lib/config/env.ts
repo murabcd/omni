@@ -43,6 +43,7 @@ export type BotEnvConfig = {
 	WEB_SEARCH_CONTEXT_SIZE: string;
 	BROWSER_ENABLED: boolean;
 	BROWSER_ALLOWLIST: string;
+	FIRECRAWL_API_KEY: string;
 	TOOL_RATE_LIMITS: string;
 	TOOL_APPROVAL_REQUIRED: string;
 	TOOL_APPROVAL_TTL_MS: number;
@@ -167,6 +168,7 @@ export function loadBotEnv(env: BotEnv): BotEnvConfig {
 	const WEB_SEARCH_CONTEXT_SIZE = env.WEB_SEARCH_CONTEXT_SIZE ?? "low";
 	const BROWSER_ENABLED = env.BROWSER_ENABLED === "1";
 	const BROWSER_ALLOWLIST = env.BROWSER_ALLOWLIST ?? "";
+	const FIRECRAWL_API_KEY = env.FIRECRAWL_API_KEY ?? "";
 	const TOOL_RATE_LIMITS = env.TOOL_RATE_LIMITS ?? "";
 	const TOOL_APPROVAL_REQUIRED = env.TOOL_APPROVAL_REQUIRED ?? "";
 	const TOOL_APPROVAL_TTL_MS = Number.parseInt(
@@ -259,6 +261,7 @@ export function loadBotEnv(env: BotEnv): BotEnvConfig {
 		WEB_SEARCH_CONTEXT_SIZE,
 		BROWSER_ENABLED,
 		BROWSER_ALLOWLIST,
+		FIRECRAWL_API_KEY,
 		TOOL_RATE_LIMITS,
 		TOOL_APPROVAL_REQUIRED,
 		TOOL_APPROVAL_TTL_MS,

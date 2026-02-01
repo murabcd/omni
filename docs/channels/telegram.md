@@ -60,3 +60,8 @@ Limits:
 - `IMAGE_MAX_BYTES` (default: 5MB)
 - `DOCUMENT_MAX_BYTES` (default: 10MB)
 - `ATTACHMENT_MAX_BYTES` (default: 8MB, max size to read Tracker attachments)
+
+## Research mode
+
+Use `/research` to collect inputs (links, criteria, files). When the user says
+`готово`, Omni runs a research workflow and may return a CSV file.

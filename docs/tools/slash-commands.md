@@ -11,6 +11,7 @@ Supported commands:
 - `/help` — usage
 - `/tools` — list available tools, conflicts, and policy-suppressed tools
 - `/status` — Yandex Tracker health check + uptime
+- `/research` — guided research mode (collect inputs, then run)
 - `/model` — show current model and fallbacks
 - `/model list` — list available models
 - `/model set <ref>` — switch model for this session

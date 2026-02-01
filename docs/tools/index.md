@@ -18,3 +18,4 @@ Relevant docs for this app:
 - `docs/tools/figma.md` — Figma integration
 - `docs/tools/google-public.md` — Public Google Docs/Sheets links
 - `docs/tools/browser.md` — Browser automation
+- `docs/tools/firecrawl.md` — Firecrawl web research

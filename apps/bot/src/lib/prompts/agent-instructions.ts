@@ -1,4 +1,4 @@
-import type { CandidateIssue } from "../context/chat-state.js";
+import type { CandidateIssue } from "../context/chat-state-types.js";
 import { buildSystemPrompt } from "./system-prompt.js";
 
 export type AgentInstructionOptions = {
@@ -155,6 +155,14 @@ export function buildAgentInstructions(
 	if (options.toolLines.includes("web_search")) {
 		toolSections.push(
 			"- Use `web_search` for up-to-date information (news, prices, public facts). Include a short Sources list with URLs.",
+		);
+	}
+
+	if (options.toolLines.includes("firecrawl_")) {
+		toolSections.push(
+			"- Use Firecrawl tools for web research and source gathering; summarize findings and include a short Sources list with URLs.",
+			"- For async Firecrawl tools (`firecrawl_crawl`, `firecrawl_batch_scrape`, `firecrawl_extract`), call `firecrawl_poll` until results are ready.",
+			"- If the output is a list (companies/events/speakers) or the user requests a CSV, call `research_export_csv`.",
 		);
 	}
 

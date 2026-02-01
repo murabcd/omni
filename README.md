@@ -54,13 +54,19 @@ Integration with REST API connectors via [AI SDK](https://sdk.vercel.ai/docs) fo
 - [PostHog](https://posthog.com)
   - Read-only analytics queries via the Agent Toolkit
   - Trends, insights, and event/property lookups
+- Agent Browser
+  - Browser automation for navigation, forms, and data extraction
+  - Use for testing flows or collecting UI-driven data
+- [Firecrawl](https://www.firecrawl.dev)
+  - Web content crawling and extraction
+  - Use for research tasks and structured page data
 - Workspace Memory (R2)
   - AGENTS and SOUL stored in R2 per workspace
   - Daily memory files + session history stored in R2 for continuity
 - [Figma API](https://www.figma.com/developers/api)
   - Read-only file metadata, nodes, comments, and project listings
   - Personal access token auth
-- [Google Docs/Sheets (public)](https://developers.google.com/docs/api)
+- [Google Docs/Sheets/Slides (public)](https://developers.google.com/docs/api)
 	- Read public Docs/Sheets by shared link (no OAuth)
 	- Read-only export access; no write or private file support
 

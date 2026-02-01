@@ -95,6 +95,18 @@ export const TOOL_GROUPS: Record<string, string[]> = {
 		"browser_screenshot",
 		"browser_close",
 	],
+	"group:firecrawl": [
+		"firecrawl_search",
+		"firecrawl_scrape",
+		"firecrawl_map",
+		"firecrawl_crawl",
+		"firecrawl_batch_scrape",
+		"firecrawl_extract",
+		"firecrawl_poll",
+		"firecrawl_status",
+		"firecrawl_cancel",
+		"research_export_csv",
+	],
 	"group:google-public": [
 		"google_public_doc_read",
 		"google_public_sheet_read",

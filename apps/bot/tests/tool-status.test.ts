@@ -36,4 +36,18 @@ describe("createToolStatusHandler", () => {
 
 		vi.useRealTimers();
 	});
+
+	it("sends firecrawl status after delay", () => {
+		vi.useFakeTimers();
+		const sendReply = vi.fn();
+		const { onToolStep } = createToolStatusHandler(sendReply, {
+			delayMs: 1500,
+		});
+
+		onToolStep(["firecrawl_search"]);
+		vi.advanceTimersByTime(1500);
+		expect(sendReply).toHaveBeenCalledWith("Собираю данные с сайтов…");
+
+		vi.useRealTimers();
+	});
 });

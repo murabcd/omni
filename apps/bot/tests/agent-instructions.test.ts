@@ -53,4 +53,14 @@ describe("agent instructions prompt modes", () => {
 		expect(instructions).toContain("browser tools");
 		expect(instructions).toContain("browser_screenshot");
 	});
+
+	it("includes firecrawl guidance when firecrawl tools are available", () => {
+		const instructions = buildAgentInstructions({
+			...base,
+			toolLines: "firecrawl_search - search",
+		});
+		expect(instructions).toContain("Firecrawl tools");
+		expect(instructions).toContain("firecrawl_poll");
+		expect(instructions).toContain("research_export_csv");
+	});
 });
