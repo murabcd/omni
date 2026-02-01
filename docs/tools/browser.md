@@ -14,11 +14,12 @@ Set in `apps/bot/.env`:
 
 ```
 BROWSER_ENABLED=1
-BROWSER_ALLOWLIST=https://flomni.com,https://www.flomni.com
+BROWSER_ALLOWLIST=https://flomni.com,*.flomni.com
 ```
 
 - If `BROWSER_ALLOWLIST` is empty, any http/https URL is allowed.
 - Use allowlist in production.
+- Allowlist supports exact origins (e.g., `https://flomni.com`) and wildcard subdomains (e.g., `*.flomni.com`).
 
 ## Available tools
 
@@ -31,10 +32,10 @@ BROWSER_ALLOWLIST=https://flomni.com,https://www.flomni.com
 - `browser_frame` — switch iframe
 - `browser_get` — read page or element data
 - `browser_wait` — wait for selector or timeout
-- `browser_screenshot` — capture a screenshot and send it to Telegram
+- `browser_screenshot` — capture a screenshot and send it to Telegram (and admin chat when image storage is configured)
 - `browser_close` — close the session
 
 ## Notes
 
-- The bot sends screenshots directly to Telegram and does not store them.
+- Screenshots are sent directly to Telegram. If image storage is configured, the admin chat UI also renders the screenshot via signed `/media/...` URLs.
 - `agent-browser` must be installed on the host where the bot runs.

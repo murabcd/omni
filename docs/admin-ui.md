@@ -73,8 +73,8 @@ Stopping a response uses `chat.abort`, which cancels the in-flight stream.
 
 ## Image generation (Gemini + R2)
 
-Admin chat and Telegram can render generated images when the Gemini image tool is enabled and R2
-storage is configured. The worker signs image URLs and serves them via `GET /media/<key>`.
+Admin chat and Telegram can render generated images (including browser screenshots) when image storage
+is configured. The worker signs image URLs and serves them via `GET /media/<key>`.
 
 Required env (Worker):
 - `IMAGE_SIGNING_SECRET` (secret; used to sign URLs)

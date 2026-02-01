@@ -37,6 +37,8 @@ TRACKER_CLOUD_ORG_ID = "bpfd8lkv5f11dcc2t3sj"
 WIKI_CLOUD_ORG_ID="bpfd8lkv5f11dcc2t3sj"
 WEB_SEARCH_CONTEXT_SIZE = "low"
 WEB_SEARCH_ENABLED = "1"
+BROWSER_ENABLED="1"
+BROWSER_ALLOWLIST="https://flomni.com,*.flomni.com"
 
 [observability.logs]
 enabled = true

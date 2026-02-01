@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { promises as fs } from "node:fs";
 import path from "node:path";
 import { promisify } from "node:util";
 import { createGoogleGenerativeAI } from "@ai-sdk/google";
@@ -19,6 +20,17 @@ import {
 	type UIMessageChunk,
 } from "ai";
 import { regex } from "arkregex";
+import {
+	batchScrapeTool,
+	cancelTool,
+	crawlTool,
+	extractTool,
+	mapTool,
+	pollTool,
+	scrapeTool,
+	searchTool,
+	statusTool,
+} from "firecrawl-aisdk";
 import { z } from "zod";
 import type { ModelConfig } from "../../models-core.js";
 import type { RuntimeSkill } from "../../skills-core.js";
@@ -180,11 +192,18 @@ export type AgentToolsDeps = {
 	debugLogs: boolean;
 	webSearchEnabled: boolean;
 	webSearchContextSize: string;
+	firecrawlEnabled: boolean;
 	browserEnabled: boolean;
 	browserAllowlist: string[];
 	browserSendFile?: (params: {
 		ctx?: BotContext;
 		path: string;
+	}) => Promise<void> | void;
+	sendGeneratedFile?: (params: {
+		ctx?: BotContext;
+		buffer: Uint8Array;
+		filename: string;
+		mimeType: string;
 	}) => Promise<void> | void;
 	defaultTrackerQueue: string;
 	cronStatusTimezone: string;
@@ -366,14 +385,36 @@ export function createAgentToolsFactory(
 	deps: AgentToolsDeps,
 ): AgentToolsFactory {
 	const execFileAsync = promisify(execFile);
+	const allowlistPatterns = deps.browserAllowlist
+		.map((value) => value.trim())
+		.filter(Boolean);
+	const normalizeAllowEntry = (entry: string) => {
+		if (entry.startsWith("*.")) {
+			return { kind: "subdomain" as const, host: entry.slice(2).toLowerCase() };
+		}
+		try {
+			const url = new URL(entry);
+			return { kind: "origin" as const, origin: url.origin.toLowerCase() };
+		} catch {
+			return null;
+		}
+	};
+	const allowMatchers = allowlistPatterns
+		.map((entry) => normalizeAllowEntry(entry))
+		.filter((entry): entry is NonNullable<typeof entry> => Boolean(entry));
 	const browserAllowed = (rawUrl: string) => {
 		try {
 			const url = new URL(rawUrl);
 			if (!["http:", "https:"].includes(url.protocol)) return false;
-			if (!deps.browserAllowlist.length) return true;
-			return deps.browserAllowlist.some((prefix) =>
-				url.href.startsWith(prefix),
-			);
+			if (allowMatchers.length === 0) return true;
+			const origin = url.origin.toLowerCase();
+			const host = url.hostname.toLowerCase();
+			return allowMatchers.some((matcher) => {
+				if (matcher.kind === "origin") {
+					return origin === matcher.origin;
+				}
+				return host === matcher.host || host.endsWith(`.${matcher.host}`);
+			});
 		} catch {
 			return false;
 		}
@@ -609,6 +650,126 @@ export function createAgentToolsFactory(
 				}) as unknown as ToolSet[string],
 			);
 		}
+
+		if (deps.firecrawlEnabled) {
+			registerTool(
+				{
+					name: "firecrawl_search",
+					description: "Search the web via Firecrawl.",
+					source: "web",
+					origin: "firecrawl",
+				},
+				searchTool as unknown as ToolSet[string],
+			);
+			registerTool(
+				{
+					name: "firecrawl_scrape",
+					description: "Scrape a single URL via Firecrawl.",
+					source: "web",
+					origin: "firecrawl",
+				},
+				scrapeTool as unknown as ToolSet[string],
+			);
+			registerTool(
+				{
+					name: "firecrawl_map",
+					description: "Discover URLs on a site via Firecrawl.",
+					source: "web",
+					origin: "firecrawl",
+				},
+				mapTool as unknown as ToolSet[string],
+			);
+			registerTool(
+				{
+					name: "firecrawl_crawl",
+					description: "Crawl multiple pages via Firecrawl.",
+					source: "web",
+					origin: "firecrawl",
+				},
+				crawlTool as unknown as ToolSet[string],
+			);
+			registerTool(
+				{
+					name: "firecrawl_batch_scrape",
+					description: "Scrape multiple URLs via Firecrawl.",
+					source: "web",
+					origin: "firecrawl",
+				},
+				batchScrapeTool as unknown as ToolSet[string],
+			);
+			registerTool(
+				{
+					name: "firecrawl_extract",
+					description: "Extract structured data via Firecrawl.",
+					source: "web",
+					origin: "firecrawl",
+				},
+				extractTool as unknown as ToolSet[string],
+			);
+			registerTool(
+				{
+					name: "firecrawl_poll",
+					description: "Poll Firecrawl async jobs.",
+					source: "web",
+					origin: "firecrawl",
+				},
+				pollTool as unknown as ToolSet[string],
+			);
+			registerTool(
+				{
+					name: "firecrawl_status",
+					description: "Check Firecrawl job status.",
+					source: "web",
+					origin: "firecrawl",
+				},
+				statusTool as unknown as ToolSet[string],
+			);
+			registerTool(
+				{
+					name: "firecrawl_cancel",
+					description: "Cancel Firecrawl job.",
+					source: "web",
+					origin: "firecrawl",
+				},
+				cancelTool as unknown as ToolSet[string],
+			);
+		}
+
+		registerTool(
+			{
+				name: "research_export_csv",
+				description: "Send a CSV file to the user.",
+				source: "core",
+				origin: "research",
+			},
+			tool({
+				description: "Send a CSV file to the user.",
+				inputSchema: z.object({
+					csv: z.string().describe("CSV content"),
+					filename: z
+						.string()
+						.optional()
+						.describe("Optional filename (defaults to research-results.csv)"),
+				}),
+				execute: async ({ csv, filename }) => {
+					if (!deps.sendGeneratedFile) {
+						return { error: "file_send_unavailable" };
+					}
+					const trimmed = filename?.trim() || "research-results.csv";
+					const safeName = trimmed.endsWith(".csv")
+						? trimmed
+						: `${trimmed}.csv`;
+					const buffer = new TextEncoder().encode(csv);
+					await deps.sendGeneratedFile({
+						ctx: options?.ctx,
+						buffer,
+						filename: safeName,
+						mimeType: "text/csv",
+					});
+					return { ok: true, filename: safeName };
+				},
+			}),
+		);
 
 		if (gemini) {
 			registerTool(
@@ -958,11 +1119,31 @@ export function createAgentToolsFactory(
 						);
 						args.push(resolvedPath);
 						const result = await runAgentBrowser(args);
+						const images: Array<{ mediaType: string; url: string }> = [];
+						try {
+							const buffer = await fs.readFile(resolvedPath);
+							if (deps.imageStore && buffer.byteLength > 0) {
+								const stored = await deps.imageStore.putImage({
+									buffer,
+									mediaType: "image/png",
+									filename: path.basename(resolvedPath),
+								});
+								images.push({
+									mediaType: stored.mediaType,
+									url: stored.url,
+								});
+							}
+						} catch (error) {
+							deps.logDebug("browser_screenshot read error", {
+								error: String(error),
+							});
+						}
 						await deps.browserSendFile?.({
 							ctx: options?.ctx,
 							path: resolvedPath,
 						});
-						return { ...result, saved: true };
+						await fs.unlink(resolvedPath).catch(() => undefined);
+						return { ...result, saved: true, images };
 					},
 				}),
 			);
