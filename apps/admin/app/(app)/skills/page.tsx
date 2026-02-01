@@ -46,7 +46,7 @@ function formatServerDisplayName(serverId: string) {
 	if (serverId === "yandex-tracker") return "Yandex Tracker";
 	if (serverId === "posthog") return "PostHog";
 	if (serverId === "yandex-wiki") return "Yandex Wiki";
-	if (serverId === "google-public") return "Google Drive";
+	if (serverId === "google-drive") return "Google Drive";
 	const withSpaces = serverId.replaceAll("-", " ").replaceAll("_", " ");
 	return withSpaces
 		.split(" ")
@@ -164,7 +164,7 @@ function SkillCard({
 							{skill.disabled && <Badge variant="warning">disabled</Badge>}
 						</div>
 					</div>
-					<div className="flex flex-wrap gap-2 sm:flex-shrink-0">
+					<div className="flex flex-wrap gap-2 sm:shrink-0">
 						<Button
 							size="sm"
 							variant="outline"

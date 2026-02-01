@@ -43,9 +43,9 @@ export function DashboardChat({
 
 	const { messages, sendMessage, status, stop, setMessages } =
 		useChat<AdminUIMessage>({
-		id: chatId,
-		transport,
-	});
+			id: chatId,
+			transport,
+		});
 
 	const isLoading = status === "streaming" || status === "submitted";
 	const hasMessages = messages.length > 0;
@@ -171,7 +171,7 @@ export function DashboardChat({
 
 			{/* Sticky chat input at bottom - positioned within this container */}
 			<div
-				className="absolute bottom-0 left-0 right-0 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 pb-[calc(env(safe-area-inset-bottom)+0.5rem)] md:pb-0"
+				className="absolute bottom-0 left-0 right-0 bg-background/95 backdrop-blur supports-backdrop-filter:bg-background/60 pb-[calc(env(safe-area-inset-bottom)+0.5rem)] md:pb-0"
 				ref={inputRef}
 			>
 				<div className="max-w-2xl mx-auto w-full px-4 pt-4 pb-0">
