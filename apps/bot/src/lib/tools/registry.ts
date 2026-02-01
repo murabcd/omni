@@ -2,6 +2,7 @@ export type ToolSource =
 	| "core"
 	| "cron"
 	| "web"
+	| "browser"
 	| "memory"
 	| "tracker"
 	| "wiki"

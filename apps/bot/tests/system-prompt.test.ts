@@ -11,5 +11,6 @@ describe("buildSystemPrompt", () => {
 		expect(prompt).toContain("Memory Guidance (what counts as a learning)");
 		expect(prompt).toContain("Memory Guidance (do not include)");
 		expect(prompt).toContain("Memory Guidance (process)");
+		expect(prompt).toContain("browser tools");
 	});
 });

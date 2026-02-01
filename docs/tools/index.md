@@ -10,9 +10,11 @@ Relevant docs for this app:
 - `docs/tools/skills.md` — runtime skills
 - `docs/tools/skills-config.md` — skill config format
 - `docs/tools/slash-commands.md` — Telegram commands
+- `docs/tools/subagents.md` — background sub-agent runs
 - `docs/tools/tool-policy.md` — tool visibility + conflict behavior
 - `docs/tools/jira.md` — Jira integration
 - `docs/tools/posthog.md` — PostHog integration
 - `docs/tools/wiki.md` — Yandex Wiki integration
 - `docs/tools/figma.md` — Figma integration
 - `docs/tools/google-public.md` — Public Google Docs/Sheets links
+- `docs/tools/browser.md` — Browser automation

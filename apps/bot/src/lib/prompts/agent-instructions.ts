@@ -14,6 +14,17 @@ export type AgentInstructionOptions = {
 	globalSoul?: string;
 	channelSoul?: string;
 	projectContext?: Array<{ path: string; content: string }>;
+	workspaceSnapshot?: {
+		agents?: string;
+		soul?: string;
+		tools?: string;
+		memoryCore?: string;
+		memoryToday?: string;
+		memoryYesterday?: string;
+		memoryTodayPath?: string;
+		memoryYesterdayPath?: string;
+		contextFiles?: Array<{ path: string; content: string }>;
+	};
 	currentDateTime?: string;
 	runtimeLine?: string;
 	skillsPrompt?: string;
@@ -24,9 +35,10 @@ function buildSoulBlock(params: {
 	globalSoul?: string;
 	channelSoul?: string;
 	systemPrompt?: string;
+	workspaceSoul?: string;
 }): string {
 	const sections: string[] = [];
-	const globalSoul = params.globalSoul?.trim();
+	const globalSoul = params.workspaceSoul?.trim() || params.globalSoul?.trim();
 	if (globalSoul) {
 		sections.push("SOUL (global):", globalSoul);
 	}
@@ -35,6 +47,36 @@ function buildSoulBlock(params: {
 		sections.push("SOUL (channel):", channelSoul);
 	}
 	return sections.join("\n");
+}
+
+function buildWorkspaceBlock(options: AgentInstructionOptions): string {
+	const snapshot = options.workspaceSnapshot;
+	if (!snapshot) return "";
+	const blocks: string[] = [];
+	if (snapshot.agents?.trim()) {
+		blocks.push("## AGENTS.md", snapshot.agents.trim(), "");
+	}
+	if (snapshot.tools?.trim()) {
+		blocks.push("## TOOLS.md", snapshot.tools.trim(), "");
+	}
+	if (snapshot.memoryCore?.trim()) {
+		blocks.push("## MEMORY.md", snapshot.memoryCore.trim(), "");
+	}
+	if (snapshot.memoryToday?.trim()) {
+		const path = snapshot.memoryTodayPath ?? "memory/today.md";
+		blocks.push(`## ${path}`, snapshot.memoryToday.trim(), "");
+	}
+	if (snapshot.memoryYesterday?.trim()) {
+		const path = snapshot.memoryYesterdayPath ?? "memory/yesterday.md";
+		blocks.push(`## ${path}`, snapshot.memoryYesterday.trim(), "");
+	}
+	const contextFiles = snapshot.contextFiles ?? [];
+	for (const entry of contextFiles) {
+		if (!entry.path || !entry.content) continue;
+		blocks.push(`## context/${entry.path}`, entry.content.trim(), "");
+	}
+	if (blocks.length === 0) return "";
+	return ["# Workspace Context", ...blocks].join("\n");
 }
 
 export function buildAgentInstructions(
@@ -56,7 +98,12 @@ export function buildAgentInstructions(
 			].join("\n")
 		: "";
 
-	const soulBlock = buildSoulBlock(options);
+	const soulBlock = buildSoulBlock({
+		globalSoul: options.globalSoul,
+		channelSoul: options.channelSoul,
+		systemPrompt: options.systemPrompt,
+		workspaceSoul: options.workspaceSnapshot?.soul,
+	});
 	const projectContext = (options.projectContext ?? [])
 		.map((entry) => ({
 			path: entry.path?.trim() ?? "",
@@ -76,6 +123,7 @@ export function buildAgentInstructions(
 				]),
 			].join("\n")
 		: "";
+	const workspaceBlock = buildWorkspaceBlock(options);
 	const skillsPrompt = options.skillsPrompt?.trim();
 	const skillsBlock = skillsPrompt
 		? [
@@ -118,12 +166,21 @@ export function buildAgentInstructions(
 		);
 	}
 
+	if (options.toolLines.includes("browser_open")) {
+		toolSections.push(
+			"- Use browser tools (`browser_open`, `browser_snapshot`, `browser_click`, `browser_get`, `browser_screenshot`) for website checks, UI validation, and screenshots.",
+			"- Do not claim that HTML screenshots are unavailable; use `browser_screenshot` instead.",
+		);
+	}
+
 	if (
-		options.toolLines.includes("searchMemories") ||
-		options.toolLines.includes("addMemory")
+		options.toolLines.includes("memory_read") ||
+		options.toolLines.includes("memory_append") ||
+		options.toolLines.includes("memory_write") ||
+		options.toolLines.includes("memory_search")
 	) {
 		toolSections.push(
-			"- Use `searchMemories` to recall prior context, `addMemory` to store durable facts.",
+			"- Use `memory_read` to recall, `memory_append` to store durable facts, and `memory_search` to find older notes.",
 		);
 	}
 
@@ -182,6 +239,7 @@ export function buildAgentInstructions(
 				reasoning: options.reasoning,
 			}),
 			soulBlock ? `\n${soulBlock}` : "",
+			workspaceBlock ? `\n${workspaceBlock}` : "",
 			...toolSections,
 			"",
 			"Available tools:",
@@ -198,6 +256,7 @@ export function buildAgentInstructions(
 			reasoning: options.reasoning,
 		}),
 		soulBlock ? `\n${soulBlock}` : "",
+		workspaceBlock ? `\n${workspaceBlock}` : "",
 		...toolSections,
 		"",
 		"Available tools:",

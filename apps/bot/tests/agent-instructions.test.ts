@@ -44,4 +44,13 @@ describe("agent instructions prompt modes", () => {
 		});
 		expect(instructions).toBe("User: пример");
 	});
+
+	it("includes browser tool guidance when browser tools are available", () => {
+		const instructions = buildAgentInstructions({
+			...base,
+			toolLines: "browser_open - open",
+		});
+		expect(instructions).toContain("browser tools");
+		expect(instructions).toContain("browser_screenshot");
+	});
 });

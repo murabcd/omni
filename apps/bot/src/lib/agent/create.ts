@@ -1,6 +1,8 @@
+import { execFile } from "node:child_process";
+import path from "node:path";
+import { promisify } from "node:util";
 import { createGoogleGenerativeAI } from "@ai-sdk/google";
 import { openai } from "@ai-sdk/openai";
-import { supermemoryTools } from "@supermemory/tools/ai-sdk";
 import {
 	createAgentUIStream,
 	createUIMessageStream,
@@ -39,12 +41,18 @@ import {
 	rankIssues,
 } from "../clients/tracker.js";
 import type { WikiClient } from "../clients/wiki.js";
+import {
+	formatHistoryForPrompt,
+	loadHistoryMessages,
+} from "../context/session-history.js";
+import { buildSessionKey } from "../context/session-key.js";
 import { type FilePart, toFilePart } from "../files.js";
 import type { ImageStore } from "../image-store.js";
 import { buildJiraJql, normalizeJiraIssue } from "../jira.js";
 import { buildAgentInstructions } from "../prompts/agent-instructions.js";
 import { buildSkillsPrompt } from "../prompts/skills-prompt.js";
 import { formatUserDateTime } from "../prompts/time.js";
+import type { TextStore } from "../storage/text-store.js";
 import { extractKeywords } from "../text/normalize.js";
 import {
 	isToolAllowedForSender,
@@ -65,6 +73,12 @@ import {
 } from "../tools/registry.js";
 import { sanitizeToolCallIdsForTranscript } from "../tools/tool-call-id.js";
 import { repairToolUseResultPairing } from "../tools/transcript-repair.js";
+import type { WorkspaceManager } from "../workspace/manager.js";
+import {
+	isAllowedMemoryPath,
+	normalizeMemoryPath,
+} from "../workspace/memory.js";
+import { resolveWorkspaceId } from "../workspace/paths.js";
 
 export type AgentToolSet = Awaited<ReturnType<AgentToolsFactory>>;
 export type AgentToolCall = TypedToolCall<AgentToolSet>;
@@ -142,6 +156,12 @@ export type CreateAgentToolsOptions = {
 	ctx?: BotContext;
 	webSearchEnabled?: boolean;
 	onToolStart?: (toolName: string) => void;
+	onToolResult?: (result: {
+		toolName: string;
+		toolCallId?: string;
+		durationMs: number;
+		error?: string;
+	}) => void;
 };
 
 export type CandidateIssue = {
@@ -163,6 +183,12 @@ export type AgentToolsDeps = {
 	debugLogs: boolean;
 	webSearchEnabled: boolean;
 	webSearchContextSize: string;
+	browserEnabled: boolean;
+	browserAllowlist: string[];
+	browserSendFile?: (params: {
+		ctx?: BotContext;
+		path: string;
+	}) => Promise<void> | void;
 	defaultTrackerQueue: string;
 	cronStatusTimezone: string;
 	resolveChatTimezone?: (
@@ -211,9 +237,8 @@ export type AgentToolsDeps = {
 		error?: string,
 		durationMs?: number,
 	) => void;
-	supermemoryApiKey: string;
-	supermemoryProjectId: string;
-	supermemoryTagPrefix: string;
+	workspaceManager?: WorkspaceManager;
+	sessionStore?: TextStore;
 	commentsFetchBudgetMs: number;
 	imageStore?: ImageStore;
 	geminiImageSize?: "1K" | "2K" | "4K";
@@ -225,10 +250,27 @@ export type CreateAgentOptions = {
 	onCandidates?: (candidates: CandidateIssue[]) => void;
 	recentCandidates?: CandidateIssue[];
 	history?: string;
+	workspaceSnapshot?: {
+		agents?: string;
+		soul?: string;
+		tools?: string;
+		memoryCore?: string;
+		memoryToday?: string;
+		memoryYesterday?: string;
+		memoryTodayPath?: string;
+		memoryYesterdayPath?: string;
+		contextFiles?: Array<{ path: string; content: string }>;
+	};
 	chatId?: string;
 	userName?: string;
 	onToolStep?: (toolNames: string[]) => Promise<void> | void;
 	onToolStart?: (toolName: string) => void;
+	onToolResult?: (result: {
+		toolName: string;
+		toolCallId?: string;
+		durationMs: number;
+		error?: string;
+	}) => void;
 	ctx?: BotContext;
 	webSearchEnabled?: boolean;
 	promptMode?: "full" | "minimal" | "none";
@@ -325,23 +367,32 @@ function parseWikiReference(input: string): { id?: number; slug?: string } {
 	return { slug: trimmed };
 }
 
-function buildMemoryTools(config: {
-	apiKey: string;
-	projectId: string;
-	tagPrefix: string;
-	chatId?: string;
-}) {
-	if (!config.apiKey || !config.chatId) return {};
-	const containerTags = [`${config.tagPrefix}${config.chatId}`];
-	const options = config.projectId
-		? { projectId: config.projectId, containerTags }
-		: { containerTags };
-	return supermemoryTools(config.apiKey, options);
-}
-
 export function createAgentToolsFactory(
 	deps: AgentToolsDeps,
 ): AgentToolsFactory {
+	const execFileAsync = promisify(execFile);
+	const browserAllowed = (rawUrl: string) => {
+		try {
+			const url = new URL(rawUrl);
+			if (!["http:", "https:"].includes(url.protocol)) return false;
+			if (!deps.browserAllowlist.length) return true;
+			return deps.browserAllowlist.some((prefix) =>
+				url.href.startsWith(prefix),
+			);
+		} catch {
+			return false;
+		}
+	};
+	const runAgentBrowser = async (args: string[]) => {
+		const { stdout, stderr } = await execFileAsync("agent-browser", args, {
+			timeout: 60_000,
+			maxBuffer: 2 * 1024 * 1024,
+		});
+		return {
+			stdout: stdout?.trim() ?? "",
+			stderr: stderr?.trim() ?? "",
+		};
+	};
 	return async function createAgentTools(options?: CreateAgentToolsOptions) {
 		const registry = createToolRegistry({ logger: deps.toolConflictLogger });
 		const toolMap: ToolSet = {};
@@ -354,21 +405,194 @@ export function createAgentToolsFactory(
 			? createGoogleGenerativeAI({ apiKey: deps.geminiApiKey })
 			: null;
 
-		const memoryTools = buildMemoryTools({
-			apiKey: deps.supermemoryApiKey,
-			projectId: deps.supermemoryProjectId,
-			tagPrefix: deps.supermemoryTagPrefix,
-			chatId: options?.chatId,
+		const workspaceManager = deps.workspaceManager;
+		const sessionStore = deps.sessionStore;
+		const workspaceId = resolveWorkspaceId(options?.chatId);
+		const sessionKey = buildSessionKey({
+			channel: "telegram",
+			chatType: options?.ctx?.chat?.type ?? "private",
+			chatId: options?.chatId ?? "unknown",
 		});
-		for (const [name, toolDef] of Object.entries(memoryTools)) {
+
+		if (workspaceManager) {
 			registerTool(
 				{
-					name,
-					description: "Supermemory tool",
+					name: "memory_read",
+					description:
+						"Read a memory file (MEMORY.md or memory/YYYY-MM-DD.md).",
 					source: "memory",
-					origin: "supermemory",
+					origin: "workspace",
 				},
-				toolDef as ToolSet[string],
+				tool({
+					description:
+						"Read a memory file (MEMORY.md or memory/YYYY-MM-DD.md).",
+					inputSchema: z.object({
+						path: z
+							.string()
+							.describe("Path like MEMORY.md or memory/2026-01-20.md"),
+						fromLine: z.number().int().min(1).optional(),
+						maxLines: z.number().int().min(1).max(400).optional(),
+					}),
+					execute: async ({ path, fromLine, maxLines }) => {
+						const normalized = normalizeMemoryPath(path);
+						if (!isAllowedMemoryPath(normalized)) {
+							return { error: "invalid_memory_path" };
+						}
+						const raw = await workspaceManager.readFile(
+							workspaceId,
+							normalized,
+						);
+						if (!raw) return { path: normalized, content: "" };
+						if (!fromLine && !maxLines) {
+							return { path: normalized, content: raw };
+						}
+						const lines = raw.split("\n");
+						const start = Math.max(0, (fromLine ?? 1) - 1);
+						const end = maxLines
+							? Math.min(lines.length, start + maxLines)
+							: lines.length;
+						return {
+							path: normalized,
+							content: lines.slice(start, end).join("\n"),
+							fromLine: start + 1,
+							toLine: end,
+						};
+					},
+				}),
+			);
+
+			registerTool(
+				{
+					name: "memory_append",
+					description: "Append text to a memory file.",
+					source: "memory",
+					origin: "workspace",
+				},
+				tool({
+					description: "Append text to a memory file.",
+					inputSchema: z.object({
+						path: z
+							.string()
+							.describe("Path like MEMORY.md or memory/2026-01-20.md"),
+						text: z.string().min(1).describe("Text to append"),
+					}),
+					execute: async ({ path, text }) => {
+						const normalized = normalizeMemoryPath(path);
+						if (!isAllowedMemoryPath(normalized)) {
+							return { error: "invalid_memory_path" };
+						}
+						await workspaceManager.appendFile(workspaceId, normalized, text);
+						return { ok: true, path: normalized };
+					},
+				}),
+			);
+
+			registerTool(
+				{
+					name: "memory_write",
+					description: "Replace a memory file with new content.",
+					source: "memory",
+					origin: "workspace",
+				},
+				tool({
+					description: "Replace a memory file with new content.",
+					inputSchema: z.object({
+						path: z
+							.string()
+							.describe("Path like MEMORY.md or memory/2026-01-20.md"),
+						text: z.string().describe("Full file content"),
+					}),
+					execute: async ({ path, text }) => {
+						const normalized = normalizeMemoryPath(path);
+						if (!isAllowedMemoryPath(normalized)) {
+							return { error: "invalid_memory_path" };
+						}
+						await workspaceManager.writeFile(workspaceId, normalized, text);
+						return { ok: true, path: normalized };
+					},
+				}),
+			);
+
+			registerTool(
+				{
+					name: "memory_search",
+					description: "Search memory files for a query string.",
+					source: "memory",
+					origin: "workspace",
+				},
+				tool({
+					description: "Search memory files for a query string.",
+					inputSchema: z.object({
+						query: z.string().min(2),
+						limit: z.number().int().min(1).max(20).optional(),
+					}),
+					execute: async ({ query, limit }) => {
+						const snapshot = await workspaceManager.loadSnapshot(workspaceId);
+						const haystack: Array<{ path: string; content: string }> = [];
+						if (snapshot.memoryCore) {
+							haystack.push({
+								path: "MEMORY.md",
+								content: snapshot.memoryCore,
+							});
+						}
+						if (snapshot.memoryToday) {
+							haystack.push({
+								path: snapshot.memoryTodayPath ?? "memory/today.md",
+								content: snapshot.memoryToday,
+							});
+						}
+						if (snapshot.memoryYesterday) {
+							haystack.push({
+								path: snapshot.memoryYesterdayPath ?? "memory/yesterday.md",
+								content: snapshot.memoryYesterday,
+							});
+						}
+						const needle = query.toLowerCase();
+						const matches = haystack
+							.flatMap((entry) => {
+								const lines = entry.content.split("\n");
+								return lines
+									.map((line, index) => ({ line, index }))
+									.filter((line) => line.line.toLowerCase().includes(needle))
+									.map((line) => ({
+										path: entry.path,
+										line: line.index + 1,
+										text: line.line,
+									}));
+							})
+							.slice(0, limit ?? 10);
+						return { query, matches };
+					},
+				}),
+			);
+		}
+
+		if (sessionStore) {
+			registerTool(
+				{
+					name: "session_history",
+					description: "Read recent conversation history.",
+					source: "core",
+					origin: "session",
+				},
+				tool({
+					description: "Read recent conversation history.",
+					inputSchema: z.object({
+						limit: z.number().int().min(1).max(50).optional(),
+					}),
+					execute: async ({ limit }) => {
+						const messages = await loadHistoryMessages(
+							sessionStore,
+							workspaceId,
+							sessionKey,
+							limit ?? 20,
+						);
+						return {
+							count: messages.length,
+							text: formatHistoryForPrompt(messages),
+						};
+					},
+				}),
 			);
 		}
 
@@ -511,6 +735,258 @@ export function createAgentToolsFactory(
 							});
 							return { error: String(error) };
 						}
+					},
+				}),
+			);
+		}
+
+		if (deps.browserEnabled) {
+			registerTool(
+				{
+					name: "browser_open",
+					description: "Open a URL in the browser.",
+					source: "browser",
+					origin: "agent-browser",
+				},
+				tool({
+					description: "Open a URL in the browser.",
+					inputSchema: z.object({
+						url: z.string().describe("http/https URL"),
+					}),
+					execute: async ({ url }) => {
+						if (!browserAllowed(url)) {
+							return { error: "browser_url_not_allowed" };
+						}
+						return await runAgentBrowser(["open", url]);
+					},
+				}),
+			);
+
+			registerTool(
+				{
+					name: "browser_snapshot",
+					description: "Get accessibility snapshot of the page.",
+					source: "browser",
+					origin: "agent-browser",
+				},
+				tool({
+					description: "Get accessibility snapshot of the page.",
+					inputSchema: z.object({
+						interactiveOnly: z.boolean().optional(),
+						compact: z.boolean().optional(),
+						depth: z.number().int().min(1).max(20).optional(),
+						selector: z.string().optional(),
+						json: z.boolean().optional(),
+					}),
+					execute: async ({
+						interactiveOnly,
+						compact,
+						depth,
+						selector,
+						json,
+					}) => {
+						const args = ["snapshot"];
+						if (interactiveOnly) args.push("-i");
+						if (compact) args.push("-c");
+						if (depth) args.push("-d", String(depth));
+						if (selector) args.push("-s", selector);
+						if (json) args.push("--json");
+						return await runAgentBrowser(args);
+					},
+				}),
+			);
+
+			registerTool(
+				{
+					name: "browser_click",
+					description: "Click an element by selector or ref.",
+					source: "browser",
+					origin: "agent-browser",
+				},
+				tool({
+					description: "Click an element by selector or ref.",
+					inputSchema: z.object({
+						target: z.string().min(1),
+					}),
+					execute: async ({ target }) => {
+						return await runAgentBrowser(["click", target]);
+					},
+				}),
+			);
+
+			registerTool(
+				{
+					name: "browser_fill",
+					description: "Fill an input by selector or ref.",
+					source: "browser",
+					origin: "agent-browser",
+				},
+				tool({
+					description: "Fill an input by selector or ref.",
+					inputSchema: z.object({
+						target: z.string().min(1),
+						text: z.string(),
+					}),
+					execute: async ({ target, text }) => {
+						return await runAgentBrowser(["fill", target, text]);
+					},
+				}),
+			);
+
+			registerTool(
+				{
+					name: "browser_type",
+					description: "Type into an element by selector or ref.",
+					source: "browser",
+					origin: "agent-browser",
+				},
+				tool({
+					description: "Type into an element by selector or ref.",
+					inputSchema: z.object({
+						target: z.string().min(1),
+						text: z.string(),
+					}),
+					execute: async ({ target, text }) => {
+						return await runAgentBrowser(["type", target, text]);
+					},
+				}),
+			);
+
+			registerTool(
+				{
+					name: "browser_press",
+					description: "Press a keyboard key (e.g., Enter).",
+					source: "browser",
+					origin: "agent-browser",
+				},
+				tool({
+					description: "Press a keyboard key.",
+					inputSchema: z.object({
+						key: z.string().min(1),
+					}),
+					execute: async ({ key }) => {
+						return await runAgentBrowser(["press", key]);
+					},
+				}),
+			);
+
+			registerTool(
+				{
+					name: "browser_frame",
+					description: "Switch to an iframe by selector.",
+					source: "browser",
+					origin: "agent-browser",
+				},
+				tool({
+					description: "Switch to an iframe by selector.",
+					inputSchema: z.object({
+						selector: z.string().min(1),
+					}),
+					execute: async ({ selector }) => {
+						return await runAgentBrowser(["frame", selector]);
+					},
+				}),
+			);
+
+			registerTool(
+				{
+					name: "browser_get",
+					description: "Get data from the page or element.",
+					source: "browser",
+					origin: "agent-browser",
+				},
+				tool({
+					description: "Get data from the page or element.",
+					inputSchema: z.object({
+						field: z.enum([
+							"text",
+							"html",
+							"value",
+							"attr",
+							"title",
+							"url",
+							"count",
+							"box",
+							"styles",
+						]),
+						target: z.string().optional(),
+						attr: z.string().optional(),
+					}),
+					execute: async ({ field, target, attr }) => {
+						const args = ["get", field];
+						if (field === "title" || field === "url") {
+							return await runAgentBrowser(args);
+						}
+						if (!target) return { error: "browser_target_required" };
+						args.push(target);
+						if (field === "attr" && attr) args.push(attr);
+						return await runAgentBrowser(args);
+					},
+				}),
+			);
+
+			registerTool(
+				{
+					name: "browser_wait",
+					description: "Wait for a selector or a timeout.",
+					source: "browser",
+					origin: "agent-browser",
+				},
+				tool({
+					description: "Wait for a selector or a timeout.",
+					inputSchema: z.object({
+						target: z.string().min(1),
+					}),
+					execute: async ({ target }) => {
+						return await runAgentBrowser(["wait", target]);
+					},
+				}),
+			);
+
+			registerTool(
+				{
+					name: "browser_screenshot",
+					description: "Capture a screenshot.",
+					source: "browser",
+					origin: "agent-browser",
+				},
+				tool({
+					description: "Capture a screenshot.",
+					inputSchema: z.object({
+						full: z.boolean().optional(),
+					}),
+					execute: async ({ full }) => {
+						const args = ["screenshot"];
+						if (full) args.push("--full");
+						const resolvedPath = path.join(
+							"/tmp",
+							`omni-browser-${Date.now()}-${Math.random()
+								.toString(36)
+								.slice(2)}.png`,
+						);
+						args.push(resolvedPath);
+						const result = await runAgentBrowser(args);
+						await deps.browserSendFile?.({
+							ctx: options?.ctx,
+							path: resolvedPath,
+						});
+						return { ...result, saved: true };
+					},
+				}),
+			);
+
+			registerTool(
+				{
+					name: "browser_close",
+					description: "Close the browser session.",
+					source: "browser",
+					origin: "agent-browser",
+				},
+				tool({
+					description: "Close the browser session.",
+					inputSchema: z.object({}),
+					execute: async () => {
+						return await runAgentBrowser(["close"]);
 					},
 				}),
 			);
@@ -2622,6 +3098,12 @@ export function createAgentToolsFactory(
 					duration_ms: durationMs,
 					error,
 				});
+				options?.onToolResult?.({
+					toolName,
+					toolCallId,
+					durationMs,
+					error,
+				});
 			},
 		});
 		return wrapped;
@@ -2685,6 +3167,10 @@ export function createAgentFactory(deps: AgentDeps) {
 				return `${toolItem.name}${desc}`;
 			})
 			.join("\n");
+		const effectiveProjectContext = options?.workspaceSnapshot?.contextFiles
+			?.length
+			? []
+			: deps.projectContext;
 		const instructions = buildAgentInstructions({
 			question,
 			modelRef,
@@ -2696,7 +3182,8 @@ export function createAgentFactory(deps: AgentDeps) {
 			userName: options?.userName,
 			globalSoul: deps.soulPrompt,
 			channelSoul: options?.ctx?.state.channelConfig?.systemPrompt,
-			projectContext: deps.projectContext,
+			projectContext: effectiveProjectContext,
+			workspaceSnapshot: options?.workspaceSnapshot,
 			currentDateTime: currentDateTime
 				? `${currentDateTime} (${timeZone ?? "unknown"})`
 				: "",

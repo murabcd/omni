@@ -26,9 +26,6 @@ export type BotEnvConfig = {
 	DEFAULT_ISSUE_PREFIX: string;
 	DEBUG_LOGS: boolean;
 	TRACKER_API_BASE_URL: string;
-	SUPERMEMORY_API_KEY: string;
-	SUPERMEMORY_PROJECT_ID: string;
-	SUPERMEMORY_TAG_PREFIX: string;
 	HISTORY_MAX_MESSAGES: number;
 	COMMENTS_CACHE_TTL_MS: number;
 	COMMENTS_CACHE_MAX: number;
@@ -44,6 +41,8 @@ export type BotEnvConfig = {
 	GEMINI_IMAGE_SIZE: string;
 	WEB_SEARCH_ENABLED: boolean;
 	WEB_SEARCH_CONTEXT_SIZE: string;
+	BROWSER_ENABLED: boolean;
+	BROWSER_ALLOWLIST: string;
 	TOOL_RATE_LIMITS: string;
 	TOOL_APPROVAL_REQUIRED: string;
 	TOOL_APPROVAL_TTL_MS: number;
@@ -123,9 +122,6 @@ export function loadBotEnv(env: BotEnv): BotEnvConfig {
 	const DEBUG_LOGS = env.DEBUG_LOGS === "1";
 	const TRACKER_API_BASE_URL =
 		env.TRACKER_API_BASE_URL ?? "https://api.tracker.yandex.net";
-	const SUPERMEMORY_API_KEY = env.SUPERMEMORY_API_KEY ?? "";
-	const SUPERMEMORY_PROJECT_ID = env.SUPERMEMORY_PROJECT_ID ?? "";
-	const SUPERMEMORY_TAG_PREFIX = env.SUPERMEMORY_TAG_PREFIX ?? "telegram:user:";
 	const HISTORY_MAX_MESSAGES = Number.parseInt(
 		env.HISTORY_MAX_MESSAGES ?? "20",
 		10,
@@ -169,6 +165,8 @@ export function loadBotEnv(env: BotEnv): BotEnvConfig {
 	const GEMINI_IMAGE_SIZE = env.GEMINI_IMAGE_SIZE ?? "1K";
 	const WEB_SEARCH_ENABLED = env.WEB_SEARCH_ENABLED === "1";
 	const WEB_SEARCH_CONTEXT_SIZE = env.WEB_SEARCH_CONTEXT_SIZE ?? "low";
+	const BROWSER_ENABLED = env.BROWSER_ENABLED === "1";
+	const BROWSER_ALLOWLIST = env.BROWSER_ALLOWLIST ?? "";
 	const TOOL_RATE_LIMITS = env.TOOL_RATE_LIMITS ?? "";
 	const TOOL_APPROVAL_REQUIRED = env.TOOL_APPROVAL_REQUIRED ?? "";
 	const TOOL_APPROVAL_TTL_MS = Number.parseInt(
@@ -244,9 +242,6 @@ export function loadBotEnv(env: BotEnv): BotEnvConfig {
 		DEFAULT_ISSUE_PREFIX,
 		DEBUG_LOGS,
 		TRACKER_API_BASE_URL,
-		SUPERMEMORY_API_KEY,
-		SUPERMEMORY_PROJECT_ID,
-		SUPERMEMORY_TAG_PREFIX,
 		HISTORY_MAX_MESSAGES,
 		COMMENTS_CACHE_TTL_MS,
 		COMMENTS_CACHE_MAX,
@@ -262,6 +257,8 @@ export function loadBotEnv(env: BotEnv): BotEnvConfig {
 		GEMINI_IMAGE_SIZE,
 		WEB_SEARCH_ENABLED,
 		WEB_SEARCH_CONTEXT_SIZE,
+		BROWSER_ENABLED,
+		BROWSER_ALLOWLIST,
 		TOOL_RATE_LIMITS,
 		TOOL_APPROVAL_REQUIRED,
 		TOOL_APPROVAL_TTL_MS,

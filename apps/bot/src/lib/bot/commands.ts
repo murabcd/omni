@@ -24,7 +24,7 @@ type CommandDeps = {
 		options?: Record<string, unknown>,
 	) => Promise<void>;
 	logDebug: (message: string, data?: unknown) => void;
-	clearHistoryMessages: () => void;
+	clearHistoryMessages: (ctx: BotContext) => Promise<void>;
 	setLogContext: (ctx: BotContext, update: Partial<LogContext>) => void;
 	getCommandTools: () => Promise<ToolMeta[]>;
 	resolveChatToolPolicy: (ctx: BotContext) => ToolPolicy | undefined;
@@ -89,6 +89,8 @@ type CommandDeps = {
 	getUptimeSeconds?: () => number;
 	getLastTrackerCallAt: () => number | null;
 	jiraEnabled?: boolean;
+	figmaEnabled?: boolean;
+	wikiEnabled?: boolean;
 	posthogEnabled?: boolean;
 	webSearchEnabled?: boolean;
 	memoryEnabled?: boolean;
@@ -168,6 +170,8 @@ export function registerCommands(deps: CommandDeps) {
 		formatUptime,
 		getUptimeSeconds,
 		jiraEnabled,
+		figmaEnabled,
+		wikiEnabled,
 		posthogEnabled,
 		webSearchEnabled,
 		memoryEnabled,
@@ -179,10 +183,7 @@ export function registerCommands(deps: CommandDeps) {
 
 	bot.command("start", (ctx) => {
 		setLogContext(ctx, { command: "/start", message_type: "command" });
-		const memoryId = ctx.from?.id?.toString() ?? "";
-		if (memoryId) {
-			clearHistoryMessages();
-		}
+		void clearHistoryMessages(ctx);
 		return sendText(ctx, startGreeting, { reply_markup: startKeyboard });
 	});
 
@@ -191,17 +192,20 @@ export function registerCommands(deps: CommandDeps) {
 	}) {
 		await sendText(
 			ctx,
-			"Я Omni — помогаю с задачами, аналитикой и поиском.\n\n" +
+			"Я omni — помогаю с задачами, аналитикой и поиском.\n\n" +
 				"Умею:\n" +
 				"— отчеты и напоминания по расписанию\n" +
-				"— Jira / Yandex Tracker\n" +
-				"— PostHog аналитика\n" +
+				"— jira / yandex tracker\n" +
+				"— yandex wiki (по ссылке/id/slug, без поиска)\n" +
+				"— figma\n" +
+				"— posthog аналитика\n" +
 				"— поиск в интернете\n\n" +
 				"Примеры:\n" +
-				'"Сделай ежедневный отчет по PostHog в 11:00"\n' +
-				'"Проверь статус PROJ-1234 в Tracker"\n' +
-				'"Есть ли блокеры в текущем спринте Jira?"\n' +
-				'"Найди ближайшие HR-конференции в РФ"',
+				'"сделай ежедневный отчет по posthog в 11:00"\n' +
+				'"проверь статус proj-1234 в tracker"\n' +
+				'"открой страницу wiki по ссылке"\n' +
+				'"открой макет в figma по ссылке"\n' +
+				'"есть ли блокеры в текущем спринте jira?"',
 		);
 	}
 
@@ -243,16 +247,13 @@ export function registerCommands(deps: CommandDeps) {
 				return;
 			}
 
-			const lines = filteredTools.map((tool) => {
-				const desc = tool.description ? ` - ${tool.description}` : "";
-				return `${tool.name}${desc}`;
-			});
+			const lines = filteredTools.map((tool) => tool.name);
 
 			const conflictLines =
 				TOOL_CONFLICTS.length > 0
 					? TOOL_CONFLICTS.map(
 							(conflict) =>
-								`- ${conflict.tool.name} (duplicate name, source ${conflict.tool.source})`,
+								`- ${conflict.tool.name} (дубликат имени, источник ${conflict.tool.source})`,
 						)
 					: [];
 			const suppressedLines = (() => {
@@ -274,7 +275,7 @@ export function registerCommands(deps: CommandDeps) {
 					? [
 							"Лимиты (на пользователя и чат):",
 							...rateRules.map(
-								(rule) => `- ${rule.tool}: ${rule.max}/${rule.windowSeconds}s`,
+								(rule) => `- ${rule.tool}: ${rule.max}/${rule.windowSeconds}с`,
 							),
 						]
 					: [];
@@ -359,10 +360,10 @@ export function registerCommands(deps: CommandDeps) {
 		if (!sub) {
 			const fallbacks = getActiveModelFallbacks().length
 				? getActiveModelFallbacks().join(", ")
-				: "none";
+				: "нет";
 			await sendText(
 				ctx,
-				`Model: ${getActiveModelRef()}\nReasoning: ${resolveReasoning()}\nFallbacks: ${fallbacks}`,
+				`Модель: ${getActiveModelRef()}\nРежим рассуждений: ${resolveReasoning()}\nРезервные модели: ${fallbacks}`,
 			);
 			return;
 		}
@@ -372,7 +373,7 @@ export function registerCommands(deps: CommandDeps) {
 				const label = cfg.label ?? cfg.id;
 				return `${ref} - ${label}`;
 			});
-			await sendText(ctx, `Available models:\n${lines.join("\n")}`);
+			await sendText(ctx, `Доступные модели:\n${lines.join("\n")}`);
 			return;
 		}
 
@@ -385,7 +386,7 @@ export function registerCommands(deps: CommandDeps) {
 			const normalized = normalizeModelRef(raw);
 			try {
 				setActiveModel(normalized);
-				await sendText(ctx, `Model set to ${getActiveModelRef()}`);
+				await sendText(ctx, `Модель установлена: ${getActiveModelRef()}`);
 			} catch (error) {
 				await sendText(ctx, `Ошибка модели: ${String(error)}`);
 			}
@@ -396,15 +397,15 @@ export function registerCommands(deps: CommandDeps) {
 			const raw = rest.join(" ").trim();
 			const normalized = normalizeReasoning(raw);
 			if (!normalized) {
-				await sendText(ctx, "Reasoning must be off|low|standard|high");
+				await sendText(ctx, "Режим рассуждений: off|low|standard|high");
 				return;
 			}
 			setActiveReasoningOverride(normalized);
-			await sendText(ctx, `Reasoning set to ${normalized}`);
+			await sendText(ctx, `Режим рассуждений установлен: ${normalized}`);
 			return;
 		}
 
-		await sendText(ctx, "Unknown /model subcommand");
+		await sendText(ctx, "Неизвестная подкоманда /model");
 	});
 
 	bot.command("skills", async (ctx) => {
@@ -423,9 +424,8 @@ export function registerCommands(deps: CommandDeps) {
 		}
 		const supported = new Set(channelSupported.map((skill) => skill.name));
 		const lines = channelSkills.map((skill) => {
-			const desc = skill.description ? ` - ${skill.description}` : "";
-			const suffix = supported.has(skill.name) ? "" : " (blocked)";
-			return `${skill.name}${suffix}${desc}`;
+			const suffix = supported.has(skill.name) ? "" : " (заблокировано)";
+			return `${skill.name}${suffix}`;
 		});
 		await sendText(ctx, `Доступные runtime-skills:\n${lines.join("\n")}`);
 	});
@@ -475,7 +475,7 @@ export function registerCommands(deps: CommandDeps) {
 		const mergedArgs = { ...(skill.args ?? {}), ...args };
 		const { server, tool } = resolveToolRef(skill.tool);
 		if (!tool) {
-			await sendText(ctx, `Некорректный tool в skill: ${skill.name}`);
+			await sendText(ctx, `Некорректный инструмент в skill: ${skill.name}`);
 			return;
 		}
 		const ALLOWED_SKILL_SERVERS = new Set([
@@ -486,7 +486,7 @@ export function registerCommands(deps: CommandDeps) {
 			"posthog",
 		]);
 		if (!server || !ALLOWED_SKILL_SERVERS.has(server)) {
-			await sendText(ctx, `Неподдерживаемый tool server: ${server}`);
+			await sendText(ctx, `Неподдерживаемый сервер инструмента: ${server}`);
 			return;
 		}
 
@@ -560,7 +560,7 @@ export function registerCommands(deps: CommandDeps) {
 		setLogContext(ctx, { command: "/timezone", message_type: "command" });
 		if (shouldBlockCommand(ctx)) return;
 		if (!setChatTimezone) {
-			await sendText(ctx, "Timezone storage is not configured.");
+			await sendText(ctx, "Хранилище часовых поясов не настроено.");
 			return;
 		}
 		const text = ctx.message?.text ?? "";
@@ -569,8 +569,8 @@ export function registerCommands(deps: CommandDeps) {
 		if (!raw) {
 			const override = await getChatTimezoneOverride(ctx);
 			const value = override ?? defaultCronTimezone;
-			const suffix = override ? " (custom)" : " (default)";
-			await sendText(ctx, `Timezone: ${value}${suffix}`);
+			const suffix = override ? " (пользовательский)" : " (по умолчанию)";
+			await sendText(ctx, `Часовой пояс: ${value}${suffix}`);
 			return;
 		}
 		if (raw === "reset" || raw === "default") {
@@ -578,15 +578,17 @@ export function registerCommands(deps: CommandDeps) {
 			await sendText(
 				ctx,
 				ok
-					? `Timezone reset to default (${defaultCronTimezone}).`
-					: "Failed to reset timezone.",
+					? `Часовой пояс сброшен на умолчание (${defaultCronTimezone}).`
+					: "Не удалось сбросить часовой пояс.",
 			);
 			return;
 		}
 		const ok = await setChatTimezone(ctx, raw);
 		await sendText(
 			ctx,
-			ok ? `Timezone set to ${raw}.` : "Failed to set timezone.",
+			ok
+				? `Часовой пояс установлен: ${raw}.`
+				: "Не удалось установить часовой пояс.",
 		);
 	});
 
@@ -594,7 +596,7 @@ export function registerCommands(deps: CommandDeps) {
 		setLogContext(ctx, { command: "/cron", message_type: "command" });
 		if (shouldBlockCommand(ctx)) return;
 		if (!cronClient) {
-			await sendText(ctx, "Cron is not configured.");
+			await sendText(ctx, "Cron не настроен.");
 			return;
 		}
 		const text = ctx.message?.text ?? "";
@@ -623,7 +625,7 @@ export function registerCommands(deps: CommandDeps) {
 			const payload = await cronClient.list({ includeDisabled: true });
 			const jobs = Array.isArray(payload?.jobs) ? payload.jobs : [];
 			if (jobs.length === 0) {
-				await sendText(ctx, "No cron jobs.");
+				await sendText(ctx, "Нет cron-задач.");
 				return;
 			}
 			const lines = jobs.map((job) => formatCronJob(job));
@@ -639,15 +641,15 @@ export function registerCommands(deps: CommandDeps) {
 			}
 			const resolved = await resolveCronJobTarget(rest);
 			if (resolved.error === "not_found") {
-				await sendText(ctx, `No job found for ${rest}.`);
+				await sendText(ctx, `Не найдена задача для ${rest}.`);
 				return;
 			}
 			if (resolved.error === "ambiguous") {
-				await sendText(ctx, "Multiple matches found. Please specify a job id.");
+				await sendText(ctx, "Найдено несколько совпадений. Укажите ID задачи.");
 				return;
 			}
 			if (resolved.error) {
-				await sendText(ctx, "Cron is not configured.");
+				await sendText(ctx, "Cron не настроен.");
 				return;
 			}
 			await sendText(ctx, formatCronJob(resolved.job));
@@ -656,20 +658,20 @@ export function registerCommands(deps: CommandDeps) {
 
 		if (sub === "runs") {
 			if (!rest) {
-				await sendText(ctx, "Usage: /cron runs <id|name>");
+				await sendText(ctx, "Использование: /cron runs <id|name>");
 				return;
 			}
 			const resolved = await resolveCronJobTarget(rest);
 			if (resolved.error === "not_found") {
-				await sendText(ctx, `No job found for ${rest}.`);
+				await sendText(ctx, `Не найдена задача для ${rest}.`);
 				return;
 			}
 			if (resolved.error === "ambiguous") {
-				await sendText(ctx, "Multiple matches found. Please specify a job id.");
+				await sendText(ctx, "Найдено несколько совпадений. Укажите ID задачи.");
 				return;
 			}
 			if (resolved.error) {
-				await sendText(ctx, "Cron is not configured.");
+				await sendText(ctx, "Cron не настроен.");
 				return;
 			}
 			const runs = await cronClient.runs({ id: resolved.id, limit: 10 });
@@ -679,24 +681,24 @@ export function registerCommands(deps: CommandDeps) {
 
 		if (sub === "run") {
 			if (!rest) {
-				await sendText(ctx, "Usage: /cron run <id|name>");
+				await sendText(ctx, "Использование: /cron run <id|name>");
 				return;
 			}
 			const resolved = await resolveCronJobTarget(rest);
 			if (resolved.error === "not_found") {
-				await sendText(ctx, `No job found for ${rest}.`);
+				await sendText(ctx, `Не найдена задача для ${rest}.`);
 				return;
 			}
 			if (resolved.error === "ambiguous") {
-				await sendText(ctx, "Multiple matches found. Please specify a job id.");
+				await sendText(ctx, "Найдено несколько совпадений. Укажите ID задачи.");
 				return;
 			}
 			if (resolved.error) {
-				await sendText(ctx, "Cron is not configured.");
+				await sendText(ctx, "Cron не настроен.");
 				return;
 			}
 			await cronClient.run({ jobId: resolved.id, mode: "force" });
-			await sendText(ctx, `Triggered ${resolved.id}.`);
+			await sendText(ctx, `Запуск инициирован: ${resolved.id}.`);
 			return;
 		}
 
@@ -707,20 +709,20 @@ export function registerCommands(deps: CommandDeps) {
 			sub === "disable"
 		) {
 			if (!rest) {
-				await sendText(ctx, `Usage: /cron ${sub} <id|name>`);
+				await sendText(ctx, `Использование: /cron ${sub} <id|name>`);
 				return;
 			}
 			const resolved = await resolveCronJobTarget(rest);
 			if (resolved.error === "not_found") {
-				await sendText(ctx, `No job found for ${rest}.`);
+				await sendText(ctx, `Не найдена задача для ${rest}.`);
 				return;
 			}
 			if (resolved.error === "ambiguous") {
-				await sendText(ctx, "Multiple matches found. Please specify a job id.");
+				await sendText(ctx, "Найдено несколько совпадений. Укажите ID задачи.");
 				return;
 			}
 			if (resolved.error) {
-				await sendText(ctx, "Cron is not configured.");
+				await sendText(ctx, "Cron не настроен.");
 				return;
 			}
 			const enabled = sub === "start" || sub === "enable";
@@ -730,31 +732,31 @@ export function registerCommands(deps: CommandDeps) {
 			});
 			await sendText(
 				ctx,
-				updated ? `Updated: ${formatCronJob(updated)}` : "Updated.",
+				updated ? `Обновлено: ${formatCronJob(updated)}` : "Обновлено.",
 			);
 			return;
 		}
 
 		if (sub === "remove" || sub === "delete") {
 			if (!rest) {
-				await sendText(ctx, `Usage: /cron ${sub} <id|name>`);
+				await sendText(ctx, `Использование: /cron ${sub} <id|name>`);
 				return;
 			}
 			const resolved = await resolveCronJobTarget(rest);
 			if (resolved.error === "not_found") {
-				await sendText(ctx, `No job found for ${rest}.`);
+				await sendText(ctx, `Не найдена задача для ${rest}.`);
 				return;
 			}
 			if (resolved.error === "ambiguous") {
-				await sendText(ctx, "Multiple matches found. Please specify a job id.");
+				await sendText(ctx, "Найдено несколько совпадений. Укажите ID задачи.");
 				return;
 			}
 			if (resolved.error) {
-				await sendText(ctx, "Cron is not configured.");
+				await sendText(ctx, "Cron не настроен.");
 				return;
 			}
 			await cronClient.remove({ jobId: resolved.id });
-			await sendText(ctx, `Removed ${resolved.id}.`);
+			await sendText(ctx, `Удалено: ${resolved.id}.`);
 			return;
 		}
 
@@ -765,28 +767,28 @@ export function registerCommands(deps: CommandDeps) {
 			if (!target || !mode) {
 				await sendText(
 					ctx,
-					"Usage: /cron edit <id|name> cron <expr> [tz] | /cron edit <id|name> every <minutes>",
+					"Использование: /cron edit <id|name> cron <expr> [tz] | /cron edit <id|name> every <minutes>",
 				);
 				return;
 			}
 			const resolved = await resolveCronJobTarget(target);
 			if (resolved.error === "not_found") {
-				await sendText(ctx, `No job found for ${target}.`);
+				await sendText(ctx, `Не найдена задача для ${target}.`);
 				return;
 			}
 			if (resolved.error === "ambiguous") {
-				await sendText(ctx, "Multiple matches found. Please specify a job id.");
+				await sendText(ctx, "Найдено несколько совпадений. Укажите ID задачи.");
 				return;
 			}
 			if (resolved.error) {
-				await sendText(ctx, "Cron is not configured.");
+				await sendText(ctx, "Cron не настроен.");
 				return;
 			}
 			if (mode === "every") {
 				const minutesRaw = editParts[0] ?? "";
 				const minutes = Number.parseInt(minutesRaw, 10);
 				if (!Number.isFinite(minutes) || minutes <= 0) {
-					await sendText(ctx, "Invalid minutes for every cadence.");
+					await sendText(ctx, "Некорректное число минут для режима every.");
 					return;
 				}
 				const updated = await cronClient.update({
@@ -795,7 +797,7 @@ export function registerCommands(deps: CommandDeps) {
 				});
 				await sendText(
 					ctx,
-					updated ? `Updated: ${formatCronJob(updated)}` : "Updated.",
+					updated ? `Обновлено: ${formatCronJob(updated)}` : "Обновлено.",
 				);
 				return;
 			}
@@ -806,7 +808,7 @@ export function registerCommands(deps: CommandDeps) {
 						? editParts.slice(0, -1).join(" ")
 						: editParts.join(" ");
 				if (!expr.trim()) {
-					await sendText(ctx, "Missing cron expression.");
+					await sendText(ctx, "Не задано cron-выражение.");
 					return;
 				}
 				const updated = await cronClient.update({
@@ -821,15 +823,21 @@ export function registerCommands(deps: CommandDeps) {
 				});
 				await sendText(
 					ctx,
-					updated ? `Updated: ${formatCronJob(updated)}` : "Updated.",
+					updated ? `Обновлено: ${formatCronJob(updated)}` : "Обновлено.",
 				);
 				return;
 			}
-			await sendText(ctx, "Unknown edit mode. Use 'cron' or 'every'.");
+			await sendText(
+				ctx,
+				"Неизвестный режим редактирования. Используйте 'cron' или 'every'.",
+			);
 			return;
 		}
 
-		await sendText(ctx, "Unknown /cron subcommand. Use /cron help.");
+		await sendText(
+			ctx,
+			"Неизвестная подкоманда /cron. Используйте /cron help.",
+		);
 	});
 
 	async function handleStatus(ctx: {
@@ -837,11 +845,11 @@ export function registerCommands(deps: CommandDeps) {
 	}) {
 		const uptimeSeconds = getUptimeSeconds?.() ?? 0;
 		const uptime = formatUptime(uptimeSeconds);
-		let trackerStatus = "ok";
+		let trackerStatus = "ок";
 		try {
 			await withTimeout(trackerHealthCheck(), 5_000, "trackerHealthCheck");
 		} catch (error) {
-			trackerStatus = `error: ${String(error)}`;
+			trackerStatus = `ошибка: ${String(error)}`;
 		}
 
 		const lines = [
@@ -849,10 +857,12 @@ export function registerCommands(deps: CommandDeps) {
 			`— аптайм: ${uptime}`,
 			`— модель: ${getActiveModelRef()}`,
 			`— yandex-tracker: ${trackerStatus}`,
-			`— jira: ${jiraEnabled ? "ok" : "не настроен"}`,
-			`— posthog: ${posthogEnabled ? "ok" : "не настроен"}`,
+			`— jira: ${jiraEnabled ? "ок" : "не настроен"}`,
+			`— figma: ${figmaEnabled ? "ок" : "не настроена"}`,
+			`— yandex-wiki: ${wikiEnabled ? "ок" : "не настроена"}`,
+			`— posthog: ${posthogEnabled ? "ок" : "не настроен"}`,
 			`— веб-поиск: ${webSearchEnabled ? "включён" : "выключен"}`,
-			`— память: ${memoryEnabled ? "ok" : "не настроена"}`,
+			`— память: ${memoryEnabled ? "ок" : "не настроена"}`,
 		];
 		await sendText(ctx, lines.join("\n"));
 	}

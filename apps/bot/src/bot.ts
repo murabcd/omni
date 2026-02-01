@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import { createGoogleGenerativeAI } from "@ai-sdk/google";
 import { openai } from "@ai-sdk/openai";
 import { sequentialize } from "@grammyjs/runner";
@@ -50,6 +51,7 @@ import {
 import { createTelegramHelpers } from "./lib/bot/telegram.js";
 import type { BotContext } from "./lib/bot/types.js";
 import {
+	type ChannelConfig,
 	filterSkillsForChannel,
 	isUserAllowedForChannel,
 	parseChannelConfig,
@@ -71,11 +73,11 @@ import {
 } from "./lib/context/chat-state.js";
 import {
 	appendHistoryMessage,
-	clearHistoryMessages,
+	clearHistoryMessages as clearSessionHistory,
 	formatHistoryForPrompt,
 	loadHistoryMessages,
-	setSupermemoryConfig,
 } from "./lib/context/session-history.js";
+import { buildSessionKey } from "./lib/context/session-key.js";
 import {
 	type FilePart,
 	isDocxDocument,
@@ -93,6 +95,7 @@ import {
 import { buildAgentInstructions } from "./lib/prompts/agent-instructions.js";
 import { buildSkillsPrompt } from "./lib/prompts/skills-prompt.js";
 import { formatUserDateTime } from "./lib/prompts/time.js";
+import type { TextStore } from "./lib/storage/text-store.js";
 import {
 	extractIssueKeysFromText,
 	truncateText,
@@ -119,6 +122,13 @@ import {
 	type ToolConflict,
 	type ToolMeta,
 } from "./lib/tools/registry.js";
+import { buildWorkspaceDefaults } from "./lib/workspace/defaults.js";
+import {
+	createWorkspaceManager,
+	type WorkspaceManager,
+} from "./lib/workspace/manager.js";
+import { resolveWorkspaceId } from "./lib/workspace/paths.js";
+import type { WorkspaceDefaults } from "./lib/workspace/types.js";
 import {
 	type ModelsFile,
 	normalizeModelRef,
@@ -146,6 +156,29 @@ export type CreateBotOptions = {
 	getUptimeSeconds?: () => number;
 	onDebugLog?: (line: string) => void;
 	imageStore?: ImageStore;
+	workspaceStore?: TextStore;
+	workspaceDefaults?: WorkspaceDefaults;
+	queueTurn?: (payload: {
+		sessionKey: string;
+		chatId: string;
+		chatType: "private" | "group" | "supergroup" | "channel";
+		text: string;
+		kind?: "system" | "hook" | "followup" | "announce";
+		channelConfig?: ChannelConfig;
+		turnDepth?: number;
+		meta?: Record<string, unknown>;
+	}) => Promise<void>;
+	onToolEvent?: (event: {
+		toolName: string;
+		toolCallId?: string;
+		durationMs: number;
+		error?: string;
+		chatId?: string;
+		chatType?: string;
+		userId?: string;
+		sessionKey?: string;
+		turnDepth?: number;
+	}) => Promise<void> | void;
 	cronClient?: {
 		list: (params?: {
 			includeDisabled?: boolean;
@@ -206,9 +239,6 @@ export async function createBot(options: CreateBotOptions) {
 		DEFAULT_ISSUE_PREFIX,
 		DEBUG_LOGS,
 		TRACKER_API_BASE_URL,
-		SUPERMEMORY_API_KEY,
-		SUPERMEMORY_PROJECT_ID,
-		SUPERMEMORY_TAG_PREFIX,
 		HISTORY_MAX_MESSAGES,
 		COMMENTS_CACHE_TTL_MS,
 		COMMENTS_CACHE_MAX,
@@ -224,6 +254,8 @@ export async function createBot(options: CreateBotOptions) {
 		GEMINI_IMAGE_SIZE,
 		WEB_SEARCH_ENABLED,
 		WEB_SEARCH_CONTEXT_SIZE,
+		BROWSER_ENABLED,
+		BROWSER_ALLOWLIST,
 		TOOL_RATE_LIMITS,
 		TOOL_APPROVAL_REQUIRED,
 		TOOL_APPROVAL_TTL_MS,
@@ -292,6 +324,25 @@ export async function createBot(options: CreateBotOptions) {
 		region: REGION,
 		instance_id: INSTANCE_ID,
 	});
+	const workspaceStore = options.workspaceStore;
+	const workspaceDefaults =
+		options.workspaceDefaults ??
+		buildWorkspaceDefaults({
+			soul: SOUL_PROMPT,
+			projectContext: PROJECT_CONTEXT,
+		});
+	const workspaceManager: WorkspaceManager | null = workspaceStore
+		? createWorkspaceManager({
+				store: workspaceStore,
+				defaults: workspaceDefaults,
+				logger: (event) =>
+					logger.info({
+						event: event.event,
+						workspace_id: event.workspaceId,
+						key: event.key,
+					}),
+			})
+		: null;
 
 	if (!BOT_TOKEN) throw new Error("BOT_TOKEN is unset");
 	if (!TRACKER_TOKEN) throw new Error("TRACKER_TOKEN is unset");
@@ -302,12 +353,6 @@ export async function createBot(options: CreateBotOptions) {
 	if (!ALLOWED_TG_IDS.trim()) {
 		throw new Error("ALLOWED_TG_IDS must be set for production use");
 	}
-
-	setSupermemoryConfig({
-		apiKey: SUPERMEMORY_API_KEY,
-		projectId: SUPERMEMORY_PROJECT_ID || undefined,
-		tagPrefix: SUPERMEMORY_TAG_PREFIX,
-	});
 
 	const bot = new Bot<BotContext>(BOT_TOKEN, {
 		client: {
@@ -435,6 +480,55 @@ export async function createBot(options: CreateBotOptions) {
 			},
 			agentTools,
 		);
+
+		if (workspaceManager) {
+			register(
+				{
+					name: "memory_read",
+					description:
+						"Read a memory file (MEMORY.md or memory/YYYY-MM-DD.md).",
+					source: "memory",
+					origin: "workspace",
+				},
+				agentTools,
+			);
+			register(
+				{
+					name: "memory_append",
+					description: "Append text to a memory file.",
+					source: "memory",
+					origin: "workspace",
+				},
+				agentTools,
+			);
+			register(
+				{
+					name: "memory_write",
+					description: "Replace a memory file with new content.",
+					source: "memory",
+					origin: "workspace",
+				},
+				agentTools,
+			);
+			register(
+				{
+					name: "memory_search",
+					description: "Search memory files for a query string.",
+					source: "memory",
+					origin: "workspace",
+				},
+				agentTools,
+			);
+			register(
+				{
+					name: "session_history",
+					description: "Read recent conversation history.",
+					source: "core",
+					origin: "session",
+				},
+				agentTools,
+			);
+		}
 
 		if (FIGMA_TOKEN) {
 			register(
@@ -687,26 +781,7 @@ export async function createBot(options: CreateBotOptions) {
 			}
 		}
 
-		if (SUPERMEMORY_API_KEY) {
-			register(
-				{
-					name: "searchMemories",
-					description: "Search saved memories (Supermemory).",
-					source: "memory",
-					origin: "supermemory",
-				},
-				agentTools,
-			);
-			register(
-				{
-					name: "addMemory",
-					description: "Store memory (Supermemory).",
-					source: "memory",
-					origin: "supermemory",
-				},
-				agentTools,
-			);
-		}
+		// memory tools are registered in agentTools only (shared list via registry)
 
 		register(
 			{
@@ -876,6 +951,19 @@ export async function createBot(options: CreateBotOptions) {
 	});
 
 	bot.use((ctx, next) => {
+		const sys = (ctx.update as { __systemEvent?: unknown }).__systemEvent;
+		if (sys === true) {
+			ctx.state.systemEvent = true;
+		}
+		const depth = (ctx.update as { __turnDepth?: unknown }).__turnDepth;
+		if (typeof depth === "number") {
+			ctx.state.turnDepth = depth;
+		}
+		return next();
+	});
+
+	bot.use((ctx, next) => {
+		if (ctx.state.systemEvent) return next();
 		const channelAllowlist = ctx.state.channelConfig?.allowUserIds ?? [];
 		if (allowedIds.size === 0 && channelAllowlist.length === 0) return next();
 		const userId = ctx.from?.id?.toString() ?? "";
@@ -1070,6 +1158,11 @@ export async function createBot(options: CreateBotOptions) {
 		debugLogs: DEBUG_LOGS,
 		webSearchEnabled: WEB_SEARCH_ENABLED,
 		webSearchContextSize: WEB_SEARCH_CONTEXT_SIZE,
+		browserEnabled: BROWSER_ENABLED,
+		browserAllowlist: BROWSER_ALLOWLIST.split(",")
+			.map((value) => value.trim())
+			.filter(Boolean),
+		browserSendFile: sendBrowserScreenshot,
 		defaultTrackerQueue: DEFAULT_TRACKER_QUEUE,
 		cronStatusTimezone: CRON_STATUS_TIMEZONE,
 		resolveChatTimezone,
@@ -1087,9 +1180,8 @@ export async function createBot(options: CreateBotOptions) {
 		figmaClient,
 		jiraClient,
 		logJiraAudit,
-		supermemoryApiKey: SUPERMEMORY_API_KEY,
-		supermemoryProjectId: SUPERMEMORY_PROJECT_ID,
-		supermemoryTagPrefix: SUPERMEMORY_TAG_PREFIX,
+		workspaceManager: workspaceManager ?? undefined,
+		sessionStore: workspaceStore ?? undefined,
 		commentsFetchBudgetMs: COMMENTS_FETCH_BUDGET_MS,
 		imageStore: options.imageStore,
 		geminiImageSize:
@@ -1141,6 +1233,43 @@ export async function createBot(options: CreateBotOptions) {
 			.filter((value): value is string => Boolean(value))
 			.map((value) => value.toUpperCase());
 		return Array.from(new Set(matches));
+	}
+
+	async function buildConversationContext(params: {
+		ctx: BotContext;
+		chatId: string;
+		workspaceId?: string;
+		sessionKey?: string;
+	}) {
+		const workspaceId = params.workspaceId ?? resolveWorkspaceId(params.chatId);
+		const sessionKey =
+			params.sessionKey ??
+			buildSessionKey({
+				channel: "telegram",
+				chatType: params.ctx.chat?.type ?? "private",
+				chatId: params.chatId,
+			});
+		const workspaceSnapshot = workspaceManager
+			? await workspaceManager.loadSnapshot(workspaceId)
+			: undefined;
+		const historyMessages =
+			workspaceStore && Number.isFinite(HISTORY_MAX_MESSAGES)
+				? await loadHistoryMessages(
+						workspaceStore,
+						workspaceId,
+						sessionKey,
+						HISTORY_MAX_MESSAGES,
+					)
+				: [];
+		const historyText = historyMessages.length
+			? formatHistoryForPrompt(historyMessages)
+			: "";
+		return {
+			workspaceId,
+			sessionKey,
+			workspaceSnapshot,
+			historyText,
+		};
 	}
 
 	function extractJiraIssueKeysFromUrls(text: string): string[] {
@@ -1245,8 +1374,21 @@ export async function createBot(options: CreateBotOptions) {
 		"Привет!\n\n" +
 		"Я Omni, персональный ассистент.\n" +
 		"Помогу с задачами, аналитикой, могу искать в интернете.\n" +
-		"Принимаю текст, голос, изображения и PDF.\n" +
+		"Понимаю текст, голос, ссылки, изображения и файлы.\n" +
 		"Если есть номер задачи — укажите его, например PROJ-1234.\n\n";
+
+	const clearHistoryForContext = async (ctx: BotContext) => {
+		if (!workspaceStore) return;
+		const chatId = ctx.chat?.id?.toString() ?? "";
+		if (!chatId) return;
+		const workspaceId = resolveWorkspaceId(chatId);
+		const sessionKey = buildSessionKey({
+			channel: "telegram",
+			chatType: ctx.chat?.type ?? "private",
+			chatId,
+		});
+		await clearSessionHistory(workspaceStore, workspaceId, sessionKey);
+	};
 
 	registerCommands({
 		bot,
@@ -1254,7 +1396,7 @@ export async function createBot(options: CreateBotOptions) {
 		startKeyboard,
 		sendText,
 		logDebug,
-		clearHistoryMessages,
+		clearHistoryMessages: clearHistoryForContext,
 		setLogContext,
 		getCommandTools,
 		resolveChatToolPolicy,
@@ -1295,9 +1437,11 @@ export async function createBot(options: CreateBotOptions) {
 		getUptimeSeconds: options.getUptimeSeconds,
 		getLastTrackerCallAt,
 		jiraEnabled,
+		figmaEnabled,
+		wikiEnabled,
 		posthogEnabled: Boolean(POSTHOG_PERSONAL_API_KEY),
 		webSearchEnabled: WEB_SEARCH_ENABLED,
-		memoryEnabled: Boolean(SUPERMEMORY_API_KEY),
+		memoryEnabled: Boolean(workspaceStore),
 		cronClient: options.cronClient,
 		defaultCronTimezone: CRON_STATUS_TIMEZONE,
 		getChatTimezoneOverride,
@@ -1612,6 +1756,25 @@ export async function createBot(options: CreateBotOptions) {
 		}
 	}
 
+	async function sendBrowserScreenshot(params: {
+		ctx?: BotContext;
+		path: string;
+	}) {
+		if (!params.ctx?.chat?.id) return;
+		if (!("api" in params.ctx) || !params.ctx.api?.sendPhoto) return;
+		try {
+			const buffer = await fs.readFile(params.path);
+			const filename = params.path.split("/").pop() ?? "screenshot.png";
+			await params.ctx.api.sendPhoto(
+				params.ctx.chat.id,
+				new InputFile(buffer, filename),
+			);
+			await fs.unlink(params.path).catch(() => undefined);
+		} catch (error) {
+			logDebug("send browser screenshot failed", { error: String(error) });
+		}
+	}
+
 	type LocalChatOptions = {
 		text: string;
 		files?: FilePart[];
@@ -1620,6 +1783,10 @@ export async function createBot(options: CreateBotOptions) {
 		userId?: string;
 		userName?: string;
 		chatType?: "private" | "group" | "supergroup" | "channel";
+		workspaceId?: string;
+		sessionKey?: string;
+		channelConfig?: ChannelConfig;
+		systemEvent?: boolean;
 	};
 
 	type LocalChatResult = {
@@ -1644,7 +1811,12 @@ export async function createBot(options: CreateBotOptions) {
 		if (!text && files.length === 0) return { messages };
 
 		const ctx = {
-			state: {},
+			state: {
+				channelConfig: options.channelConfig,
+				systemEvent: options.systemEvent,
+				workspaceIdOverride: options.workspaceId,
+				sessionKeyOverride: options.sessionKey,
+			},
 			message: {
 				text,
 				message_id: 1,
@@ -1691,11 +1863,16 @@ export async function createBot(options: CreateBotOptions) {
 		const files = options.files ?? [];
 		const webSearchEnabled = options.webSearchEnabled;
 		if (!text && files.length === 0) {
-			return { stream: createTextStream("Empty message.") };
+			return { stream: createTextStream("Пустое сообщение.") };
 		}
 
 		const ctx = {
-			state: {},
+			state: {
+				channelConfig: options.channelConfig,
+				systemEvent: options.systemEvent,
+				workspaceIdOverride: options.workspaceId,
+				sessionKeyOverride: options.sessionKey,
+			},
 			message: {
 				text,
 				message_id: 1,
@@ -1807,6 +1984,7 @@ export async function createBot(options: CreateBotOptions) {
 				return;
 			}
 			if (
+				!ctx.state.systemEvent &&
 				isGroupChat(ctx) &&
 				shouldRequireMentionForChannel({
 					channelConfig: ctx.state.channelConfig,
@@ -1893,9 +2071,11 @@ export async function createBot(options: CreateBotOptions) {
 				void sendReply("Готовлю ответ…");
 			}, 9000);
 		};
+		let queueFollowup: ((toolNames: string[]) => void) | null = null;
 		const handleToolStep = (toolNames: string[]) => {
 			cancelProcessing();
 			onToolStep?.(toolNames);
+			queueFollowup?.(toolNames);
 		};
 
 		try {
@@ -1908,6 +2088,7 @@ export async function createBot(options: CreateBotOptions) {
 				return;
 			}
 			if (
+				!ctx.state.systemEvent &&
 				isGroupChat(ctx) &&
 				shouldRequireMentionForChannel({
 					channelConfig: ctx.state.channelConfig,
@@ -1923,9 +2104,64 @@ export async function createBot(options: CreateBotOptions) {
 			stopTyping = startTypingHeartbeat(ctx);
 			scheduleProcessing();
 			const chatId = ctx.chat?.id?.toString() ?? "";
-			const memoryId = ctx.from?.id?.toString() ?? chatId;
+			const { workspaceId, sessionKey, workspaceSnapshot, historyText } =
+				await buildConversationContext({
+					ctx,
+					chatId: chatId || "unknown",
+					workspaceId: ctx.state.workspaceIdOverride,
+					sessionKey: ctx.state.sessionKeyOverride,
+				});
 			const userName = ctx.from?.first_name?.trim() || undefined;
 			const chatState = chatId ? getChatState(chatId) : null;
+			const turnDepth = ctx.state.turnDepth ?? 0;
+			const baseChatType =
+				(ctx.chat?.type as "private" | "group" | "supergroup" | "channel") ??
+				"private";
+			const userId = ctx.from?.id?.toString();
+			const emitToolEvent =
+				typeof options.onToolEvent === "function"
+					? (payload: {
+							toolName: string;
+							toolCallId?: string;
+							durationMs: number;
+							error?: string;
+						}) =>
+							options.onToolEvent?.({
+								...payload,
+								chatId,
+								chatType: baseChatType,
+								userId,
+								sessionKey,
+								turnDepth,
+							})
+					: null;
+			let followupQueued = false;
+			queueFollowup = (toolNames: string[]) => {
+				if (!options.queueTurn) return;
+				if (followupQueued) return;
+				if (turnDepth > 0) return;
+				const summary = toolNames.filter(Boolean).slice(0, 6).join(", ");
+				const hint = summary ? `Инструменты: ${summary}. ` : "";
+				followupQueued = true;
+				void options.queueTurn({
+					sessionKey,
+					chatId,
+					chatType: baseChatType,
+					text: `${hint}Продолжи выполнение запроса, опираясь на результаты инструментов.`,
+					kind: "followup",
+					channelConfig: ctx.state.channelConfig,
+					turnDepth: turnDepth + 1,
+					meta: { toolNames },
+				});
+			};
+			const recordHistory = (role: "user" | "assistant", text: string) => {
+				if (!workspaceStore) return;
+				void appendHistoryMessage(workspaceStore, workspaceId, sessionKey, {
+					timestamp: new Date().toISOString(),
+					role,
+					text,
+				});
+			};
 			const docxExtracted = await extractDocxFromFileParts(files);
 			const filesForModel = docxExtracted.files;
 			const combinedExtraContext = [
@@ -1935,7 +2171,7 @@ export async function createBot(options: CreateBotOptions) {
 			const promptText =
 				text ||
 				(filesForModel.length > 0 || combinedExtraContext.length > 0
-					? "Analyze the attached file."
+					? "Проанализируй вложенный файл."
 					: text);
 			const modelPrompt = combinedExtraContext.length
 				? [promptText, ...combinedExtraContext].join("\n\n")
@@ -2112,7 +2348,7 @@ export async function createBot(options: CreateBotOptions) {
 										commentsText,
 										extraContext,
 										userName,
-										globalSoul: SOUL_PROMPT,
+										globalSoul: workspaceSnapshot?.soul ?? SOUL_PROMPT,
 										channelSoul: ctx.state.channelConfig?.systemPrompt,
 									});
 									const result = await generateAgentWithFiles(
@@ -2131,18 +2367,8 @@ export async function createBot(options: CreateBotOptions) {
 										lastError = new Error("empty_response");
 										continue;
 									}
-									if (memoryId) {
-										void appendHistoryMessage(memoryId, {
-											timestamp: new Date().toISOString(),
-											role: "user",
-											text: pendingRequest.question,
-										});
-										void appendHistoryMessage(memoryId, {
-											timestamp: new Date().toISOString(),
-											role: "assistant",
-											text: reply,
-										});
-									}
+									recordHistory("user", pendingRequest.question);
+									recordHistory("assistant", reply);
 									await sendReply(reply);
 									if (skippedReads.length > 0) {
 										await sendReply(
@@ -2196,17 +2422,6 @@ export async function createBot(options: CreateBotOptions) {
 					: WEB_SEARCH_ENABLED;
 			const generateAgent = async (agent: ToolLoopAgent) =>
 				generateAgentWithFiles(agent, modelPrompt, filesForModel);
-			const historyMessages =
-				memoryId && Number.isFinite(HISTORY_MAX_MESSAGES)
-					? await loadHistoryMessages(
-							memoryId,
-							HISTORY_MAX_MESSAGES,
-							promptText,
-						)
-					: [];
-			const historyText = historyMessages.length
-				? formatHistoryForPrompt(historyMessages)
-				: "";
 			const sprintQuery = isSprintQuery(promptText);
 			const jiraKeysFromUrl = extractJiraIssueKeysFromUrls(promptText);
 			const trackerKeysFromUrl = extractTrackerIssueKeysFromUrls(promptText);
@@ -2262,7 +2477,7 @@ export async function createBot(options: CreateBotOptions) {
 								modelId: config.id,
 								issues: issuesData,
 								userName,
-								globalSoul: SOUL_PROMPT,
+								globalSoul: workspaceSnapshot?.soul ?? SOUL_PROMPT,
 								channelSoul: ctx.state.channelConfig?.systemPrompt,
 							});
 							const result = await generateAgent(agent);
@@ -2291,18 +2506,8 @@ export async function createBot(options: CreateBotOptions) {
 							const issueKey = primaryIssue?.key ?? null;
 							const issueText = primaryIssue?.issueText ?? "";
 							const commentsText = primaryIssue?.commentsText ?? "";
-							if (memoryId) {
-								void appendHistoryMessage(memoryId, {
-									timestamp: new Date().toISOString(),
-									role: "user",
-									text: promptText,
-								});
-								void appendHistoryMessage(memoryId, {
-									timestamp: new Date().toISOString(),
-									role: "assistant",
-									text: reply,
-								});
-							}
+							recordHistory("user", promptText);
+							recordHistory("assistant", reply);
 							await sendReply(reply);
 							if (chatState) {
 								const request = await collectAttachmentRequest({
@@ -2374,7 +2579,7 @@ export async function createBot(options: CreateBotOptions) {
 								modelId: config.id,
 								issues: issuesData,
 								userName,
-								globalSoul: SOUL_PROMPT,
+								globalSoul: workspaceSnapshot?.soul ?? SOUL_PROMPT,
 								channelSoul: ctx.state.channelConfig?.systemPrompt,
 							});
 							const result = await generateAgent(agent);
@@ -2399,18 +2604,8 @@ export async function createBot(options: CreateBotOptions) {
 								chatState.lastPrimaryKey = issuesData[0]?.key ?? null;
 								chatState.lastUpdatedAt = Date.now();
 							}
-							if (memoryId) {
-								void appendHistoryMessage(memoryId, {
-									timestamp: new Date().toISOString(),
-									role: "user",
-									text: promptText,
-								});
-								void appendHistoryMessage(memoryId, {
-									timestamp: new Date().toISOString(),
-									role: "assistant",
-									text: reply,
-								});
-							}
+							recordHistory("user", promptText);
+							recordHistory("assistant", reply);
 							await sendReply(reply);
 							return;
 						} catch (error) {
@@ -2468,7 +2663,7 @@ export async function createBot(options: CreateBotOptions) {
 								issueText,
 								commentsText,
 								userName,
-								globalSoul: SOUL_PROMPT,
+								globalSoul: workspaceSnapshot?.soul ?? SOUL_PROMPT,
 								channelSoul: ctx.state.channelConfig?.systemPrompt,
 							});
 							const result = await generateAgent(agent);
@@ -2491,18 +2686,8 @@ export async function createBot(options: CreateBotOptions) {
 								chatState.lastPrimaryKey = issueKey;
 								chatState.lastUpdatedAt = Date.now();
 							}
-							if (memoryId) {
-								void appendHistoryMessage(memoryId, {
-									timestamp: new Date().toISOString(),
-									role: "user",
-									text: promptText,
-								});
-								void appendHistoryMessage(memoryId, {
-									timestamp: new Date().toISOString(),
-									role: "assistant",
-									text: reply,
-								});
-							}
+							recordHistory("user", promptText);
+							recordHistory("assistant", reply);
 							await sendReply(reply);
 							return;
 						} catch (error) {
@@ -2557,7 +2742,7 @@ export async function createBot(options: CreateBotOptions) {
 								issueText,
 								commentsText,
 								userName,
-								globalSoul: SOUL_PROMPT,
+								globalSoul: workspaceSnapshot?.soul ?? SOUL_PROMPT,
 								channelSoul: ctx.state.channelConfig?.systemPrompt,
 							});
 							const result = await generateAgent(agent);
@@ -2580,18 +2765,8 @@ export async function createBot(options: CreateBotOptions) {
 								chatState.lastPrimaryKey = issueKey;
 								chatState.lastUpdatedAt = Date.now();
 							}
-							if (memoryId) {
-								void appendHistoryMessage(memoryId, {
-									timestamp: new Date().toISOString(),
-									role: "user",
-									text: promptText,
-								});
-								void appendHistoryMessage(memoryId, {
-									timestamp: new Date().toISOString(),
-									role: "assistant",
-									text: reply,
-								});
-							}
+							recordHistory("user", promptText);
+							recordHistory("assistant", reply);
 							await sendReply(reply);
 							return;
 						} catch (error) {
@@ -2628,7 +2803,7 @@ export async function createBot(options: CreateBotOptions) {
 					if (plan.agents.length > 0) {
 						const allTools = await createAgentTools({
 							history: historyText,
-							chatId: memoryId,
+							chatId,
 							ctx,
 							webSearchEnabled: allowWebSearch,
 						});
@@ -2650,7 +2825,7 @@ export async function createBot(options: CreateBotOptions) {
 								modelRef: ref,
 								modelName: config.label ?? config.id,
 								reasoning: resolveReasoningFor(config),
-								globalSoul: SOUL_PROMPT,
+								globalSoul: workspaceSnapshot?.soul ?? SOUL_PROMPT,
 							},
 							getModel: getSubagentModel,
 							defaultSubagentModelProvider: subagentProvider,
@@ -2680,13 +2855,15 @@ export async function createBot(options: CreateBotOptions) {
 						},
 						recentCandidates: chatState?.lastCandidates,
 						history: mergedHistory,
-						chatId: memoryId,
+						workspaceSnapshot,
+						chatId,
 						userName,
 						onToolStart: (toolName) => {
 							cancelProcessing();
 							onToolStart?.(toolName);
 						},
 						onToolStep: handleToolStep,
+						onToolResult: emitToolEvent ?? undefined,
 						ctx,
 						webSearchEnabled: allowWebSearch,
 					});
@@ -2730,18 +2907,8 @@ export async function createBot(options: CreateBotOptions) {
 						lastError = new Error("empty_response");
 						continue;
 					}
-					if (memoryId) {
-						void appendHistoryMessage(memoryId, {
-							timestamp: new Date().toISOString(),
-							role: "user",
-							text: promptText,
-						});
-						void appendHistoryMessage(memoryId, {
-							timestamp: new Date().toISOString(),
-							role: "assistant",
-							text: reply,
-						});
-					}
+					recordHistory("user", promptText);
+					recordHistory("assistant", reply);
 					await sendReply(reply);
 					return;
 				} catch (error) {
@@ -2771,12 +2938,13 @@ export async function createBot(options: CreateBotOptions) {
 		webSearchEnabled?: boolean,
 		abortSignal?: AbortSignal,
 	): Promise<ReadableStream<UIMessageChunk>> {
+		const modelNotConfigured = "Модель не настроена.";
 		const text = rawText.trim();
 		if (
 			(!text && files.length === 0) ||
 			(text.startsWith("/") && !files.length)
 		) {
-			return createTextStream("Commands are not supported here.");
+			return createTextStream("Команды здесь не поддерживаются.");
 		}
 
 		try {
@@ -2789,6 +2957,7 @@ export async function createBot(options: CreateBotOptions) {
 				return createTextStream("");
 			}
 			if (
+				!ctx.state.systemEvent &&
 				isGroupChat(ctx) &&
 				shouldRequireMentionForChannel({
 					channelConfig: ctx.state.channelConfig,
@@ -2798,13 +2967,71 @@ export async function createBot(options: CreateBotOptions) {
 				const allowReply = isReplyToBotWithoutMention(ctx);
 				if (!allowReply && !isBotMentioned(ctx)) {
 					setLogContext(ctx, { outcome: "blocked", status_code: 403 });
-					return createTextStream("Mention required.");
+					return createTextStream("Нужно упоминание.");
 				}
 			}
 			const chatId = ctx.chat?.id?.toString() ?? "";
-			const memoryId = ctx.from?.id?.toString() ?? chatId;
+			const { workspaceId, sessionKey, workspaceSnapshot, historyText } =
+				await buildConversationContext({
+					ctx,
+					chatId: chatId || "unknown",
+					workspaceId: ctx.state.workspaceIdOverride,
+					sessionKey: ctx.state.sessionKeyOverride,
+				});
 			const userName = ctx.from?.first_name?.trim() || undefined;
 			const chatState = chatId ? getChatState(chatId) : null;
+			const turnDepth = ctx.state.turnDepth ?? 0;
+			const baseChatType =
+				(ctx.chat?.type as "private" | "group" | "supergroup" | "channel") ??
+				"private";
+			const userId = ctx.from?.id?.toString();
+			const emitToolEvent =
+				typeof options.onToolEvent === "function"
+					? (payload: {
+							toolName: string;
+							toolCallId?: string;
+							durationMs: number;
+							error?: string;
+						}) =>
+							options.onToolEvent?.({
+								...payload,
+								chatId,
+								chatType: baseChatType,
+								userId,
+								sessionKey,
+								turnDepth,
+							})
+					: null;
+			let followupQueued = false;
+			const queueFollowup = (toolNames: string[]) => {
+				if (!options.queueTurn) return;
+				if (followupQueued) return;
+				if (turnDepth > 0) return;
+				const summary = toolNames.filter(Boolean).slice(0, 6).join(", ");
+				const hint = summary ? `Инструменты: ${summary}. ` : "";
+				followupQueued = true;
+				void options.queueTurn({
+					sessionKey,
+					chatId,
+					chatType: baseChatType,
+					text: `${hint}Продолжи выполнение запроса, опираясь на результаты инструментов.`,
+					kind: "followup",
+					channelConfig: ctx.state.channelConfig,
+					turnDepth: turnDepth + 1,
+					meta: { toolNames },
+				});
+			};
+			const handleToolStep = (toolNames: string[]) => {
+				queueFollowup(toolNames);
+			};
+			const recordHistory = (role: "user" | "assistant", text: string) => {
+				if (!workspaceStore) return;
+				void appendHistoryMessage(workspaceStore, workspaceId, sessionKey, {
+					timestamp: new Date().toISOString(),
+					role,
+					text,
+				});
+			};
 			const docxExtracted = await extractDocxFromFileParts(files);
 			const filesForModel = docxExtracted.files;
 			const combinedExtraContext =
@@ -2812,7 +3039,7 @@ export async function createBot(options: CreateBotOptions) {
 			const promptText =
 				text ||
 				(filesForModel.length > 0 || combinedExtraContext.length > 0
-					? "Analyze the attached file."
+					? "Проанализируй вложенный файл."
 					: text);
 			const modelPrompt = combinedExtraContext.length
 				? [promptText, ...combinedExtraContext].join("\n\n")
@@ -2827,17 +3054,6 @@ export async function createBot(options: CreateBotOptions) {
 				typeof webSearchEnabled === "boolean"
 					? webSearchEnabled
 					: WEB_SEARCH_ENABLED;
-			const historyMessages =
-				memoryId && Number.isFinite(HISTORY_MAX_MESSAGES)
-					? await loadHistoryMessages(
-							memoryId,
-							HISTORY_MAX_MESSAGES,
-							promptText,
-						)
-					: [];
-			const historyText = historyMessages.length
-				? formatHistoryForPrompt(historyMessages)
-				: "";
 			const sprintQuery = isSprintQuery(promptText);
 			const jiraKeysFromUrl = extractJiraIssueKeysFromUrls(promptText);
 			const trackerKeysFromUrl = extractTrackerIssueKeysFromUrls(promptText);
@@ -2877,7 +3093,7 @@ export async function createBot(options: CreateBotOptions) {
 				);
 				const config = getModelConfig(activeModelRef);
 				if (!config) {
-					return createTextStream("Model not configured.");
+					return createTextStream(modelNotConfigured);
 				}
 				setLogContext(ctx, { model_ref: activeModelRef, model_id: config.id });
 				const agent = await createMultiIssueAgent({
@@ -2888,7 +3104,7 @@ export async function createBot(options: CreateBotOptions) {
 					modelId: config.id,
 					issues: issuesData,
 					userName,
-					globalSoul: SOUL_PROMPT,
+					globalSoul: workspaceSnapshot?.soul ?? SOUL_PROMPT,
 					channelSoul: ctx.state.channelConfig?.systemPrompt,
 				});
 				if (chatState) {
@@ -2900,18 +3116,12 @@ export async function createBot(options: CreateBotOptions) {
 					chatState.lastPrimaryKey = issuesData[0]?.key ?? null;
 					chatState.lastUpdatedAt = Date.now();
 				}
-				if (memoryId) {
-					void appendHistoryMessage(memoryId, {
-						timestamp: new Date().toISOString(),
-						role: "user",
-						text: promptText,
-					});
-				}
+				recordHistory("user", promptText);
 				return createAgentStreamWithTools(
 					agent,
 					modelPrompt,
 					filesForModel,
-					undefined,
+					handleToolStep,
 					abortSignal,
 				);
 			}
@@ -2937,7 +3147,7 @@ export async function createBot(options: CreateBotOptions) {
 				);
 				const config = getModelConfig(activeModelRef);
 				if (!config) {
-					return createTextStream("Model not configured.");
+					return createTextStream(modelNotConfigured);
 				}
 				setLogContext(ctx, { model_ref: activeModelRef, model_id: config.id });
 				const agent = await createMultiIssueAgent({
@@ -2948,7 +3158,7 @@ export async function createBot(options: CreateBotOptions) {
 					modelId: config.id,
 					issues: issuesData,
 					userName,
-					globalSoul: SOUL_PROMPT,
+					globalSoul: workspaceSnapshot?.soul ?? SOUL_PROMPT,
 					channelSoul: ctx.state.channelConfig?.systemPrompt,
 				});
 				if (chatState) {
@@ -2960,18 +3170,12 @@ export async function createBot(options: CreateBotOptions) {
 					chatState.lastPrimaryKey = issuesData[0]?.key ?? null;
 					chatState.lastUpdatedAt = Date.now();
 				}
-				if (memoryId) {
-					void appendHistoryMessage(memoryId, {
-						timestamp: new Date().toISOString(),
-						role: "user",
-						text: promptText,
-					});
-				}
+				recordHistory("user", promptText);
 				return createAgentStreamWithTools(
 					agent,
 					modelPrompt,
 					filesForModel,
-					undefined,
+					handleToolStep,
 					abortSignal,
 				);
 			}
@@ -2990,7 +3194,7 @@ export async function createBot(options: CreateBotOptions) {
 				const commentsText = commentResult.text;
 				const config = getModelConfig(activeModelRef);
 				if (!config) {
-					return createTextStream("Model not configured.");
+					return createTextStream(modelNotConfigured);
 				}
 				setLogContext(ctx, { model_ref: activeModelRef, model_id: config.id });
 				const agent = await createIssueAgent({
@@ -3003,7 +3207,7 @@ export async function createBot(options: CreateBotOptions) {
 					issueText,
 					commentsText,
 					userName,
-					globalSoul: SOUL_PROMPT,
+					globalSoul: workspaceSnapshot?.soul ?? SOUL_PROMPT,
 					channelSoul: ctx.state.channelConfig?.systemPrompt,
 				});
 				if (chatState) {
@@ -3011,18 +3215,12 @@ export async function createBot(options: CreateBotOptions) {
 					chatState.lastPrimaryKey = issueKey;
 					chatState.lastUpdatedAt = Date.now();
 				}
-				if (memoryId) {
-					void appendHistoryMessage(memoryId, {
-						timestamp: new Date().toISOString(),
-						role: "user",
-						text: promptText,
-					});
-				}
+				recordHistory("user", promptText);
 				return createAgentStreamWithTools(
 					agent,
 					modelPrompt,
 					filesForModel,
-					undefined,
+					handleToolStep,
 					abortSignal,
 				);
 			}
@@ -3041,7 +3239,7 @@ export async function createBot(options: CreateBotOptions) {
 				const commentsText = extractCommentsText(commentResult).text;
 				const config = getModelConfig(activeModelRef);
 				if (!config) {
-					return createTextStream("Model not configured.");
+					return createTextStream(modelNotConfigured);
 				}
 				setLogContext(ctx, { model_ref: activeModelRef, model_id: config.id });
 				const agent = await createIssueAgent({
@@ -3054,7 +3252,7 @@ export async function createBot(options: CreateBotOptions) {
 					issueText,
 					commentsText,
 					userName,
-					globalSoul: SOUL_PROMPT,
+					globalSoul: workspaceSnapshot?.soul ?? SOUL_PROMPT,
 					channelSoul: ctx.state.channelConfig?.systemPrompt,
 				});
 				if (chatState) {
@@ -3062,25 +3260,19 @@ export async function createBot(options: CreateBotOptions) {
 					chatState.lastPrimaryKey = issueKey;
 					chatState.lastUpdatedAt = Date.now();
 				}
-				if (memoryId) {
-					void appendHistoryMessage(memoryId, {
-						timestamp: new Date().toISOString(),
-						role: "user",
-						text: promptText,
-					});
-				}
+				recordHistory("user", promptText);
 				return createAgentStreamWithTools(
 					agent,
 					modelPrompt,
 					filesForModel,
-					undefined,
+					handleToolStep,
 					abortSignal,
 				);
 			}
 
 			const config = getModelConfig(activeModelRef);
 			if (!config) {
-				return createTextStream("Model not configured.");
+				return createTextStream(modelNotConfigured);
 			}
 			setLogContext(ctx, { model_ref: activeModelRef, model_id: config.id });
 			const plan = await buildOrchestrationPlan(modelPrompt, ctx);
@@ -3089,7 +3281,7 @@ export async function createBot(options: CreateBotOptions) {
 			if (plan.agents.length > 0) {
 				const allTools = await createAgentTools({
 					history: historyText,
-					chatId: memoryId,
+					chatId,
 					ctx,
 					webSearchEnabled: allowWebSearch,
 				});
@@ -3111,7 +3303,7 @@ export async function createBot(options: CreateBotOptions) {
 						modelRef: activeModelRef,
 						modelName: config.label ?? config.id,
 						reasoning: resolveReasoningFor(config),
-						globalSoul: SOUL_PROMPT,
+						globalSoul: workspaceSnapshot?.soul ?? SOUL_PROMPT,
 					},
 					getModel: getSubagentModel,
 					defaultSubagentModelProvider: subagentProvider,
@@ -3140,23 +3332,19 @@ export async function createBot(options: CreateBotOptions) {
 				},
 				recentCandidates: chatState?.lastCandidates,
 				history: mergedHistory,
-				chatId: memoryId,
+				workspaceSnapshot,
+				chatId,
 				userName,
+				onToolResult: emitToolEvent ?? undefined,
 				ctx,
 				webSearchEnabled: allowWebSearch,
 			});
-			if (memoryId) {
-				void appendHistoryMessage(memoryId, {
-					timestamp: new Date().toISOString(),
-					role: "user",
-					text: promptText,
-				});
-			}
+			recordHistory("user", promptText);
 			return createAgentStreamWithTools(
 				agent,
 				modelPrompt,
 				filesForModel,
-				undefined,
+				handleToolStep,
 				abortSignal,
 			);
 		} catch (error) {
@@ -3167,6 +3355,7 @@ export async function createBot(options: CreateBotOptions) {
 
 	bot.on("message", (ctx) => {
 		if (
+			!ctx.state.systemEvent &&
 			isGroupChat(ctx) &&
 			shouldRequireMentionForChannel({
 				channelConfig: ctx.state.channelConfig,
