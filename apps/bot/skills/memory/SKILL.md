@@ -1,10 +1,10 @@
 ---
 name: memory
-description: Supermemory tools map + usage notes for memory tools.
+description: Workspace memory tools map + usage notes.
 ---
 # memory
 
-Supermemory tools exposed by the bot.
+Workspace memory tools exposed by the bot.
 
 Quick start
 - Telegram: `/skill <name> <json>`
@@ -14,5 +14,7 @@ Runtime skills
 - The `tool` field supports `memory.<tool_name>`.
 
 Available tools
-- `searchMemories`
-- `addMemory`
+- `memory_read`
+- `memory_append`
+- `memory_write`
+- `memory_search`

@@ -38,7 +38,13 @@ export function createToolStatusHandler(
 		"jira_issue_get",
 		"jira_issue_get_comments",
 	]);
-	const memoryTools = new Set(["searchMemories", "addMemory"]);
+	const memoryTools = new Set([
+		"memory_read",
+		"memory_append",
+		"memory_write",
+		"memory_search",
+		"session_history",
+	]);
 	const cronTools = new Set(["cron_schedule", "cron_list", "cron_remove"]);
 	const googleTools = new Set([
 		"google_public_doc_read",

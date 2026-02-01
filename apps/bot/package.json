@@ -20,7 +20,6 @@
 		"@grammyjs/runner": "^2.0.3",
 		"@grammyjs/transformer-throttler": "^1.2.1",
 		"@posthog/agent-toolkit": "^0.2.4",
-		"@supermemory/tools": "^1.3.68",
 		"ai": "^6.0.59",
 		"arkregex": "^0.0.5",
 		"dotenv": "^16.6.1",

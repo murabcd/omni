@@ -485,8 +485,7 @@ export async function createBot(options: CreateBotOptions) {
 			register(
 				{
 					name: "memory_read",
-					description:
-						"Read a memory file (MEMORY.md or memory/YYYY-MM-DD.md).",
+					description: "Read a memory file (memory/YYYY-MM-DD.md).",
 					source: "memory",
 					origin: "workspace",
 				},

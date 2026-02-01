@@ -1,0 +1,5 @@
+{
+	"name": "memory_read",
+	"description": "Read a memory file from the workspace.",
+	"tool": "memory.memory_read"
+}

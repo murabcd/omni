@@ -74,10 +74,7 @@ import {
 import { sanitizeToolCallIdsForTranscript } from "../tools/tool-call-id.js";
 import { repairToolUseResultPairing } from "../tools/transcript-repair.js";
 import type { WorkspaceManager } from "../workspace/manager.js";
-import {
-	isAllowedMemoryPath,
-	normalizeMemoryPath,
-} from "../workspace/memory.js";
+import { isAllowedMemoryPath, resolveMemoryPath } from "../workspace/memory.js";
 import { resolveWorkspaceId } from "../workspace/paths.js";
 
 export type AgentToolSet = Awaited<ReturnType<AgentToolsFactory>>;
@@ -253,8 +250,6 @@ export type CreateAgentOptions = {
 	workspaceSnapshot?: {
 		agents?: string;
 		soul?: string;
-		tools?: string;
-		memoryCore?: string;
 		memoryToday?: string;
 		memoryYesterday?: string;
 		memoryTodayPath?: string;
@@ -415,26 +410,27 @@ export function createAgentToolsFactory(
 		});
 
 		if (workspaceManager) {
+			const resolvePath = (path?: string) =>
+				resolveMemoryPath(path, new Date());
 			registerTool(
 				{
 					name: "memory_read",
-					description:
-						"Read a memory file (MEMORY.md or memory/YYYY-MM-DD.md).",
+					description: "Read a memory file (memory/YYYY-MM-DD.md).",
 					source: "memory",
 					origin: "workspace",
 				},
 				tool({
-					description:
-						"Read a memory file (MEMORY.md or memory/YYYY-MM-DD.md).",
+					description: "Read a memory file (memory/YYYY-MM-DD.md).",
 					inputSchema: z.object({
 						path: z
 							.string()
-							.describe("Path like MEMORY.md or memory/2026-01-20.md"),
+							.optional()
+							.describe("Path like memory/2026-01-20.md"),
 						fromLine: z.number().int().min(1).optional(),
 						maxLines: z.number().int().min(1).max(400).optional(),
 					}),
 					execute: async ({ path, fromLine, maxLines }) => {
-						const normalized = normalizeMemoryPath(path);
+						const normalized = resolvePath(path);
 						if (!isAllowedMemoryPath(normalized)) {
 							return { error: "invalid_memory_path" };
 						}
@@ -473,11 +469,12 @@ export function createAgentToolsFactory(
 					inputSchema: z.object({
 						path: z
 							.string()
-							.describe("Path like MEMORY.md or memory/2026-01-20.md"),
+							.optional()
+							.describe("Path like memory/2026-01-20.md"),
 						text: z.string().min(1).describe("Text to append"),
 					}),
 					execute: async ({ path, text }) => {
-						const normalized = normalizeMemoryPath(path);
+						const normalized = resolvePath(path);
 						if (!isAllowedMemoryPath(normalized)) {
 							return { error: "invalid_memory_path" };
 						}
@@ -499,11 +496,12 @@ export function createAgentToolsFactory(
 					inputSchema: z.object({
 						path: z
 							.string()
-							.describe("Path like MEMORY.md or memory/2026-01-20.md"),
+							.optional()
+							.describe("Path like memory/2026-01-20.md"),
 						text: z.string().describe("Full file content"),
 					}),
 					execute: async ({ path, text }) => {
-						const normalized = normalizeMemoryPath(path);
+						const normalized = resolvePath(path);
 						if (!isAllowedMemoryPath(normalized)) {
 							return { error: "invalid_memory_path" };
 						}
@@ -529,12 +527,6 @@ export function createAgentToolsFactory(
 					execute: async ({ query, limit }) => {
 						const snapshot = await workspaceManager.loadSnapshot(workspaceId);
 						const haystack: Array<{ path: string; content: string }> = [];
-						if (snapshot.memoryCore) {
-							haystack.push({
-								path: "MEMORY.md",
-								content: snapshot.memoryCore,
-							});
-						}
 						if (snapshot.memoryToday) {
 							haystack.push({
 								path: snapshot.memoryTodayPath ?? "memory/today.md",

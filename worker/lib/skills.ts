@@ -140,7 +140,7 @@ function resolveSkillRequirements(toolRef: string) {
 		return {
 			requirements: {
 				bins: [],
-				env: ["SUPERMEMORY_API_KEY"],
+				env: [],
 				config: [],
 				os: [],
 			},
@@ -207,9 +207,7 @@ function buildMissingEnv(params: {
 		}
 	}
 	if (params.server === "memory") {
-		if (!params.effectiveEnv.SUPERMEMORY_API_KEY) {
-			missing.push("SUPERMEMORY_API_KEY");
-		}
+		// no env requirements for memory storage
 	}
 	if (params.server === "web") {
 		if (!params.effectiveEnv.OPENAI_API_KEY) {

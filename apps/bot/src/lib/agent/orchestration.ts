@@ -171,8 +171,11 @@ export function createOrchestrationHelpers(
 		const blockedTools = new Set<string>();
 		if (config.isGroupChat(ctx)) {
 			blockedTools.add("web_search");
-			blockedTools.add("searchMemories");
-			blockedTools.add("addMemory");
+			blockedTools.add("memory_read");
+			blockedTools.add("memory_append");
+			blockedTools.add("memory_write");
+			blockedTools.add("memory_search");
+			blockedTools.add("session_history");
 		}
 		return {
 			allowAgents: allowAgents.length > 0 ? allowAgents : undefined,

@@ -1,0 +1,5 @@
+{
+	"name": "memory_append",
+	"description": "Append text to a memory file in the workspace.",
+	"tool": "memory.memory_append"
+}

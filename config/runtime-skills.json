@@ -10,11 +10,6 @@
 		"tool": "posthog.actions-get-all"
 	},
 	{
-		"name": "addMemory",
-		"description": "Store memory (Supermemory).",
-		"tool": "memory.addMemory"
-	},
-	{
 		"name": "dashboard-get",
 		"description": "PostHog read-only tool",
 		"tool": "posthog.dashboard-get"
@@ -70,9 +65,73 @@
 		"tool": "posthog.feature-flag-get-definition"
 	},
 	{
+		"name": "figma_file_comments_list",
+		"description": "List comments for a Figma file.",
+		"tool": "figma.figma_file_comments_list"
+	},
+	{
+		"name": "figma_file_get",
+		"description": "Get Figma file metadata and document tree.",
+		"tool": "figma.figma_file_get"
+	},
+	{
+		"name": "figma_file_nodes_get",
+		"description": "Get specific nodes from a Figma file.",
+		"tool": "figma.figma_file_nodes_get"
+	},
+	{
+		"name": "figma_me",
+		"description": "Get current Figma user profile.",
+		"tool": "figma.figma_me"
+	},
+	{
+		"name": "figma_project_files_list",
+		"description": "List files in a Figma project.",
+		"tool": "figma.figma_project_files_list"
+	},
+	{
+		"name": "get_global_fields",
+		"description": "Get all global fields available in Yandex Tracker.",
+		"tool": "yandex-tracker.get_global_fields"
+	},
+	{
+		"name": "get_issue_types",
+		"description": "Get all available issue types.",
+		"tool": "yandex-tracker.get_issue_types"
+	},
+	{
+		"name": "get_priorities",
+		"description": "Get all available issue priorities.",
+		"tool": "yandex-tracker.get_priorities"
+	},
+	{
+		"name": "get_resolutions",
+		"description": "Get all available issue resolutions.",
+		"tool": "yandex-tracker.get_resolutions"
+	},
+	{
+		"name": "get_statuses",
+		"description": "Get all available issue statuses.",
+		"tool": "yandex-tracker.get_statuses"
+	},
+	{
 		"name": "get-llm-total-costs-for-project",
 		"description": "PostHog read-only tool",
 		"tool": "posthog.get-llm-total-costs-for-project"
+	},
+	{
+		"name": "google_public_doc_read",
+		"description": "Read a public Google Doc by shared link.",
+		"tool": "google-public.google_public_doc_read"
+	},
+	{
+		"name": "google_public_sheet_read",
+		"description": "Read a public Google Sheet by shared link.",
+		"tool": "google-public.google_public_sheet_read"
+	},
+	{
+		"name": "google_public_slides_read",
+		"tool": "google-public.google_public_slides_read"
 	},
 	{
 		"name": "insight-get",
@@ -88,6 +147,84 @@
 		"name": "insights-get-all",
 		"description": "PostHog read-only tool",
 		"tool": "posthog.insights-get-all"
+	},
+	{
+		"name": "issue_close",
+		"description": "Close an issue with a resolution.",
+		"tool": "yandex-tracker.issue_close"
+	},
+	{
+		"name": "issue_create",
+		"description": "Create a new issue in a queue.",
+		"tool": "yandex-tracker.issue_create"
+	},
+	{
+		"name": "issue_execute_transition",
+		"description": "Execute a status transition for an issue.",
+		"tool": "yandex-tracker.issue_execute_transition"
+	},
+	{
+		"name": "issue_get",
+		"description": "Retrieve detailed issue information by ID.",
+		"tool": "yandex-tracker.issue_get"
+	},
+	{
+		"name": "issue_get_attachments",
+		"description": "Get attachments for an issue.",
+		"tool": "yandex-tracker.issue_get_attachments"
+	},
+	{
+		"name": "issue_get_checklist",
+		"description": "Get checklist items of an issue.",
+		"tool": "yandex-tracker.issue_get_checklist"
+	},
+	{
+		"name": "issue_get_comments",
+		"description": "Fetch all comments for an issue.",
+		"tool": "yandex-tracker.issue_get_comments"
+	},
+	{
+		"name": "issue_get_links",
+		"description": "Get related issue links.",
+		"tool": "yandex-tracker.issue_get_links"
+	},
+	{
+		"name": "issue_get_transitions",
+		"description": "Get possible status transitions for an issue.",
+		"tool": "yandex-tracker.issue_get_transitions"
+	},
+	{
+		"name": "issue_get_url",
+		"description": "Generate web URL for an issue.",
+		"tool": "yandex-tracker.issue_get_url"
+	},
+	{
+		"name": "issue_get_worklogs",
+		"description": "Retrieve worklog entries for issues.",
+		"tool": "yandex-tracker.issue_get_worklogs"
+	},
+	{
+		"name": "issue_update",
+		"description": "Update an existing issue.",
+		"tool": "yandex-tracker.issue_update"
+	},
+	{
+		"name": "issues_count",
+		"description": "Count issues matching a query.",
+		"tool": "yandex-tracker.issues_count"
+	},
+	{
+		"name": "issues_find",
+		"description": "Search issues using Yandex Tracker Query Language.",
+		"tool": "yandex-tracker.issues_find",
+		"args": {
+			"fields": [
+				"key",
+				"summary",
+				"created_at"
+			],
+			"per_page": 100
+		}
 	},
 	{
 		"name": "jira_issue_get",
@@ -135,6 +272,26 @@
 		"tool": "posthog.logs-query"
 	},
 	{
+		"name": "memory_append",
+		"description": "Append text to a memory file in the workspace.",
+		"tool": "memory.memory_append"
+	},
+	{
+		"name": "memory_read",
+		"description": "Read a memory file from the workspace.",
+		"tool": "memory.memory_read"
+	},
+	{
+		"name": "memory_search",
+		"description": "Search memory files for a query string.",
+		"tool": "memory.memory_search"
+	},
+	{
+		"name": "memory_write",
+		"description": "Replace a memory file with new content.",
+		"tool": "memory.memory_write"
+	},
+	{
 		"name": "organization-details-get",
 		"description": "PostHog read-only tool",
 		"tool": "posthog.organization-details-get"
@@ -170,9 +327,41 @@
 		"tool": "posthog.query-run"
 	},
 	{
-		"name": "searchMemories",
-		"description": "Search saved memories (Supermemory).",
-		"tool": "memory.searchMemories"
+		"name": "queue_get_fields",
+		"description": "Get fields for a specific queue.",
+		"tool": "yandex-tracker.queue_get_fields"
+	},
+	{
+		"name": "queue_get_metadata",
+		"description": "Get detailed metadata about a specific queue.",
+		"tool": "yandex-tracker.queue_get_metadata"
+	},
+	{
+		"name": "queue_get_tags",
+		"description": "Get all tags for a specific queue.",
+		"tool": "yandex-tracker.queue_get_tags"
+	},
+	{
+		"name": "queue_get_versions",
+		"description": "Get all versions for a specific queue.",
+		"tool": "yandex-tracker.queue_get_versions"
+	},
+	{
+		"name": "queues_get_all",
+		"description": "List all available Yandex Tracker queues.",
+		"tool": "yandex-tracker.queues_get_all",
+		"args": {
+			"fields": [
+				"key",
+				"name"
+			],
+			"per_page": 100
+		}
+	},
+	{
+		"name": "session_history",
+		"description": "Read recent conversation history.",
+		"tool": "memory.session_history"
 	},
 	{
 		"name": "survey-get",
@@ -195,13 +384,53 @@
 		"tool": "posthog.surveys-global-stats"
 	},
 	{
-		"name": "tracker_search",
-		"description": "Search Yandex Tracker issues using keywords from the question.",
-		"tool": "tracker.tracker_search"
+		"name": "user_get",
+		"description": "Get information about a specific user by login or UID.",
+		"tool": "yandex-tracker.user_get"
+	},
+	{
+		"name": "user_get_current",
+		"description": "Get information about the current authenticated user.",
+		"tool": "yandex-tracker.user_get_current"
+	},
+	{
+		"name": "users_get_all",
+		"description": "Get information about user accounts registered in the organization.",
+		"tool": "yandex-tracker.users_get_all"
+	},
+	{
+		"name": "users_search",
+		"description": "Search user by login, email, or real name.",
+		"tool": "yandex-tracker.users_search"
 	},
 	{
 		"name": "web_search",
 		"description": "Search the web for up-to-date information.",
 		"tool": "web.web_search"
+	},
+	{
+		"name": "wiki_page_append_content",
+		"description": "Append content to an existing Yandex Wiki page.",
+		"tool": "yandex-wiki.wiki_page_append_content"
+	},
+	{
+		"name": "wiki_page_create",
+		"description": "Create a new Yandex Wiki page.",
+		"tool": "yandex-wiki.wiki_page_create"
+	},
+	{
+		"name": "wiki_page_get",
+		"description": "Get Yandex Wiki page details by slug.",
+		"tool": "yandex-wiki.wiki_page_get"
+	},
+	{
+		"name": "wiki_page_get_by_id",
+		"description": "Get Yandex Wiki page details by id.",
+		"tool": "yandex-wiki.wiki_page_get_by_id"
+	},
+	{
+		"name": "wiki_page_update",
+		"description": "Update an existing Yandex Wiki page.",
+		"tool": "yandex-wiki.wiki_page_update"
 	}
 ]

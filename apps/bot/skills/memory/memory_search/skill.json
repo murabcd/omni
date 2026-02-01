@@ -1,0 +1,5 @@
+{
+	"name": "memory_search",
+	"description": "Search memory files for a query string.",
+	"tool": "memory.memory_search"
+}

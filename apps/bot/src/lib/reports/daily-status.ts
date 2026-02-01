@@ -354,20 +354,21 @@ function buildSummaryPrompt(params: {
 	blockers: JiraIssueFields[];
 }) {
 	const formatList = (title: string, issues: JiraIssueFields[]) => {
-		if (!issues.length) return `${title}: нет`;
+		if (!issues.length) return `${title}: none`;
 		const lines = issues.map(
 			(issue) => `- ${issue.key}: ${issue.summary} (${issue.status})`,
 		);
 		return `${title}:\n${lines.join("\n")}`;
 	};
 	return [
-		`Ты готовишь статус для CEO по команде "${params.team}" на русском.`,
-		"Нужно 3 коротких абзаца, без списков, без заголовков и без технических деталей.",
-		"Каждый абзац — это перефразированное содержание соответствующего раздела.",
-		"Абзацы строго в порядке: Прогресс за вчера, Сейчас в работе, Блокеры/риски.",
-		"Верни только 3 абзаца и ничего больше.",
-		formatList("Прогресс за вчера", params.progress),
-		formatList("Сейчас в работе", params.inProgress),
-		formatList("Блокеры/риски", params.blockers),
+		`You are preparing a daily status update for the CEO about the "${params.team}" team.`,
+		"Write the output in Russian.",
+		"Return exactly three short paragraphs, with no lists, headings, or technical details.",
+		"Each paragraph should paraphrase the corresponding section.",
+		"Paragraph order must be: Progress yesterday, In progress now, Blockers/risks.",
+		"Return only the three paragraphs and nothing else.",
+		formatList("Progress yesterday", params.progress),
+		formatList("In progress now", params.inProgress),
+		formatList("Blockers/risks", params.blockers),
 	].join("\n\n");
 }

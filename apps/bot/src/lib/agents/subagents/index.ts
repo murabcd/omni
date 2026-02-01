@@ -15,7 +15,7 @@ export function buildWebTools(allTools: ToolSet): ToolSet {
 }
 
 export function buildMemoryTools(allTools: ToolSet): ToolSet {
-	return pickTools(allTools, ["searchMemories", "addMemory"]);
+	return pickTools(allTools, ["memory_read", "memory_search"]);
 }
 
 export function buildPosthogTools(allTools: ToolSet): ToolSet {

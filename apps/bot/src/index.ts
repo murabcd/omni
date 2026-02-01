@@ -2,6 +2,8 @@ import fs from "node:fs";
 import path from "node:path";
 import dotenv from "dotenv";
 import { createBot } from "./bot.js";
+import { createFsTextStore } from "./lib/storage/fs-store.js";
+import { buildWorkspaceDefaults } from "./lib/workspace/defaults.js";
 import { loadModelsConfig } from "./models.js";
 import { loadSkills } from "./skills.js";
 
@@ -13,7 +15,7 @@ const runtimeSkills = await loadSkills();
 const DEBUG_LOG_FILE = process.env.DEBUG_LOG_FILE ?? "";
 const SOUL_FILE_PATH = path.resolve("config/SOUL.md");
 const PROJECT_CONTEXT_ENV = process.env.PROJECT_CONTEXT;
-const PROJECT_CONTEXT_FILES = ["AGENTS.md", "config/SOUL.md"];
+const PROJECT_CONTEXT_FILES = ["config/SOUL.md"];
 
 try {
 	const soul = fs.readFileSync(SOUL_FILE_PATH, "utf8").trim();
@@ -38,6 +40,16 @@ if (!PROJECT_CONTEXT_ENV) {
 	}
 	if (entries.length > 0) {
 		process.env.PROJECT_CONTEXT = JSON.stringify(entries);
+	}
+}
+
+function parseProjectContext(raw: string | undefined) {
+	if (!raw) return [];
+	try {
+		const parsed = JSON.parse(raw);
+		return Array.isArray(parsed) ? parsed : [];
+	} catch {
+		return [];
 	}
 }
 
@@ -87,6 +99,11 @@ const { bot, allowedUpdates } = await createBot({
 	getUptimeSeconds: () => process.uptime(),
 	onDebugLog,
 	sessionClient,
+	workspaceStore: createFsTextStore({ baseDir: "data/workspace" }),
+	workspaceDefaults: buildWorkspaceDefaults({
+		soul: process.env.SOUL_PROMPT,
+		projectContext: parseProjectContext(process.env.PROJECT_CONTEXT),
+	}),
 });
 
 process.once("SIGINT", () => {

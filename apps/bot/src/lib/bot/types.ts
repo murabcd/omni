@@ -29,5 +29,12 @@ export type LogContext = {
 };
 
 export type BotContext = Context & {
-	state: { logContext?: LogContext; channelConfig?: ChannelConfig };
+	state: {
+		logContext?: LogContext;
+		channelConfig?: ChannelConfig;
+		systemEvent?: boolean;
+		turnDepth?: number;
+		workspaceIdOverride?: string;
+		sessionKeyOverride?: string;
+	};
 };

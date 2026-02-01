@@ -1,0 +1,5 @@
+{
+	"name": "memory_write",
+	"description": "Replace a memory file with new content.",
+	"tool": "memory.memory_write"
+}

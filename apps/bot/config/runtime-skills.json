@@ -10,11 +10,6 @@
 		"tool": "posthog.actions-get-all"
 	},
 	{
-		"name": "addMemory",
-		"description": "Store memory (Supermemory).",
-		"tool": "memory.addMemory"
-	},
-	{
 		"name": "dashboard-get",
 		"description": "PostHog read-only tool",
 		"tool": "posthog.dashboard-get"
@@ -273,6 +268,26 @@
 		"tool": "posthog.logs-query"
 	},
 	{
+		"name": "memory_append",
+		"description": "Append text to a memory file in the workspace.",
+		"tool": "memory.memory_append"
+	},
+	{
+		"name": "memory_read",
+		"description": "Read a memory file from the workspace.",
+		"tool": "memory.memory_read"
+	},
+	{
+		"name": "memory_search",
+		"description": "Search memory files for a query string.",
+		"tool": "memory.memory_search"
+	},
+	{
+		"name": "memory_write",
+		"description": "Replace a memory file with new content.",
+		"tool": "memory.memory_write"
+	},
+	{
 		"name": "organization-details-get",
 		"description": "PostHog read-only tool",
 		"tool": "posthog.organization-details-get"
@@ -337,9 +352,9 @@
 		}
 	},
 	{
-		"name": "searchMemories",
-		"description": "Search saved memories (Supermemory).",
-		"tool": "memory.searchMemories"
+		"name": "session_history",
+		"description": "Read recent conversation history.",
+		"tool": "memory.session_history"
 	},
 	{
 		"name": "survey-get",

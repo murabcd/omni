@@ -34,14 +34,29 @@ export function buildBuiltinRuntimeSkills(): RuntimeSkill[] {
 			tool: "jira.jira_issue_get_comments",
 		},
 		{
-			name: "searchMemories",
-			description: "Search saved memories (Supermemory).",
-			tool: "memory.searchMemories",
+			name: "memory_read",
+			description: "Read a memory file.",
+			tool: "memory.memory_read",
 		},
 		{
-			name: "addMemory",
-			description: "Store memory (Supermemory).",
-			tool: "memory.addMemory",
+			name: "memory_append",
+			description: "Append text to a memory file.",
+			tool: "memory.memory_append",
+		},
+		{
+			name: "memory_search",
+			description: "Search memory files for a query string.",
+			tool: "memory.memory_search",
+		},
+		{
+			name: "memory_write",
+			description: "Replace a memory file.",
+			tool: "memory.memory_write",
+		},
+		{
+			name: "session_history",
+			description: "Read recent conversation history.",
+			tool: "memory.session_history",
 		},
 	];
 
