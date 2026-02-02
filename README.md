@@ -23,6 +23,9 @@
 - [AI SDK](https://sdk.vercel.ai/docs)
   - Unified API for generating text, structured objects, and tool calls with LLMs
   - OpenAI is a primary LLM provider for chat responses
+- [UI generation](https://github.com/vercel-labs/json-render)
+  - Generate UI trees from chat and publish preview links
+  - See [`docs/tools/ui.md`](docs/tools/ui.md) for the `ui_publish` tool format
 - [Cloudflare Workers](https://developers.cloudflare.com/workers/)
   - Serverless webhook hosting with global edge execution
   - Durable Objects for reliable update processing with retries

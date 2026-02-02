@@ -45,7 +45,7 @@ TASK_AUTO_MIN_CHARS="800"
 TASK_AUTO_KEYWORDS=""
 TASK_PROGRESS_MIN_MS="5000"
 UI_SCREENSHOT_ENABLED="1"
-UI_PREVIEW_BASE_URL="http://localhost:3000"
+UI_PREVIEW_BASE_URL="https://omni-preview.vercel.app"
 UI_URL_TTL_MS="3600000"
 
 [observability.logs]
