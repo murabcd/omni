@@ -4,11 +4,12 @@ import type { ModelsFile } from "../../models-core.js";
 import type { RuntimeSkill } from "../../skills-core.js";
 import type { ChannelConfig } from "../channels.js";
 import type { ChatStateStore } from "../context/chat-state.js";
+import { buildSessionKey } from "../context/session-key.js";
 import type { ApprovalStore } from "../tools/approvals.js";
 import type { ToolPolicy } from "../tools/policy.js";
 import type { ToolConflict, ToolMeta } from "../tools/registry.js";
 import { findCronJob, formatCronJob } from "./cron.js";
-import type { BotContext, LogContext } from "./types.js";
+import type { BotContext, LogContext, QueueTurnPayload } from "./types.js";
 
 type CommandDeps = {
 	bot: Bot<BotContext>;
@@ -118,6 +119,18 @@ type CommandDeps = {
 		}) => Promise<unknown>;
 		status: () => Promise<unknown>;
 	};
+	taskClient?: {
+		create: (params: Record<string, unknown>) => Promise<unknown>;
+		start: (params: Record<string, unknown>) => Promise<unknown>;
+		progress: (params: Record<string, unknown>) => Promise<unknown>;
+		complete: (params: Record<string, unknown>) => Promise<unknown>;
+		fail: (params: Record<string, unknown>) => Promise<unknown>;
+		cancel: (params: Record<string, unknown>) => Promise<unknown>;
+		status: (params: Record<string, unknown>) => Promise<unknown>;
+		list: (params: Record<string, unknown>) => Promise<unknown>;
+	};
+	queueTurn?: (payload: QueueTurnPayload) => Promise<void>;
+	tasksEnabled?: boolean;
 	defaultCronTimezone: string;
 	getChatTimezoneOverride: (ctx: BotContext) => Promise<string | undefined>;
 	setChatTimezone: (
@@ -179,6 +192,9 @@ export function registerCommands(deps: CommandDeps) {
 		memoryEnabled,
 		chatStateStore,
 		cronClient,
+		taskClient,
+		queueTurn,
+		tasksEnabled,
 		defaultCronTimezone,
 		getChatTimezoneOverride,
 		setChatTimezone,
@@ -203,6 +219,7 @@ export function registerCommands(deps: CommandDeps) {
 				"— figma\n" +
 				"— posthog аналитика\n" +
 				"— поиск в интернете\n" +
+				"— фоновые задачи через /task\n" +
 				"— исследование через /research\n\n" +
 				"Примеры:\n" +
 				'"сделай ежедневный отчет по posthog в 11:00"\n' +
@@ -222,6 +239,7 @@ export function registerCommands(deps: CommandDeps) {
 				"— /start — начать сначала\n" +
 				"— /commands — список команд\n" +
 				"— /status — проверить работу бота\n" +
+				"— /task — фоновая задача (status/cancel)\n" +
 				"— /research — режим исследования\n" +
 				"— /cron — управление расписаниями\n" +
 				"— /timezone — установить или посмотреть часовой пояс\n" +
@@ -258,6 +276,74 @@ export function registerCommands(deps: CommandDeps) {
 				"Когда будешь готов — напиши «готово», и я начну.\n" +
 				"Чтобы отменить — напиши «отмена».",
 		);
+	});
+
+	bot.command("task", async (ctx) => {
+		setLogContext(ctx, { command: "/task", message_type: "command" });
+		if (!tasksEnabled || !taskClient || !queueTurn) {
+			return sendText(ctx, "Фоновые задачи отключены.");
+		}
+		const raw = ctx.message?.text ?? "";
+		const args = raw.split(" ").slice(1);
+		if (args.length === 0) {
+			return sendText(
+				ctx,
+				"Использование:\n" +
+					"/task <запрос>\n" +
+					"/task status <id>\n" +
+					"/task cancel <id>",
+			);
+		}
+		const sub = args[0]?.toLowerCase();
+		if (sub === "status") {
+			const id = args[1];
+			if (!id) return sendText(ctx, "Укажи id задачи.");
+			const status = await taskClient.status({ id });
+			return sendText(ctx, JSON.stringify(status, null, 2));
+		}
+		if (sub === "cancel") {
+			const id = args[1];
+			if (!id) return sendText(ctx, "Укажи id задачи.");
+			const result = await taskClient.cancel({ id });
+			return sendText(ctx, JSON.stringify(result, null, 2));
+		}
+		const text = args.join(" ").trim();
+		if (!text) return sendText(ctx, "Пустой запрос.");
+		const chatId = ctx.chat?.id?.toString() ?? "";
+		if (!chatId) return sendText(ctx, "Не удалось определить чат.");
+		const chatType = ctx.chat?.type ?? "private";
+		const sessionKey = buildSessionKey({
+			channel: "telegram",
+			chatType,
+			chatId,
+		});
+		const created = (await taskClient.create({
+			sessionKey,
+			chatId,
+			chatType,
+			text,
+			meta: {
+				source: "telegram",
+				reason: "command",
+			},
+		})) as { id?: string };
+		const taskId = created?.id?.toString();
+		if (taskId) {
+			await queueTurn({
+				sessionKey,
+				chatId,
+				chatType,
+				text,
+				kind: "task",
+				channelConfig: ctx.state.channelConfig,
+				meta: { taskId, reason: "command" },
+			});
+			return sendText(
+				ctx,
+				`Запустил задачу. ID: ${taskId}\nСтатус: /task status ${taskId}`,
+			);
+		}
+		return sendText(ctx, "Не удалось создать задачу.");
 	});
 
 	async function handleTools(ctx: {

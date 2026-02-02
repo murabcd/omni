@@ -49,7 +49,7 @@ import {
 	createRequestLoggerMiddleware,
 } from "./lib/bot/logging.js";
 import { createTelegramHelpers } from "./lib/bot/telegram.js";
-import type { BotContext } from "./lib/bot/types.js";
+import type { BotContext, QueueTurnPayload } from "./lib/bot/types.js";
 import {
 	type ChannelConfig,
 	filterSkillsForChannel,
@@ -100,6 +100,7 @@ import { buildAgentInstructions } from "./lib/prompts/agent-instructions.js";
 import { buildSkillsPrompt } from "./lib/prompts/skills-prompt.js";
 import { formatUserDateTime } from "./lib/prompts/time.js";
 import type { TextStore } from "./lib/storage/text-store.js";
+import { decideTaskMode, extractTaskOverride } from "./lib/tasks/router.js";
 import { markdownToTelegramChunks } from "./lib/telegram/format.js";
 import {
 	extractIssueKeysFromText,
@@ -162,17 +163,12 @@ export type CreateBotOptions = {
 	onDebugLog?: (line: string) => void;
 	imageStore?: ImageStore;
 	workspaceStore?: TextStore;
+	uiStore?: TextStore;
+	createUiUrl?: (id: string) => string;
+	uiPublishUrl?: string;
+	uiPublishToken?: string;
 	workspaceDefaults?: WorkspaceDefaults;
-	queueTurn?: (payload: {
-		sessionKey: string;
-		chatId: string;
-		chatType: "private" | "group" | "supergroup" | "channel";
-		text: string;
-		kind?: "system" | "hook" | "followup" | "announce";
-		channelConfig?: ChannelConfig;
-		turnDepth?: number;
-		meta?: Record<string, unknown>;
-	}) => Promise<void>;
+	queueTurn?: (payload: QueueTurnPayload) => Promise<void>;
 	onToolEvent?: (event: {
 		toolName: string;
 		toolCallId?: string;
@@ -205,6 +201,16 @@ export type CreateBotOptions = {
 			limit?: number;
 		}) => Promise<unknown>;
 		status: () => Promise<unknown>;
+	};
+	taskClient?: {
+		create: (params: Record<string, unknown>) => Promise<unknown>;
+		start: (params: Record<string, unknown>) => Promise<unknown>;
+		progress: (params: Record<string, unknown>) => Promise<unknown>;
+		complete: (params: Record<string, unknown>) => Promise<unknown>;
+		fail: (params: Record<string, unknown>) => Promise<unknown>;
+		cancel: (params: Record<string, unknown>) => Promise<unknown>;
+		status: (params: Record<string, unknown>) => Promise<unknown>;
+		list: (params: Record<string, unknown>) => Promise<unknown>;
 	};
 	sessionClient?: {
 		get: (params: { key: string }) => Promise<unknown>;
@@ -273,6 +279,12 @@ export async function createBot(options: CreateBotOptions) {
 		TOOL_DENYLIST_USER_TOOLS,
 		TOOL_ALLOWLIST_CHAT_TOOLS,
 		TOOL_DENYLIST_CHAT_TOOLS,
+		TASKS_ENABLED,
+		TASK_AUTO_URL_THRESHOLD,
+		TASK_AUTO_MIN_CHARS,
+		TASK_AUTO_KEYWORDS,
+		TASK_PROGRESS_MIN_MS,
+		UI_SCREENSHOT_ENABLED,
 		ORCHESTRATION_ALLOW_AGENTS,
 		ORCHESTRATION_DENY_AGENTS,
 		ORCHESTRATION_SUBAGENT_MAX_STEPS,
@@ -292,6 +304,7 @@ export async function createBot(options: CreateBotOptions) {
 	} = envConfig;
 
 	const sessionClient = options.sessionClient;
+	const taskClient = options.taskClient;
 	const chatStateStore =
 		options.chatStateStore ?? createInMemoryChatStateStore();
 	const ATTACHMENT_MAX_COUNT = 3;
@@ -310,6 +323,9 @@ export async function createBot(options: CreateBotOptions) {
 			: 10 * 60 * 1000,
 		{ filePath: TOOL_APPROVAL_STORE_PATH },
 	);
+	const taskAutoKeywords = TASK_AUTO_KEYWORDS.split(",")
+		.map((value) => value.trim())
+		.filter(Boolean);
 	const senderToolAccess = parseSenderToolAccess({
 		allowUserIds: TOOL_ALLOWLIST_USER_IDS,
 		denyUserIds: TOOL_DENYLIST_USER_IDS,
@@ -486,6 +502,19 @@ export async function createBot(options: CreateBotOptions) {
 				description: "Read a public Google Slides deck by shared link.",
 				source: "web",
 				origin: "google-public",
+			},
+			agentTools,
+		);
+
+		register(
+			{
+				name: "ui_publish",
+				description: "Generate and publish a UI preview link.",
+				source: "core",
+				origin: "ui",
+				duration: "long",
+				cost: "medium",
+				async_ok: true,
 			},
 			agentTools,
 		);
@@ -967,6 +996,10 @@ export async function createBot(options: CreateBotOptions) {
 		if (typeof depth === "number") {
 			ctx.state.turnDepth = depth;
 		}
+		const taskId = (ctx.update as { __taskId?: unknown }).__taskId;
+		if (typeof taskId === "string" && taskId.trim()) {
+			ctx.state.taskId = taskId.trim();
+		}
 		return next();
 	});
 
@@ -1173,6 +1206,11 @@ export async function createBot(options: CreateBotOptions) {
 			.filter(Boolean),
 		browserSendFile: sendBrowserScreenshot,
 		sendGeneratedFile,
+		uiStore: options.uiStore,
+		createUiUrl: options.createUiUrl,
+		uiPublishUrl: options.uiPublishUrl,
+		uiPublishToken: options.uiPublishToken,
+		uiScreenshotEnabled: UI_SCREENSHOT_ENABLED,
 		defaultTrackerQueue: DEFAULT_TRACKER_QUEUE,
 		cronStatusTimezone: CRON_STATUS_TIMEZONE,
 		resolveChatTimezone,
@@ -1444,6 +1482,9 @@ export async function createBot(options: CreateBotOptions) {
 		isReplyToBotWithoutMention,
 		isBotMentioned,
 		TELEGRAM_GROUP_REQUIRE_MENTION,
+		taskClient,
+		queueTurn: options.queueTurn,
+		tasksEnabled: TASKS_ENABLED,
 		withTimeout,
 		trackerHealthCheck,
 		formatUptime,
@@ -1819,6 +1860,7 @@ export async function createBot(options: CreateBotOptions) {
 		sessionKey?: string;
 		channelConfig?: ChannelConfig;
 		systemEvent?: boolean;
+		taskId?: string;
 	};
 
 	type LocalChatResult = {
@@ -1977,6 +2019,7 @@ export async function createBot(options: CreateBotOptions) {
 			state: {
 				channelConfig: options.channelConfig,
 				systemEvent: options.systemEvent,
+				taskId: options.taskId,
 				workspaceIdOverride: options.workspaceId,
 				sessionKeyOverride: options.sessionKey,
 			},
@@ -2033,6 +2076,7 @@ export async function createBot(options: CreateBotOptions) {
 			state: {
 				channelConfig: options.channelConfig,
 				systemEvent: options.systemEvent,
+				taskId: options.taskId,
 				workspaceIdOverride: options.workspaceId,
 				sessionKeyOverride: options.sessionKey,
 			},
@@ -2204,9 +2248,11 @@ export async function createBot(options: CreateBotOptions) {
 		extraContextParts: string[] = [],
 	) {
 		const text = rawText.trim();
+		const taskOverride = extractTaskOverride(text);
+		const effectiveText = taskOverride?.text ?? text;
 		if (
-			(!text && files.length === 0) ||
-			(text.startsWith("/") && !files.length)
+			(!effectiveText && files.length === 0) ||
+			(effectiveText.startsWith("/") && !files.length)
 		) {
 			return;
 		}
@@ -2239,6 +2285,7 @@ export async function createBot(options: CreateBotOptions) {
 		let stopTyping: (() => void) | null = null;
 		let cancelFileStatus: (() => void) | null = null;
 		let queueFollowup: ((toolNames: string[]) => void) | null = null;
+		let taskId: string | undefined;
 		const handleToolStep = (toolNames: string[]) => {
 			onToolStep?.(toolNames);
 			queueFollowup?.(toolNames);
@@ -2283,6 +2330,69 @@ export async function createBot(options: CreateBotOptions) {
 				(ctx.chat?.type as "private" | "group" | "supergroup" | "channel") ??
 				"private";
 			const userId = ctx.from?.id?.toString();
+			const isTaskRun = Boolean(ctx.state.taskId && taskClient);
+			if (
+				!isTaskRun &&
+				taskClient &&
+				options.queueTurn &&
+				TASKS_ENABLED &&
+				!ctx.state.systemEvent &&
+				turnDepth === 0
+			) {
+				const taskDecision = taskOverride
+					? {
+							mode: taskOverride.mode,
+							reason: "override",
+							tags: ["override"],
+						}
+					: decideTaskMode({
+							text: effectiveText,
+							enabled: TASKS_ENABLED,
+							urlThreshold: TASK_AUTO_URL_THRESHOLD,
+							minChars: TASK_AUTO_MIN_CHARS,
+							keywords: taskAutoKeywords,
+						});
+				if (taskDecision.mode === "background") {
+					try {
+						const created = (await taskClient.create({
+							sessionKey,
+							chatId,
+							chatType: baseChatType,
+							text: effectiveText,
+							meta: {
+								reason: taskDecision.reason,
+								tags: taskDecision.tags,
+								source: isAdminChat ? "admin" : "telegram",
+							},
+						})) as { id?: string };
+						const taskId = created?.id?.toString();
+						await sendReply(
+							`Запускаю фоновую задачу.${taskId ? ` ID: ${taskId}.` : ""}\n` +
+								(taskId
+									? `Статус: /task status ${taskId}`
+									: "Статус: /task status <id>"),
+						);
+						if (taskId) {
+							await options.queueTurn({
+								sessionKey,
+								chatId,
+								chatType: baseChatType,
+								text: effectiveText,
+								kind: "task",
+								channelConfig: ctx.state.channelConfig,
+								meta: {
+									taskId,
+									reason: taskDecision.reason,
+									tags: taskDecision.tags,
+								},
+							});
+							return;
+						}
+					} catch (error) {
+						logDebug("task create failed", { error: String(error) });
+					}
+				}
+			}
 			const emitToolEvent =
 				typeof options.onToolEvent === "function"
 					? (payload: {
@@ -2300,6 +2410,32 @@ export async function createBot(options: CreateBotOptions) {
 								turnDepth,
 							})
 					: null;
+			taskId = ctx.state.taskId;
+			let taskStep = 0;
+			let lastTaskProgressAt = 0;
+			const reportTaskProgress = async (params: {
+				message?: string;
+				percent?: number;
+			}) => {
+				if (!taskClient || !taskId) return;
+				const nowMs = Date.now();
+				if (nowMs - lastTaskProgressAt < TASK_PROGRESS_MIN_MS) return;
+				lastTaskProgressAt = nowMs;
+				await taskClient.progress({
+					id: taskId,
+					message: params.message,
+					percent: params.percent,
+					step: taskStep,
+				});
+			};
+			const reportTaskStep = (toolName: string) => {
+				taskStep += 1;
+				const percent = Math.min(90, taskStep * 15);
+				void reportTaskProgress({
+					message: `Инструмент: ${toolName}`,
+					percent,
+				});
+			};
 			let followupQueued = false;
 			queueFollowup = (toolNames: string[]) => {
 				if (!options.queueTurn) return;
@@ -2449,10 +2585,10 @@ export async function createBot(options: CreateBotOptions) {
 				return;
 			}
 			const promptText =
-				text ||
+				effectiveText ||
 				(filesForModel.length > 0 || combinedExtraContext.length > 0
 					? "Проанализируй вложенный файл."
-					: text);
+					: effectiveText);
 			const modelPrompt = combinedExtraContext.length
 				? [promptText, ...combinedExtraContext].join("\n\n")
 				: promptText;
@@ -3125,6 +3261,7 @@ export async function createBot(options: CreateBotOptions) {
 						userName,
 						onToolStart: (toolName) => {
 							onToolStart?.(toolName);
+							reportTaskStep(toolName);
 						},
 						onToolStep: handleToolStep,
 						onToolResult: emitToolEvent ?? undefined,
@@ -3153,6 +3290,12 @@ export async function createBot(options: CreateBotOptions) {
 						}
 						recordHistory("user", promptText);
 						recordHistory("assistant", reply);
+						if (taskClient && taskId) {
+							await taskClient.complete({
+								id: taskId,
+								result: { text: reply },
+							});
+						}
 						return;
 					}
 
@@ -3198,6 +3341,12 @@ export async function createBot(options: CreateBotOptions) {
 					recordHistory("user", promptText);
 					recordHistory("assistant", reply);
 					await sendReply(reply);
+					if (taskClient && taskId) {
+						await taskClient.complete({
+							id: taskId,
+							result: { text: reply },
+						});
+					}
 					return;
 				} catch (error) {
 					lastError = error;
@@ -3209,6 +3358,9 @@ export async function createBot(options: CreateBotOptions) {
 		} catch (error) {
 			clearAllStatuses();
 			setLogError(ctx, error);
+			if (taskClient && taskId) {
+				await taskClient.fail({ id: taskId, error: String(error) });
+			}
 			await sendReply(`Ошибка: ${String(error)}`);
 		} finally {
 			await persistChatState();
@@ -3228,15 +3380,18 @@ export async function createBot(options: CreateBotOptions) {
 		const modelNotConfigured = "Модель не настроена.";
 		let chatId = "";
 		let chatState: ChatState | null = null;
+		let taskId: string | undefined;
 		const updateChatState = (updater: (state: ChatState) => void) => {
 			if (!chatId || !chatState) return;
 			updater(chatState);
 			void chatStateStore.set(chatId, chatState);
 		};
 		const text = rawText.trim();
+		const taskOverride = extractTaskOverride(text);
+		const effectiveText = taskOverride?.text ?? text;
 		if (
-			(!text && files.length === 0) ||
-			(text.startsWith("/") && !files.length)
+			(!effectiveText && files.length === 0) ||
+			(effectiveText.startsWith("/") && !files.length)
 		) {
 			return createTextStream("Команды здесь не поддерживаются.");
 		}
@@ -3279,6 +3434,68 @@ export async function createBot(options: CreateBotOptions) {
 				(ctx.chat?.type as "private" | "group" | "supergroup" | "channel") ??
 				"private";
 			const userId = ctx.from?.id?.toString();
+			const isTaskRun = Boolean(ctx.state.taskId && taskClient);
+			if (
+				!isTaskRun &&
+				taskClient &&
+				options.queueTurn &&
+				TASKS_ENABLED &&
+				!ctx.state.systemEvent &&
+				turnDepth === 0
+			) {
+				const taskDecision = taskOverride
+					? {
+							mode: taskOverride.mode,
+							reason: "override",
+							tags: ["override"],
+						}
+					: decideTaskMode({
+							text: effectiveText,
+							enabled: TASKS_ENABLED,
+							urlThreshold: TASK_AUTO_URL_THRESHOLD,
+							minChars: TASK_AUTO_MIN_CHARS,
+							keywords: taskAutoKeywords,
+						});
+				if (taskDecision.mode === "background") {
+					try {
+						const created = (await taskClient.create({
+							sessionKey,
+							chatId,
+							chatType: baseChatType,
+							text: effectiveText,
+							meta: {
+								reason: taskDecision.reason,
+								tags: taskDecision.tags,
+								source: chatId === "admin" ? "admin" : "telegram",
+							},
+						})) as { id?: string };
+						const createdId = created?.id?.toString();
+						if (createdId) {
+							await options.queueTurn({
+								sessionKey,
+								chatId,
+								chatType: baseChatType,
+								text: effectiveText,
+								kind: "task",
+								channelConfig: ctx.state.channelConfig,
+								meta: {
+									taskId: createdId,
+									reason: taskDecision.reason,
+									tags: taskDecision.tags,
+								},
+							});
+						}
+						const msg =
+							`Запускаю фоновую задачу.${createdId ? ` ID: ${createdId}.` : ""}` +
+							(createdId ? ` Статус: /task status ${createdId}` : "");
+						return createTextStream(msg);
+					} catch (error) {
+						logDebug("task create failed (stream)", {
+							error: String(error),
+						});
+					}
+				}
+			}
 			const emitToolEvent =
 				typeof options.onToolEvent === "function"
 					? (payload: {
@@ -3296,6 +3513,32 @@ export async function createBot(options: CreateBotOptions) {
 								turnDepth,
 							})
 					: null;
+			taskId = ctx.state.taskId;
+			let taskStep = 0;
+			let lastTaskProgressAt = 0;
+			const reportTaskProgress = async (params: {
+				message?: string;
+				percent?: number;
+			}) => {
+				if (!taskClient || !taskId) return;
+				const nowMs = Date.now();
+				if (nowMs - lastTaskProgressAt < TASK_PROGRESS_MIN_MS) return;
+				lastTaskProgressAt = nowMs;
+				await taskClient.progress({
+					id: taskId,
+					message: params.message,
+					percent: params.percent,
+					step: taskStep,
+				});
+			};
+			const reportTaskStep = (toolName: string) => {
+				taskStep += 1;
+				const percent = Math.min(90, taskStep * 15);
+				void reportTaskProgress({
+					message: `Инструмент: ${toolName}`,
+					percent,
+				});
+			};
 			let followupQueued = false;
 			const queueFollowup = (toolNames: string[]) => {
 				if (!options.queueTurn) return;
@@ -3331,10 +3574,10 @@ export async function createBot(options: CreateBotOptions) {
 			const combinedExtraContext =
 				docxExtracted.extraContextParts.filter(Boolean);
 			const promptText =
-				text ||
+				effectiveText ||
 				(filesForModel.length > 0 || combinedExtraContext.length > 0
 					? "Проанализируй вложенный файл."
-					: text);
+					: effectiveText);
 			const modelPrompt = combinedExtraContext.length
 				? [promptText, ...combinedExtraContext].join("\n\n")
 				: promptText;
@@ -3630,6 +3873,9 @@ export async function createBot(options: CreateBotOptions) {
 				workspaceSnapshot,
 				chatId,
 				userName,
+				onToolStart: (toolName) => {
+					reportTaskStep(toolName);
+				},
 				onToolResult: emitToolEvent ?? undefined,
 				ctx,
 				webSearchEnabled: allowWebSearch,
@@ -3644,6 +3890,9 @@ export async function createBot(options: CreateBotOptions) {
 			);
 		} catch (error) {
 			setLogError(ctx, error);
+			if (taskClient && taskId) {
+				await taskClient.fail({ id: taskId, error: String(error) });
+			}
 			return createTextStream(`Ошибка: ${String(error)}`);
 		}
 	}

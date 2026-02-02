@@ -39,6 +39,14 @@ WEB_SEARCH_CONTEXT_SIZE = "low"
 WEB_SEARCH_ENABLED = "1"
 BROWSER_ENABLED="1"
 BROWSER_ALLOWLIST="https://flomni.com,*.flomni.com"
+TASKS_ENABLED="1"
+TASK_AUTO_URL_THRESHOLD="3"
+TASK_AUTO_MIN_CHARS="800"
+TASK_AUTO_KEYWORDS=""
+TASK_PROGRESS_MIN_MS="5000"
+UI_SCREENSHOT_ENABLED="1"
+UI_PREVIEW_BASE_URL="http://localhost:3000"
+UI_URL_TTL_MS="3600000"
 
 [observability.logs]
 enabled = true
@@ -70,6 +78,10 @@ class_name = "GatewayConfigDO"
 [[durable_objects.bindings]]
 name = "SESSIONS_DO"
 class_name = "SessionsDO"
+
+[[durable_objects.bindings]]
+name = "TASKS_DO"
+class_name = "TasksDO"
 
 [[r2_buckets]]
 binding = "omni"
@@ -103,3 +115,7 @@ deleted_classes = ["WikiIndexDO"]
 [[migrations]]
 tag = "v7"
 new_sqlite_classes = ["TelegramUpdatesProcessorDO"]
+
+[[migrations]]
+tag = "v8"
+new_sqlite_classes = ["TasksDO"]

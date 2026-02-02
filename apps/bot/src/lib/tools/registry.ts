@@ -18,6 +18,10 @@ export type ToolMeta = {
 	description?: string;
 	source: ToolSource;
 	origin?: string;
+	duration?: "short" | "long";
+	cost?: "low" | "medium" | "high";
+	async_ok?: boolean;
+	needs_confirm?: boolean;
 };
 
 export type ToolConflict = {

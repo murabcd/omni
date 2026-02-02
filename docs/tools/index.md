@@ -19,3 +19,4 @@ Relevant docs for this app:
 - `docs/tools/google-public.md` — Public Google Docs/Sheets links
 - `docs/tools/browser.md` — Browser automation
 - `docs/tools/firecrawl.md` — Firecrawl web research
+- `docs/tools/ui.md` — UI preview generation

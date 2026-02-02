@@ -100,6 +100,8 @@ const { bot, allowedUpdates } = await createBot({
 	onDebugLog,
 	sessionClient,
 	workspaceStore: createFsTextStore({ baseDir: "data/workspace" }),
+	uiPublishUrl: process.env.UI_PUBLISH_URL,
+	uiPublishToken: process.env.UI_PUBLISH_TOKEN,
 	workspaceDefaults: buildWorkspaceDefaults({
 		soul: process.env.SOUL_PROMPT,
 		projectContext: parseProjectContext(process.env.PROJECT_CONTEXT),

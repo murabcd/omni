@@ -112,6 +112,7 @@ export const TOOL_GROUPS: Record<string, string[]> = {
 		"google_public_sheet_read",
 		"google_public_slides_read",
 	],
+	"group:ui": ["ui_publish"],
 	"group:image": ["gemini_image_generate"],
 	"group:runtime-skills": [],
 };

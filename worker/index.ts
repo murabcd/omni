@@ -47,8 +47,10 @@ import {
 	SKILLS_CONFIG_KEY,
 	serializeSkillsConfig,
 } from "./lib/skills.js";
+import { buildUiKey, buildUiPreviewUrl, verifyUiSignature } from "./lib/ui-store.js";
 import { createR2TextStore } from "./lib/workspace-store.js";
 import { SessionsDO } from "./sessions-do.js";
+import { TasksDO } from "./tasks-do.js";
 
 const startTime = Date.now();
 const SOUL_PROMPT = typeof soulConfig?.text === "string" ? soulConfig.text : "";
@@ -77,6 +79,7 @@ type Env = Record<string, string | undefined> & {
 	SESSIONS_DO: DurableObjectNamespace;
 	CRON_DO: DurableObjectNamespace;
 	CHANNELS_DO: DurableObjectNamespace;
+	TASKS_DO: DurableObjectNamespace;
 	omni: R2Bucket;
 };
 
@@ -137,8 +140,29 @@ function resolveImageSigningSecret(env: Env) {
 	return env.IMAGE_SIGNING_SECRET?.trim() ?? "";
 }
 
+function resolveUiSigningSecret(env: Env) {
+	return (
+		env.UI_SIGNING_SECRET?.trim() ||
+		resolveImageSigningSecret(env) ||
+		""
+	);
+}
+
+function resolveUiPublishSecret(env: Env) {
+	return env.UI_PUBLISH_SECRET?.trim() || resolveUiSigningSecret(env) || "";
+}
+
 function resolvePublicBaseUrl(env: Env) {
 	return env.PUBLIC_BASE_URL?.trim() ?? "";
+}
+
+function resolveUiPreviewBaseUrl(env: Env) {
+	return env.UI_PREVIEW_BASE_URL?.trim() ?? "";
+}
+
+function resolveUiUrlTtlMs(env: Env) {
+	const value = Number.parseInt(env.UI_URL_TTL_MS ?? "3600000", 10);
+	return Number.isFinite(value) && value > 0 ? value : 3600000;
 }
 
 function getImageStore(env: Env) {
@@ -189,6 +213,19 @@ async function getBot(env: Record<string, string | undefined>) {
 			};
 			const typedEnv = env as Env;
 			const imageStore = getImageStore(typedEnv);
+			const uiSigningSecret = resolveUiSigningSecret(typedEnv);
+			const uiPreviewBaseUrl = resolveUiPreviewBaseUrl(typedEnv);
+			const uiUrlTtlMs = resolveUiUrlTtlMs(typedEnv);
+			const createUiUrl =
+				uiSigningSecret && uiPreviewBaseUrl
+					? (id: string) =>
+							buildUiPreviewUrl({
+								baseUrl: uiPreviewBaseUrl,
+								signingSecret: uiSigningSecret,
+								id,
+								ttlMs: uiUrlTtlMs,
+							})
+					: undefined;
 			if (imageStore) {
 				await ensureImageCleanupJob(typedEnv);
 			}
@@ -309,6 +346,64 @@ async function getBot(env: Record<string, string | undefined>) {
 					throw new Error("turn_enqueue_failed");
 				}
 			};
+			const taskClient = {
+				create: async (params: Record<string, unknown>) => {
+					const response = await callTasks(typedEnv, "/create", params);
+					if (!response.ok) {
+						throw new Error("task_create_failed");
+					}
+					return response.json();
+				},
+				start: async (params: Record<string, unknown>) => {
+					const response = await callTasks(typedEnv, "/start", params);
+					if (!response.ok) {
+						throw new Error("task_start_failed");
+					}
+					return response.json();
+				},
+				progress: async (params: Record<string, unknown>) => {
+					const response = await callTasks(typedEnv, "/progress", params);
+					if (!response.ok) {
+						throw new Error("task_progress_failed");
+					}
+					return response.json();
+				},
+				complete: async (params: Record<string, unknown>) => {
+					const response = await callTasks(typedEnv, "/complete", params);
+					if (!response.ok) {
+						throw new Error("task_complete_failed");
+					}
+					return response.json();
+				},
+				fail: async (params: Record<string, unknown>) => {
+					const response = await callTasks(typedEnv, "/fail", params);
+					if (!response.ok) {
+						throw new Error("task_fail_failed");
+					}
+					return response.json();
+				},
+				cancel: async (params: Record<string, unknown>) => {
+					const response = await callTasks(typedEnv, "/cancel", params);
+					if (!response.ok) {
+						throw new Error("task_cancel_failed");
+					}
+					return response.json();
+				},
+				status: async (params: Record<string, unknown>) => {
+					const response = await callTasks(typedEnv, "/status", params);
+					if (!response.ok) {
+						throw new Error("task_status_failed");
+					}
+					return response.json();
+				},
+				list: async (params: Record<string, unknown>) => {
+					const response = await callTasks(typedEnv, "/list", params);
+					if (!response.ok) {
+						throw new Error("task_list_failed");
+					}
+					return response.json();
+				},
+			};
 			const runtime = await createBot({
 				env: effectiveEnv,
 				modelsConfig,
@@ -316,8 +411,11 @@ async function getBot(env: Record<string, string | undefined>) {
 				getUptimeSeconds,
 				cronClient,
 				sessionClient,
+				taskClient,
 				chatStateStore,
 				imageStore: imageStore ?? undefined,
+				uiStore: createR2TextStore(typedEnv.omni),
+				createUiUrl,
 				workspaceStore: createR2TextStore(typedEnv.omni),
 				workspaceDefaults: buildWorkspaceDefaults({
 					soul: SOUL_PROMPT,
@@ -364,12 +462,33 @@ function getChannelsStub(env: Env) {
 	return env.CHANNELS_DO.get(id);
 }
 
+function getTasksStub(env: Env) {
+	const id = env.TASKS_DO.idFromName("tasks");
+	return env.TASKS_DO.get(id);
+}
+
 async function callSessions(
 	env: Env,
 	path: string,
 	params: Record<string, unknown>,
 ) {
 	const stub = getSessionsStub(env);
+	return withTimeout(
+		stub.fetch(`https://do${path}`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify(params),
+		}),
+		5_000,
+	);
+}
+
+async function callTasks(
+	env: Env,
+	path: string,
+	params: Record<string, unknown>,
+) {
+	const stub = getTasksStub(env);
 	return withTimeout(
 		stub.fetch(`https://do${path}`, {
 			method: "POST",
@@ -971,6 +1090,114 @@ export default {
 			return toWorkerResponse(new Response(object.body, { status: 200, headers }));
 		}
 
+		if (url.pathname === "/ui/publish" && request.method === "POST") {
+			const publishSecret = resolveUiPublishSecret(env);
+			if (!publishSecret) {
+				return toWorkerResponse(
+					new Response("ui_publish_secret_missing", { status: 500 }),
+				);
+			}
+			const token = request.headers.get("x-ui-publish-token") ?? "";
+			if (!token || token !== publishSecret) {
+				return toWorkerResponse(new Response("forbidden", { status: 403 }));
+			}
+			let payload: {
+				id?: string;
+				title?: string;
+				notes?: string;
+				tree?: unknown;
+				data?: Record<string, unknown>;
+				createdAt?: number;
+			};
+			try {
+				payload = (await request.json()) as typeof payload;
+			} catch {
+				return toWorkerResponse(new Response("invalid_json", { status: 400 }));
+			}
+			if (!payload?.tree) {
+				return toWorkerResponse(new Response("missing_tree", { status: 400 }));
+			}
+			const createdAt =
+				typeof payload.createdAt === "number" ? payload.createdAt : Date.now();
+			const id =
+				typeof payload.id === "string" && payload.id.trim()
+					? payload.id.trim()
+					: `ui_${createdAt}_${crypto.randomUUID()}`;
+			const body = JSON.stringify(
+				{
+					id,
+					title: payload.title?.trim() || undefined,
+					notes: payload.notes?.trim() || undefined,
+					tree: payload.tree,
+					data: payload.data,
+					createdAt,
+				},
+				null,
+				2,
+			);
+			await env.omni.put(buildUiKey(id), body, {
+				httpMetadata: { contentType: "application/json; charset=utf-8" },
+			});
+			const signingSecret = resolveUiSigningSecret(env);
+			if (!signingSecret) {
+				return toWorkerResponse(
+					new Response("ui_signing_secret_missing", { status: 500 }),
+				);
+			}
+			const baseUrl = resolveUiPreviewBaseUrl(env);
+			if (!baseUrl) {
+				return toWorkerResponse(
+					new Response("ui_preview_base_missing", { status: 500 }),
+				);
+			}
+			const url = buildUiPreviewUrl({
+				baseUrl,
+				signingSecret,
+				id,
+				ttlMs: resolveUiUrlTtlMs(env),
+			});
+			return toWorkerResponse(
+				new Response(JSON.stringify({ ok: true, id, url }), {
+					status: 200,
+					headers: { "Content-Type": "application/json; charset=utf-8" },
+				}),
+			);
+		}
+
+		if (url.pathname.startsWith("/ui/") && request.method === "GET") {
+			const signingSecret = resolveUiSigningSecret(env);
+			if (!signingSecret) {
+				return toWorkerResponse(new Response("ui_signing_secret_missing", { status: 500 }));
+			}
+			const rawId = url.pathname.slice("/ui/".length);
+			const decodedId = rawId ? decodeURIComponent(rawId) : "";
+			const id = decodedId.replace(/\\.json$/, "");
+			if (!id || id.includes("/")) {
+				return toWorkerResponse(new Response("invalid_id", { status: 400 }));
+			}
+			const expRaw = url.searchParams.get("exp") ?? "";
+			const sig = url.searchParams.get("sig") ?? "";
+			const exp = Number.parseInt(expRaw, 10);
+			if (!exp || !sig) {
+				return toWorkerResponse(new Response("invalid_signature", { status: 400 }));
+			}
+			if (!verifyUiSignature({ signingSecret, id, exp, sig })) {
+				return toWorkerResponse(new Response("signature_mismatch", { status: 403 }));
+			}
+			if (Date.now() > exp) {
+				await env.omni.delete(buildUiKey(id));
+				return toWorkerResponse(new Response("expired", { status: 410 }));
+			}
+			const object = await env.omni.get(buildUiKey(id));
+			if (!object) {
+				return toWorkerResponse(new Response("not_found", { status: 404 }));
+			}
+			const headers = new Headers();
+			object.writeHttpMetadata(headers);
+			headers.set("Cache-Control", "private, max-age=600");
+			return toWorkerResponse(new Response(object.body, { status: 200, headers }));
+		}
+
 		if (url.pathname === "/gateway" && isWebSocketUpgrade(request)) {
 			return handleGatewayWebSocket(request, env);
 		}
@@ -1043,7 +1270,7 @@ export default {
 	},
 };
 
-export { SessionsDO, CronDO, ChannelsDO };
+export { SessionsDO, CronDO, ChannelsDO, TasksDO };
 
 export class GatewayConfigDO implements DurableObject {
 	private state: DurableObjectState;
@@ -1525,6 +1752,7 @@ function buildSystemUpdate(params: {
 	text: string;
 	channelConfig?: Record<string, unknown>;
 	turnDepth?: number;
+	taskId?: string;
 }) {
 	const chatIdNum = Number(params.chatId);
 	if (!Number.isFinite(chatIdNum)) return null;
@@ -1533,6 +1761,7 @@ function buildSystemUpdate(params: {
 		__systemEvent?: boolean;
 		__turnDepth?: number;
 		__channelConfig?: Record<string, unknown>;
+		__taskId?: string;
 	} = {
 		update_id: Date.now(),
 		message: {
@@ -1557,6 +1786,9 @@ function buildSystemUpdate(params: {
 	if (params.channelConfig) {
 		update.__channelConfig = params.channelConfig;
 	}
+	if (params.taskId) {
+		update.__taskId = params.taskId;
+	}
 	return update;
 }
 
@@ -1574,6 +1806,47 @@ async function handleTurnItem(
 		meta?: Record<string, unknown>;
 	},
 ) {
+	if (item.kind === "task") {
+		const taskId =
+			typeof item.meta?.taskId === "string" ? item.meta.taskId : undefined;
+		if (taskId) {
+			const statusResponse = await callTasks(env, "/status", { id: taskId });
+			if (statusResponse.ok) {
+				const payload = (await statusResponse.json()) as {
+					task?: { status?: string };
+				};
+				const status = payload.task?.status;
+				if (status === "canceled" || status === "failed") return;
+			}
+			await callTasks(env, "/start", { id: taskId }).catch(() => undefined);
+		}
+		if (!isNumericChatId(item.chatId)) {
+			await runtime.runLocalChat({
+				text: item.text,
+				chatId: item.chatId,
+				userId: "system",
+				userName: "System",
+				chatType: "private",
+				systemEvent: true,
+				taskId,
+			});
+			return;
+		}
+		const update = buildSystemUpdate({
+			chatId: item.chatId,
+			chatType: item.chatType,
+			text: item.text,
+			channelConfig: item.channelConfig,
+			turnDepth: item.turnDepth,
+			taskId,
+		});
+		if (!update) {
+			throw new Error("invalid_task_update");
+		}
+		await runtime.bot.handleUpdate(update);
+		await touchTelegramSession(env, update);
+		return;
+	}
 	if (item.kind === "announce") {
 		if (isNumericChatId(item.chatId)) {
 			const token = env.BOT_TOKEN?.trim();

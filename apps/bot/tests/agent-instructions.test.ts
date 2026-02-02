@@ -63,4 +63,14 @@ describe("agent instructions prompt modes", () => {
 		expect(instructions).toContain("firecrawl_poll");
 		expect(instructions).toContain("research_export_csv");
 	});
+
+	it("includes ui guidance when ui_publish is available", () => {
+		const instructions = buildAgentInstructions({
+			...base,
+			toolLines: "ui_publish - create UI",
+		});
+		expect(instructions).toContain("ui_publish");
+		expect(instructions).toContain("UI catalog");
+		expect(instructions).toContain("Page");
+	});
 });

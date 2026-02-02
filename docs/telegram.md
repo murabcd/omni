@@ -37,6 +37,19 @@ TOOL_DENYLIST_GROUP=
 TOOL_RATE_LIMITS=web_search:10/60
 ```
 
+## Background tasks
+
+For long-running requests, Omni can create a background task instead of blocking
+the chat. Use:
+
+```
+/task <request>
+/task status <id>
+/task cancel <id>
+```
+
+The bot also routes long requests automatically when `TASKS_ENABLED=1`.
+
 ## Sub-agent defaults (orchestration)
 
 Sub-agents default to the same model as the main agent unless overridden.

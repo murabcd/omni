@@ -11,6 +11,7 @@ Supported commands:
 - `/help` — usage
 - `/tools` — list available tools, conflicts, and policy-suppressed tools
 - `/status` — Yandex Tracker health check + uptime
+- `/task` — background task (/task <request>, /task status <id>, /task cancel <id>)
 - `/research` — guided research mode (collect inputs, then run)
 - `/model` — show current model and fallbacks
 - `/model list` — list available models

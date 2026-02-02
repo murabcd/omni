@@ -19,6 +19,7 @@
 		"@ai-sdk/openai": "3.0.12",
 		"@grammyjs/runner": "^2.0.3",
 		"@grammyjs/transformer-throttler": "^1.2.1",
+		"@json-render/core": "^0.2.0",
 		"@mendable/firecrawl-js": "^4.3.4",
 		"@posthog/agent-toolkit": "^0.2.4",
 		"ai": "^6.0.59",
@@ -28,7 +29,7 @@
 		"grammy": "^1.39.3",
 		"mammoth": "^1.11.0",
 		"markdown-it": "^14.1.0",
-		"zod": "^3.25.76"
+		"zod": "^4.3.6"
 	},
 	"devDependencies": {
 		"@types/node": "^22.19.7",

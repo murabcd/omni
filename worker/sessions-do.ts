@@ -575,7 +575,8 @@ export class SessionsDO implements DurableObject {
 			kindRaw === "hook" ||
 			kindRaw === "followup" ||
 			kindRaw === "announce" ||
-			kindRaw === "subagent"
+			kindRaw === "subagent" ||
+			kindRaw === "task"
 				? kindRaw
 				: "system";
 		const createdAt = typeof params.createdAt === "number" ? params.createdAt : now();

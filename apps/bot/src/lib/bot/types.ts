@@ -28,12 +28,24 @@ export type LogContext = {
 	error?: { message: string; type?: string };
 };
 
+export type QueueTurnPayload = {
+	sessionKey: string;
+	chatId: string;
+	chatType: "private" | "group" | "supergroup" | "channel";
+	text: string;
+	kind?: "system" | "hook" | "followup" | "announce" | "task";
+	channelConfig?: ChannelConfig;
+	turnDepth?: number;
+	meta?: Record<string, unknown>;
+};
+
 export type BotContext = Context & {
 	state: {
 		logContext?: LogContext;
 		channelConfig?: ChannelConfig;
 		systemEvent?: boolean;
 		turnDepth?: number;
+		taskId?: string;
 		workspaceIdOverride?: string;
 		sessionKeyOverride?: string;
 	};
