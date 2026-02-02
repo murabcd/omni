@@ -749,6 +749,12 @@ function resolveTelegramChannel(update: Update) {
 	};
 }
 
+function resolveTelegramShard(update: Update) {
+	const channel = resolveTelegramChannel(update);
+	if (channel?.chatId) return channel.chatId;
+	return SHARD_FALLBACK;
+}
+
 function resolveTelegramThreadId(update: Update) {
 	const payload = (update as Update & Record<string, unknown>) ?? {};
 	const message =
@@ -1259,11 +1265,12 @@ export default {
 			);
 			return toWorkerResponse(new Response("OK", { status: 200 }));
 		}
-		const id = env.UPDATES_DO.idFromName("telegram-updates");
+		const shard = resolveTelegramShard(update);
+		const id = env.UPDATES_DO.idFromName(`telegram-updates:${shard}`);
 		const stub = env.UPDATES_DO.get(id);
 		await stub.fetch("https://do/enqueue", {
 			method: "POST",
-			headers: { "Content-Type": "application/json" },
+			headers: { "Content-Type": "application/json", [SHARD_HEADER]: shard },
 			body: JSON.stringify(update),
 		});
 		return toWorkerResponse(new Response("OK", { status: 200 }));
@@ -1329,10 +1336,14 @@ const TURN_MAX_ATTEMPTS = 3;
 const TURN_RETRY_BASE_MS = 1_000;
 const TURN_RETRY_MAX_MS = 60_000;
 const TURN_PROCESS_BUDGET_MS = 1_200;
+const SHARD_HEADER = "x-omni-shard";
+const SHARD_STORAGE_KEY = "shard";
+const SHARD_FALLBACK = "misc";
 
 export class TelegramUpdatesDO implements DurableObject {
 	private state: DurableObjectState;
 	private env: Env;
+	private shard: string | null = null;
 
 	constructor(state: DurableObjectState, env: Env) {
 		this.state = state;
@@ -1342,12 +1353,17 @@ export class TelegramUpdatesDO implements DurableObject {
 	async fetch(request: WorkerRequest): Promise<WorkerResponse> {
 		const url = new URL(request.url);
 		if (request.method === "POST" && url.pathname === "/enqueue") {
+			await this.ensureShard(request);
 			const update = await request.json();
 			if (!isTelegramUpdate(update)) {
 				return toWorkerResponse(new Response("Bad Request", { status: 400 }));
 			}
 			await this.enqueueUpdate(update);
-			logUpdateHandled("queued", update);
+			const state = await this.loadState();
+			logUpdateHandled("queued", update, {
+				shard: this.shard ?? SHARD_FALLBACK,
+				queue_size: state.queue.length,
+			});
 			this.state.waitUntil(this.kickProcessor());
 			return toWorkerResponse(new Response("OK", { status: 200 }));
 		}
@@ -1385,8 +1401,8 @@ export class TelegramUpdatesDO implements DurableObject {
 							nextAt: nextItem ? nextItem.nextAt : null,
 						}),
 						{
-						status: 200,
-						headers: { "Content-Type": "application/json" },
+							status: 200,
+							headers: { "Content-Type": "application/json" },
 						},
 					),
 				);
@@ -1452,12 +1468,28 @@ export class TelegramUpdatesDO implements DurableObject {
 		await this.state.storage.put("state", state);
 	}
 
+	private async ensureShard(request?: WorkerRequest) {
+		if (!this.shard) {
+			const stored = await this.state.storage.get<string>(SHARD_STORAGE_KEY);
+			if (stored) this.shard = stored;
+		}
+		const headerShard = request?.headers.get(SHARD_HEADER)?.trim();
+		if (headerShard && headerShard !== this.shard) {
+			this.shard = headerShard;
+			await this.state.storage.put(SHARD_STORAGE_KEY, headerShard);
+		}
+		if (!this.shard) {
+			this.shard = SHARD_FALLBACK;
+			await this.state.storage.put(SHARD_STORAGE_KEY, this.shard);
+		}
+	}
+
 	private async enqueueUpdate(update: Update) {
-		const state = await this.loadState();
 		const updateId =
 			typeof update.update_id === "number"
 				? String(update.update_id)
 				: `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+		const state = await this.loadState();
 		if (state.processedIds.includes(updateId)) return;
 		if (state.queue.some((item) => item.id === updateId)) return;
 		state.queue.push({
@@ -1469,16 +1501,23 @@ export class TelegramUpdatesDO implements DurableObject {
 		await this.saveState(state);
 	}
 	private async kickProcessor() {
-		const id =
-			this.env.UPDATES_PROCESSOR_DO.idFromName("telegram-updates-processor");
+		await this.ensureShard();
+		const shard = this.shard ?? SHARD_FALLBACK;
+		const id = this.env.UPDATES_PROCESSOR_DO.idFromName(
+			`telegram-updates-processor:${shard}`,
+		);
 		const stub = this.env.UPDATES_PROCESSOR_DO.get(id);
-		await stub.fetch("https://do/process", { method: "POST" });
+		await stub.fetch("https://do/process", {
+			method: "POST",
+			headers: { [SHARD_HEADER]: shard },
+		});
 	}
 }
 
 function logUpdateHandled(
 	route: "callback_fastpath" | "queued" | "processed",
 	update: unknown,
+	extra?: Record<string, unknown>,
 ) {
 	if (!update || typeof update !== "object") return;
 	const record = update as Record<string, unknown>;
@@ -1497,6 +1536,7 @@ function logUpdateHandled(
 			route,
 			update_id: updateId,
 			update_type: updateType,
+			...(extra ?? {}),
 		}),
 	);
 }
@@ -1505,6 +1545,7 @@ export class TelegramUpdatesProcessorDO implements DurableObject {
 	private state: DurableObjectState;
 	private env: Env;
 	private processing = false;
+	private shard: string | null = null;
 
 	constructor(state: DurableObjectState, env: Env) {
 		this.state = state;
@@ -1514,6 +1555,7 @@ export class TelegramUpdatesProcessorDO implements DurableObject {
 	async fetch(request: WorkerRequest): Promise<WorkerResponse> {
 		const url = new URL(request.url);
 		if (request.method === "POST" && url.pathname === "/process") {
+			await this.ensureShard(request);
 			this.state.waitUntil(this.processQueue());
 			return toWorkerResponse(new Response("OK", { status: 200 }));
 		}
@@ -1521,13 +1563,33 @@ export class TelegramUpdatesProcessorDO implements DurableObject {
 	}
 
 	async alarm(): Promise<void> {
+		await this.ensureShard();
 		await this.processQueue();
+	}
+
+	private async ensureShard(request?: WorkerRequest): Promise<string> {
+		if (!this.shard) {
+			const stored = await this.state.storage.get<string>(SHARD_STORAGE_KEY);
+			if (stored) this.shard = stored;
+		}
+		const headerShard = request?.headers.get(SHARD_HEADER)?.trim();
+		if (headerShard && headerShard !== this.shard) {
+			this.shard = headerShard;
+			await this.state.storage.put(SHARD_STORAGE_KEY, headerShard);
+		}
+		if (!this.shard) {
+			this.shard = SHARD_FALLBACK;
+			await this.state.storage.put(SHARD_STORAGE_KEY, this.shard);
+		}
+		return this.shard;
 	}
 
 	private async dequeue(): Promise<
 		{ ok: true; item: QueueItem } | { ok: false; nextAt: number | null }
 	> {
-		const id = this.env.UPDATES_DO.idFromName("telegram-updates");
+		const id = this.env.UPDATES_DO.idFromName(
+			`telegram-updates:${this.shard ?? SHARD_FALLBACK}`,
+		);
 		const stub = this.env.UPDATES_DO.get(id);
 		const response = await stub.fetch("https://do/dequeue", { method: "POST" });
 		return (await response.json()) as
@@ -1537,7 +1599,9 @@ export class TelegramUpdatesProcessorDO implements DurableObject {
 
 	private async markProcessed(id: string) {
 		const stub = this.env.UPDATES_DO.get(
-			this.env.UPDATES_DO.idFromName("telegram-updates"),
+			this.env.UPDATES_DO.idFromName(
+				`telegram-updates:${this.shard ?? SHARD_FALLBACK}`,
+			),
 		);
 		await stub.fetch("https://do/processed", {
 			method: "POST",
@@ -1548,7 +1612,9 @@ export class TelegramUpdatesProcessorDO implements DurableObject {
 
 	private async requeue(item: QueueItem) {
 		const stub = this.env.UPDATES_DO.get(
-			this.env.UPDATES_DO.idFromName("telegram-updates"),
+			this.env.UPDATES_DO.idFromName(
+				`telegram-updates:${this.shard ?? SHARD_FALLBACK}`,
+			),
 		);
 		await stub.fetch("https://do/requeue", {
 			method: "POST",
@@ -1557,9 +1623,22 @@ export class TelegramUpdatesProcessorDO implements DurableObject {
 		});
 	}
 
-	private async processTurnQueue(runtime: BotRuntime): Promise<void> {
+	private async processTurnQueue(runtime: BotRuntime): Promise<{
+		processed: number;
+		requeued: number;
+		dropped: number;
+		hitBudget: boolean;
+	}> {
 		const startedAt = Date.now();
-		while (Date.now() - startedAt < TURN_PROCESS_BUDGET_MS) {
+		let hitBudget = false;
+		let processed = 0;
+		let requeued = 0;
+		let dropped = 0;
+		while (true) {
+			if (Date.now() - startedAt >= TURN_PROCESS_BUDGET_MS) {
+				hitBudget = true;
+				break;
+			}
 			const response = await dequeueTurn(this.env);
 			if (!response.ok) break;
 			const payload = await response.json();
@@ -1588,10 +1667,12 @@ export class TelegramUpdatesProcessorDO implements DurableObject {
 			try {
 				await handleTurnItem(this.env, runtime, item);
 				await markTurnProcessed(this.env, item.id);
+				processed += 1;
 			} catch (error) {
 				item.attempt = (item.attempt ?? 0) + 1;
 				if (item.attempt >= TURN_MAX_ATTEMPTS) {
 					await markTurnProcessed(this.env, item.id);
+					dropped += 1;
 					continue;
 				}
 				const delay = Math.min(
@@ -1600,24 +1681,43 @@ export class TelegramUpdatesProcessorDO implements DurableObject {
 				);
 				item.nextAt = Date.now() + delay;
 				await requeueTurn(this.env, item as Record<string, unknown>);
+				requeued += 1;
 				await this.state.storage.setAlarm(item.nextAt);
 				break;
 			}
 		}
+		return { processed, requeued, dropped, hitBudget };
 	}
 
 	private async processQueue(): Promise<void> {
 		if (this.processing) return;
 		this.processing = true;
 		const startedAt = Date.now();
+		let hitBudget = false;
+		let processed = 0;
+		let skipped = 0;
+		let requeued = 0;
+		let dropped = 0;
+		let errors = 0;
+		let nextAt: number | null = null;
+		let lastError: string | null = null;
+		let turnProcessed = 0;
+		let turnRequeued = 0;
+		let turnDropped = 0;
+		let turnBudgetHit = false;
 		try {
 			const runtime = await getBot(this.env);
 
-			while (Date.now() - startedAt < PROCESS_BUDGET_MS) {
+			while (true) {
+				if (Date.now() - startedAt >= PROCESS_BUDGET_MS) {
+					hitBudget = true;
+					break;
+				}
 				const dequeued = await this.dequeue();
 				if (!dequeued.ok) {
 					if (dequeued.nextAt) {
 						await this.state.storage.setAlarm(dequeued.nextAt);
+						nextAt = dequeued.nextAt;
 					}
 					break;
 				}
@@ -1627,6 +1727,7 @@ export class TelegramUpdatesProcessorDO implements DurableObject {
 					const channel = await touchTelegramChannel(this.env, item.update);
 					if (!channel.enabled) {
 						await this.markProcessed(item.id);
+						skipped += 1;
 						logBotInvocation("bot_invocation_end", item.update, {
 							route: "processed",
 							stream: false,
@@ -1634,7 +1735,10 @@ export class TelegramUpdatesProcessorDO implements DurableObject {
 							reason: "channel_disabled",
 							elapsed_ms: 0,
 						});
-						logUpdateHandled("processed", item.update);
+						logUpdateHandled("processed", item.update, {
+							shard: this.shard ?? SHARD_FALLBACK,
+							status: "skipped",
+						});
 						continue;
 					}
 					if (channel.config) {
@@ -1650,7 +1754,11 @@ export class TelegramUpdatesProcessorDO implements DurableObject {
 					await runtime.bot.handleUpdate(item.update);
 					await touchTelegramSession(this.env, item.update);
 					await dispatchTelegramHooks(this.env, runtime, item.update);
-					await this.processTurnQueue(runtime);
+					const turnStats = await this.processTurnQueue(runtime);
+					turnProcessed += turnStats.processed;
+					turnRequeued += turnStats.requeued;
+					turnDropped += turnStats.dropped;
+					turnBudgetHit = turnBudgetHit || turnStats.hitBudget;
 					logBotInvocation("bot_invocation_end", item.update, {
 						route: "processed",
 						stream: false,
@@ -1658,8 +1766,14 @@ export class TelegramUpdatesProcessorDO implements DurableObject {
 						elapsed_ms: startedItemAt ? Date.now() - startedItemAt : null,
 					});
 					await this.markProcessed(item.id);
-					logUpdateHandled("processed", item.update);
+					processed += 1;
+					logUpdateHandled("processed", item.update, {
+						shard: this.shard ?? SHARD_FALLBACK,
+						status: "ok",
+					});
 				} catch (error) {
+					errors += 1;
+					lastError = String(error);
 					logBotInvocation("bot_invocation_end", item.update, {
 						route: "processed",
 						stream: false,
@@ -1671,6 +1785,7 @@ export class TelegramUpdatesProcessorDO implements DurableObject {
 					item.attempt += 1;
 					if (item.attempt >= MAX_ATTEMPTS) {
 						await this.markProcessed(item.id);
+						dropped += 1;
 						continue;
 					}
 					const delay = Math.min(
@@ -1679,12 +1794,41 @@ export class TelegramUpdatesProcessorDO implements DurableObject {
 					);
 					item.nextAt = Date.now() + delay;
 					await this.requeue(item);
+					requeued += 1;
 					await this.state.storage.setAlarm(item.nextAt);
 					break;
 				}
 			}
 		} finally {
 			this.processing = false;
+			const durationMs = Date.now() - startedAt;
+			console.log(
+				JSON.stringify({
+					event: "updates_processor_run",
+					shard: this.shard ?? SHARD_FALLBACK,
+					duration_ms: durationMs,
+					processed,
+					skipped,
+					requeued,
+					dropped,
+					errors,
+					next_at: nextAt,
+					hit_budget: hitBudget,
+					last_error: lastError,
+					turns: {
+						processed: turnProcessed,
+						requeued: turnRequeued,
+						dropped: turnDropped,
+						hit_budget: turnBudgetHit,
+					},
+				}),
+			);
+			if (hitBudget) {
+				await this.state.storage.setAlarm(Date.now() + 250);
+			}
+			if (turnBudgetHit) {
+				await this.state.storage.setAlarm(Date.now() + 250);
+			}
 		}
 	}
 }
