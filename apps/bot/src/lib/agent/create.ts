@@ -4,6 +4,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { createGoogleGenerativeAI } from "@ai-sdk/google";
 import { openai } from "@ai-sdk/openai";
+import { setByPath } from "@json-render/core";
 import {
 	createAgentUIStream,
 	createUIMessageStream,
@@ -85,6 +86,7 @@ import {
 } from "../tools/registry.js";
 import { sanitizeToolCallIdsForTranscript } from "../tools/tool-call-id.js";
 import { repairToolUseResultPairing } from "../tools/transcript-repair.js";
+import { omniUiCatalog } from "../ui/catalog.js";
 import type { WorkspaceManager } from "../workspace/manager.js";
 import { isAllowedMemoryPath, resolveMemoryPath } from "../workspace/memory.js";
 import { resolveWorkspaceId } from "../workspace/paths.js";
@@ -111,6 +113,72 @@ const GEMINI_IMAGE_ASPECT_RATIOS = [
 const WIKI_NUMERIC_ID_RE = regex("^\\d+$");
 const WIKI_PATH_LEADING_SLASH_RE = regex("^/+");
 const WIKI_PATH_TRAILING_SLASH_RE = regex("/+$");
+
+type UiJsonPatch = {
+	op: "set" | "add" | "replace" | "remove";
+	path: string;
+	value?: unknown;
+};
+
+function parseUiPatchLine(line: string): UiJsonPatch | null {
+	try {
+		const trimmed = line.trim();
+		if (!trimmed || trimmed.startsWith("//")) return null;
+		return JSON.parse(trimmed) as UiJsonPatch;
+	} catch {
+		return null;
+	}
+}
+
+function applyUiPatch(
+	tree: { root?: string; elements?: Record<string, unknown> },
+	patch: UiJsonPatch,
+) {
+	const next = {
+		...tree,
+		elements: { ...(tree.elements ?? {}) },
+	};
+
+	switch (patch.op) {
+		case "set":
+		case "add":
+		case "replace": {
+			if (patch.path === "/root") {
+				next.root = String(patch.value ?? "");
+				return next;
+			}
+			if (patch.path.startsWith("/elements/")) {
+				const pathParts = patch.path.slice("/elements/".length).split("/");
+				const elementKey = pathParts[0];
+				if (!elementKey) return next;
+				if (pathParts.length === 1) {
+					next.elements[elementKey] = patch.value as unknown;
+				} else {
+					const element = next.elements[elementKey];
+					if (element && typeof element === "object") {
+						const propPath = `/${pathParts.slice(1).join("/")}`;
+						const updated = { ...(element as Record<string, unknown>) };
+						setByPath(updated, propPath, patch.value);
+						next.elements[elementKey] = updated;
+					}
+				}
+			}
+			return next;
+		}
+		case "remove": {
+			if (patch.path.startsWith("/elements/")) {
+				const elementKey = patch.path.slice("/elements/".length).split("/")[0];
+				if (elementKey) {
+					const { [elementKey]: _, ...rest } = next.elements;
+					next.elements = rest;
+				}
+			}
+			return next;
+		}
+		default:
+			return next;
+	}
+}
 
 function resolveImageExtension(mediaType: string): string {
 	switch (mediaType) {
@@ -205,6 +273,11 @@ export type AgentToolsDeps = {
 		filename: string;
 		mimeType: string;
 	}) => Promise<void> | void;
+	uiStore?: TextStore;
+	createUiUrl?: (id: string) => string;
+	uiPublishUrl?: string;
+	uiPublishToken?: string;
+	uiScreenshotEnabled?: boolean;
 	defaultTrackerQueue: string;
 	cronStatusTimezone: string;
 	resolveChatTimezone?: (
@@ -432,8 +505,15 @@ export function createAgentToolsFactory(
 	return async function createAgentTools(options?: CreateAgentToolsOptions) {
 		const registry = createToolRegistry({ logger: deps.toolConflictLogger });
 		const toolMap: ToolSet = {};
+		const withMetaDefaults = (meta: ToolMeta): ToolMeta => ({
+			duration: "short",
+			cost: "low",
+			async_ok: false,
+			needs_confirm: false,
+			...meta,
+		});
 		const registerTool = (meta: ToolMeta, toolDef: ToolSet[string]) => {
-			const res = registry.register(meta);
+			const res = registry.register(withMetaDefaults(meta));
 			if (!res.ok) return;
 			toolMap[meta.name] = toolDef;
 		};
@@ -658,6 +738,9 @@ export function createAgentToolsFactory(
 					description: "Search the web via Firecrawl.",
 					source: "web",
 					origin: "firecrawl",
+					duration: "long",
+					cost: "medium",
+					async_ok: true,
 				},
 				searchTool as unknown as ToolSet[string],
 			);
@@ -667,6 +750,9 @@ export function createAgentToolsFactory(
 					description: "Scrape a single URL via Firecrawl.",
 					source: "web",
 					origin: "firecrawl",
+					duration: "long",
+					cost: "medium",
+					async_ok: true,
 				},
 				scrapeTool as unknown as ToolSet[string],
 			);
@@ -676,6 +762,9 @@ export function createAgentToolsFactory(
 					description: "Discover URLs on a site via Firecrawl.",
 					source: "web",
 					origin: "firecrawl",
+					duration: "long",
+					cost: "medium",
+					async_ok: true,
 				},
 				mapTool as unknown as ToolSet[string],
 			);
@@ -685,6 +774,9 @@ export function createAgentToolsFactory(
 					description: "Crawl multiple pages via Firecrawl.",
 					source: "web",
 					origin: "firecrawl",
+					duration: "long",
+					cost: "high",
+					async_ok: true,
 				},
 				crawlTool as unknown as ToolSet[string],
 			);
@@ -694,6 +786,9 @@ export function createAgentToolsFactory(
 					description: "Scrape multiple URLs via Firecrawl.",
 					source: "web",
 					origin: "firecrawl",
+					duration: "long",
+					cost: "high",
+					async_ok: true,
 				},
 				batchScrapeTool as unknown as ToolSet[string],
 			);
@@ -703,6 +798,9 @@ export function createAgentToolsFactory(
 					description: "Extract structured data via Firecrawl.",
 					source: "web",
 					origin: "firecrawl",
+					duration: "long",
+					cost: "medium",
+					async_ok: true,
 				},
 				extractTool as unknown as ToolSet[string],
 			);
@@ -712,6 +810,9 @@ export function createAgentToolsFactory(
 					description: "Poll Firecrawl async jobs.",
 					source: "web",
 					origin: "firecrawl",
+					duration: "short",
+					cost: "low",
+					async_ok: true,
 				},
 				pollTool as unknown as ToolSet[string],
 			);
@@ -721,6 +822,9 @@ export function createAgentToolsFactory(
 					description: "Check Firecrawl job status.",
 					source: "web",
 					origin: "firecrawl",
+					duration: "short",
+					cost: "low",
+					async_ok: true,
 				},
 				statusTool as unknown as ToolSet[string],
 			);
@@ -730,10 +834,155 @@ export function createAgentToolsFactory(
 					description: "Cancel Firecrawl job.",
 					source: "web",
 					origin: "firecrawl",
+					duration: "short",
+					cost: "low",
+					async_ok: true,
 				},
 				cancelTool as unknown as ToolSet[string],
 			);
 		}
+
+		const uiPayloadSchema = z.object({
+			title: z.string().optional(),
+			notes: z.string().optional(),
+			tree: z.unknown().optional(),
+			patches: z.union([z.string(), z.array(z.string())]).optional(),
+			data: z.record(z.string(), z.unknown()).optional(),
+		});
+
+		registerTool(
+			{
+				name: "ui_publish",
+				description: "Generate and publish a UI preview link.",
+				source: "core",
+				origin: "ui",
+				duration: "long",
+				cost: "medium",
+				async_ok: true,
+			},
+			tool({
+				description: "Generate and publish a UI preview link.",
+				inputSchema: uiPayloadSchema,
+				execute: async ({ title, notes, tree, patches, data }) => {
+					let resolvedTree = tree;
+					if (!resolvedTree && patches) {
+						const lines = Array.isArray(patches)
+							? patches
+							: patches.split(/\\r?\\n/);
+						let currentTree: {
+							root?: string;
+							elements?: Record<string, unknown>;
+						} = { root: "", elements: {} };
+						for (const line of lines) {
+							const patch = parseUiPatchLine(line);
+							if (!patch) continue;
+							currentTree = applyUiPatch(currentTree, patch);
+						}
+						resolvedTree = currentTree;
+					}
+
+					const treeParse = omniUiCatalog.treeSchema.safeParse(resolvedTree);
+					if (!treeParse.success) {
+						return { error: "ui_tree_invalid" };
+					}
+					let id = "";
+					let url = "";
+					const createdAt = Date.now();
+					const payload = {
+						id: "",
+						title: title?.trim() || undefined,
+						notes: notes?.trim() || undefined,
+						tree: treeParse.data,
+						data,
+						createdAt,
+					};
+
+					if (deps.uiStore && deps.createUiUrl) {
+						id = `ui_${createdAt}_${crypto.randomUUID()}`;
+						payload.id = id;
+						await deps.uiStore.putText(
+							`ui/${id}.json`,
+							JSON.stringify(payload, null, 2),
+							{ contentType: "application/json; charset=utf-8" },
+						);
+						url = deps.createUiUrl(id);
+					} else if (deps.uiPublishUrl && deps.uiPublishToken) {
+						const response = await fetch(deps.uiPublishUrl, {
+							method: "POST",
+							headers: {
+								"Content-Type": "application/json",
+								"x-ui-publish-token": deps.uiPublishToken,
+							},
+							body: JSON.stringify(payload),
+						});
+						if (!response.ok) {
+							return { error: "ui_publish_failed" };
+						}
+						const result = (await response.json()) as {
+							ok?: boolean;
+							id?: string;
+							url?: string;
+						};
+						if (!result?.id || !result?.url) {
+							return { error: "ui_publish_failed" };
+						}
+						id = result.id;
+						url = result.url;
+					} else {
+						return { error: "ui_store_unavailable" };
+					}
+
+					const images: Array<{ mediaType: string; url: string }> = [];
+
+					if (
+						deps.browserEnabled &&
+						deps.uiScreenshotEnabled !== false &&
+						url &&
+						browserAllowed(url)
+					) {
+						const screenshotPath = path.join(
+							"/tmp",
+							`omni-ui-${Date.now()}-${Math.random()
+								.toString(36)
+								.slice(2)}.png`,
+						);
+						try {
+							await runAgentBrowser(["open", url]);
+							await runAgentBrowser(["wait", "--load", "networkidle"]);
+							await runAgentBrowser(["screenshot", "--full", screenshotPath]);
+							const buffer = await fs.readFile(screenshotPath);
+							if (deps.imageStore && buffer.byteLength > 0) {
+								const stored = await deps.imageStore.putImage({
+									buffer,
+									mediaType: "image/png",
+									filename: path.basename(screenshotPath),
+								});
+								images.push({
+									mediaType: stored.mediaType,
+									url: stored.url,
+								});
+							}
+							await deps.browserSendFile?.({
+								ctx: options?.ctx,
+								path: screenshotPath,
+							});
+						} catch (error) {
+							deps.logDebug("ui screenshot failed", { error: String(error) });
+						} finally {
+							await fs.unlink(screenshotPath).catch(() => undefined);
+							await runAgentBrowser(["close"]).catch(() => undefined);
+						}
+					}
+
+					return {
+						ok: true,
+						id,
+						url,
+						images,
+					};
+				},
+			}),
+		);
 
 		registerTool(
 			{
@@ -741,6 +990,9 @@ export function createAgentToolsFactory(
 				description: "Send a CSV file to the user.",
 				source: "core",
 				origin: "research",
+				duration: "short",
+				cost: "low",
+				async_ok: true,
 			},
 			tool({
 				description: "Send a CSV file to the user.",
@@ -900,6 +1152,9 @@ export function createAgentToolsFactory(
 					description: "Open a URL in the browser.",
 					source: "browser",
 					origin: "agent-browser",
+					duration: "long",
+					cost: "medium",
+					async_ok: true,
 				},
 				tool({
 					description: "Open a URL in the browser.",
@@ -921,6 +1176,9 @@ export function createAgentToolsFactory(
 					description: "Get accessibility snapshot of the page.",
 					source: "browser",
 					origin: "agent-browser",
+					duration: "long",
+					cost: "medium",
+					async_ok: true,
 				},
 				tool({
 					description: "Get accessibility snapshot of the page.",
@@ -955,6 +1213,9 @@ export function createAgentToolsFactory(
 					description: "Click an element by selector or ref.",
 					source: "browser",
 					origin: "agent-browser",
+					duration: "long",
+					cost: "medium",
+					async_ok: true,
 				},
 				tool({
 					description: "Click an element by selector or ref.",
@@ -973,6 +1234,9 @@ export function createAgentToolsFactory(
 					description: "Fill an input by selector or ref.",
 					source: "browser",
 					origin: "agent-browser",
+					duration: "long",
+					cost: "medium",
+					async_ok: true,
 				},
 				tool({
 					description: "Fill an input by selector or ref.",
@@ -992,6 +1256,9 @@ export function createAgentToolsFactory(
 					description: "Type into an element by selector or ref.",
 					source: "browser",
 					origin: "agent-browser",
+					duration: "long",
+					cost: "medium",
+					async_ok: true,
 				},
 				tool({
 					description: "Type into an element by selector or ref.",
@@ -1011,6 +1278,9 @@ export function createAgentToolsFactory(
 					description: "Press a keyboard key (e.g., Enter).",
 					source: "browser",
 					origin: "agent-browser",
+					duration: "long",
+					cost: "medium",
+					async_ok: true,
 				},
 				tool({
 					description: "Press a keyboard key.",
@@ -1029,6 +1299,9 @@ export function createAgentToolsFactory(
 					description: "Switch to an iframe by selector.",
 					source: "browser",
 					origin: "agent-browser",
+					duration: "long",
+					cost: "medium",
+					async_ok: true,
 				},
 				tool({
 					description: "Switch to an iframe by selector.",
@@ -1047,6 +1320,9 @@ export function createAgentToolsFactory(
 					description: "Get data from the page or element.",
 					source: "browser",
 					origin: "agent-browser",
+					duration: "long",
+					cost: "medium",
+					async_ok: true,
 				},
 				tool({
 					description: "Get data from the page or element.",
@@ -1084,6 +1360,9 @@ export function createAgentToolsFactory(
 					description: "Wait for a selector or a timeout.",
 					source: "browser",
 					origin: "agent-browser",
+					duration: "long",
+					cost: "medium",
+					async_ok: true,
 				},
 				tool({
 					description: "Wait for a selector or a timeout.",
@@ -1102,6 +1381,9 @@ export function createAgentToolsFactory(
 					description: "Capture a screenshot.",
 					source: "browser",
 					origin: "agent-browser",
+					duration: "long",
+					cost: "medium",
+					async_ok: true,
 				},
 				tool({
 					description: "Capture a screenshot.",
@@ -1154,6 +1436,9 @@ export function createAgentToolsFactory(
 					description: "Close the browser session.",
 					source: "browser",
 					origin: "agent-browser",
+					duration: "short",
+					cost: "low",
+					async_ok: true,
 				},
 				tool({
 					description: "Close the browser session.",
@@ -2145,7 +2430,7 @@ export function createAgentToolsFactory(
 							.describe("page, grid, cloud_page, wysiwyg, template"),
 						gridFormat: z.string().optional().describe("Grid format"),
 						cloudPage: z
-							.record(z.any())
+							.record(z.string(), z.any())
 							.optional()
 							.describe("Cloud page payload"),
 						fields: z
@@ -2200,7 +2485,10 @@ export function createAgentToolsFactory(
 						id: z.number().describe("Page id"),
 						title: z.string().optional().describe("New title"),
 						content: z.string().optional().describe("New content"),
-						redirect: z.record(z.any()).optional().describe("Redirect payload"),
+						redirect: z
+							.record(z.string(), z.any())
+							.optional()
+							.describe("Redirect payload"),
 						allowMerge: z.boolean().optional().describe("Allow merging edits"),
 						fields: z
 							.string()
@@ -2252,15 +2540,15 @@ export function createAgentToolsFactory(
 						id: z.number().describe("Page id"),
 						content: z.string().describe("Content to append"),
 						body: z
-							.record(z.any())
+							.record(z.string(), z.any())
 							.optional()
 							.describe("Body location payload"),
 						anchor: z
-							.record(z.any())
+							.record(z.string(), z.any())
 							.optional()
 							.describe("Anchor placement payload"),
 						section: z
-							.record(z.any())
+							.record(z.string(), z.any())
 							.optional()
 							.describe("Section placement payload"),
 						fields: z

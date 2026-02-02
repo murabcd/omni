@@ -1,4 +1,5 @@
 import type { CandidateIssue } from "../context/chat-state-types.js";
+import { omniUiCatalogPrompt } from "../ui/catalog.js";
 import { buildSystemPrompt } from "./system-prompt.js";
 
 export type AgentInstructionOptions = {
@@ -170,6 +171,53 @@ export function buildAgentInstructions(
 		toolSections.push(
 			"- Use browser tools (`browser_open`, `browser_snapshot`, `browser_click`, `browser_get`, `browser_screenshot`) for website checks, UI validation, and screenshots.",
 			"- Do not claim that HTML screenshots are unavailable; use `browser_screenshot` instead.",
+		);
+	}
+
+	if (options.toolLines.includes("ui_publish")) {
+		toolSections.push(
+			"- For UI mockups or interface requests, call `ui_publish` with a JSON tree and optional data.",
+			"- Build any UI using the available catalog components (e.g., `Card`, `Grid`, `Stack`, `Metric`, `Chart`, `Table`, `List`, `Button`, `Select`, `DatePicker`, `Heading`, `Text`, `Badge`, `Alert`, `Divider`, `Empty`, `TextField`, `Textarea`, `Checkbox`, `Switch`, `Tooltip`, `Collapsible`, `Dialog`, `AlertDialog`, `Sheet`, `Tabs`, `TabPanel`).",
+			"- The UI tree MUST be a flat UITree with `root` and `elements` (no nested children objects).",
+			"- Each element must be `{ key, type, props, children? }` and children is an array of element keys.",
+			"- `visible` is a top-level element field, not inside props.",
+			"- Use only the props listed below; do not invent props.",
+			"UI tree format:",
+			'{\n  "root": "root-key",\n  "elements": {\n    "root-key": {\n      "key": "root-key",\n      "type": "Card",\n      "props": { ... },\n      "children": ["child-1", "child-2"]\n    }\n  }\n}',
+			"JSONL patch format (optional, for streaming):",
+			'- Each line is a patch: {"op":"set|add|replace|remove","path":"/root|/elements/<key>|/elements/<key>/props/...","value":...}',
+			'- Set root: {"op":"set","path":"/root","value":"root-key"}',
+			'- Add element: {"op":"add","path":"/elements/<key>","value":{...element...}}',
+			"- If using JSONL patches, pass them to `ui_publish` as `patches` (string with newlines); `tree` is optional.",
+			"Component props:",
+			'- Card: { title: string|null, description: string|null, padding: "sm"|"md"|"lg"|null }, hasChildren',
+			'- Grid: { columns: number(1-4)|null, gap: "sm"|"md"|"lg"|null }, hasChildren',
+			'- Stack: { direction: "horizontal"|"vertical"|null, gap: "sm"|"md"|"lg"|null, align: "start"|"center"|"end"|"stretch"|null }, hasChildren',
+			'- Metric: { label: string, valuePath: string, format: "number"|"currency"|"percent"|null, trend: "up"|"down"|"neutral"|null, trendValue: string|null }',
+			'- Chart: { type: "bar"|"line"|"pie"|"area", dataPath: string, title: string|null, height: number|null }',
+			'- Table: { dataPath: string, columns: [{ key: string, label: string, format: "text"|"currency"|"date"|"badge"|null }] }',
+			"- List: { dataPath: string, emptyMessage: string|null }, hasChildren",
+			'- Button: { label: string, variant: "primary"|"secondary"|"danger"|"ghost"|null, size: "sm"|"md"|"lg"|null, action: string, disabled: boolean|null }',
+			"- Select: { label: string|null, bindPath: string, options: [{ value: string, label: string }], placeholder: string|null }",
+			"- DatePicker: { label: string|null, bindPath: string, placeholder: string|null }",
+			'- Heading: { text: string, level: "h1"|"h2"|"h3"|"h4"|null }',
+			'- Text: { content: string, variant: "body"|"caption"|"label"|null, color: "default"|"muted"|"success"|"warning"|"danger"|null }',
+			'- Badge: { text: string, variant: "default"|"success"|"warning"|"danger"|"info"|null }',
+			'- Alert: { type: "info"|"success"|"warning"|"error", title: string, message: string|null, dismissible: boolean|null }',
+			"- Divider: { label: string|null }",
+			"- Empty: { title: string, description: string|null, action: string|null, actionLabel: string|null }",
+			'- TextField: { label: string, valuePath: string, placeholder: string|null, type: string|null, checks: [{ fn: string, message: string }]|null, validateOn: "change"|"blur"|"submit"|null }',
+			"- Textarea: { label: string|null, valuePath: string, placeholder: string|null, rows: number|null }",
+			"- Checkbox: { label: string|null, checked: boolean|null, bindPath: string|null }",
+			"- Switch: { label: string|null, checked: boolean|null, bindPath: string|null }",
+			'- Tooltip: { text: string, side: "top"|"right"|"bottom"|"left"|null }, hasChildren',
+			"- Collapsible: { triggerLabel: string, defaultOpen: boolean|null }, hasChildren",
+			"- Dialog: { triggerLabel: string, title: string, description: string|null }, hasChildren",
+			"- AlertDialog: { triggerLabel: string, title: string, description: string|null, actionLabel: string|null, cancelLabel: string|null, action: string|null }, hasChildren",
+			'- Sheet: { triggerLabel: string, title: string|null, description: string|null, side: "top"|"right"|"bottom"|"left"|null }, hasChildren',
+			'- Tabs: { defaultValue: string|null, value: string|null, orientation: "horizontal"|"vertical"|null }, hasChildren',
+			"- TabPanel: { value: string, label: string }, hasChildren",
+			`UI catalog:\\n${omniUiCatalogPrompt}`,
 		);
 	}
 
