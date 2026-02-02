@@ -71,6 +71,6 @@ describe("agent instructions prompt modes", () => {
 		});
 		expect(instructions).toContain("ui_publish");
 		expect(instructions).toContain("UI catalog");
-		expect(instructions).toContain("Page");
+		expect(instructions).toContain("Card");
 	});
 });
