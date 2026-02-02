@@ -1871,6 +1871,26 @@ export async function createBot(options: CreateBotOptions) {
 		stream: ReadableStream<UIMessageChunk>;
 	};
 
+	const isTelegramMessageNotModified = (error: unknown) => {
+		if (!error || typeof error !== "object") return false;
+		const needle = "message is not modified";
+		if (
+			"message" in error &&
+			typeof error.message === "string" &&
+			error.message.includes(needle)
+		) {
+			return true;
+		}
+		if (
+			"description" in error &&
+			typeof error.description === "string" &&
+			error.description.includes(needle)
+		) {
+			return true;
+		}
+		return false;
+	};
+
 	async function streamTelegramReply(params: {
 		ctx: BotContext;
 		replyOptions?: Record<string, unknown>;
@@ -1922,8 +1942,12 @@ export async function createBot(options: CreateBotOptions) {
 			try {
 				await ctx.api.editMessageText(chatId, messageId, nextText);
 				lastSentText = nextText;
-			} catch {
-				editStopped = true;
+			} catch (error) {
+				if (isTelegramMessageNotModified(error)) {
+					lastSentText = nextText;
+				} else {
+					editStopped = true;
+				}
 			} finally {
 				editInFlight = false;
 				if (!editStopped && pendingText && pendingText !== lastSentText) {
@@ -1969,14 +1993,30 @@ export async function createBot(options: CreateBotOptions) {
 
 		const trimmed = fullText.trim();
 		if (!trimmed) {
-			await ctx.api.editMessageText(chatId, messageId, "Ошибка: пустой ответ.");
+			try {
+				await ctx.api.editMessageText(
+					chatId,
+					messageId,
+					"Ошибка: пустой ответ.",
+				);
+			} catch (error) {
+				if (!isTelegramMessageNotModified(error)) {
+					throw error;
+				}
+			}
 			return { text: "", reply: "", sources: [] };
 		}
 
 		const reply = appendSources(trimmed, sources);
 		const chunks = markdownToTelegramChunks(reply, limit);
 		if (chunks.length === 0) {
-			await ctx.api.editMessageText(chatId, messageId, reply);
+			try {
+				await ctx.api.editMessageText(chatId, messageId, reply);
+			} catch (error) {
+				if (!isTelegramMessageNotModified(error)) {
+					throw error;
+				}
+			}
 			return { text: trimmed, reply, sources };
 		}
 		const first = chunks[0];
@@ -1984,8 +2024,16 @@ export async function createBot(options: CreateBotOptions) {
 			await ctx.api.editMessageText(chatId, messageId, first.html, {
 				parse_mode: "HTML",
 			});
-		} catch {
-			await ctx.api.editMessageText(chatId, messageId, first.text);
+		} catch (error) {
+			if (!isTelegramMessageNotModified(error)) {
+				try {
+					await ctx.api.editMessageText(chatId, messageId, first.text);
+				} catch (fallbackError) {
+					if (!isTelegramMessageNotModified(fallbackError)) {
+						throw fallbackError;
+					}
+				}
+			}
 		}
 		if (chunks.length > 1) {
 			for (const chunk of chunks.slice(1)) {

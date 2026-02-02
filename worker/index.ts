@@ -515,6 +515,25 @@ async function markTurnProcessed(env: Env, id: string) {
 	return callSessions(env, "/turns/processed", { id });
 }
 
+async function clearFollowupTurns(env: Env, sessionKey: string) {
+	return callSessions(env, "/turns/clear", {
+		sessionKey,
+		kinds: ["followup"],
+	});
+}
+
+async function getRunStatus(env: Env, sessionKey: string) {
+	return callSessions(env, "/run/status", { key: sessionKey });
+}
+
+async function markRunStart(env: Env, sessionKey: string) {
+	return callSessions(env, "/run/start", { key: sessionKey });
+}
+
+async function markRunEnd(env: Env, sessionKey: string) {
+	return callSessions(env, "/run/end", { key: sessionKey });
+}
+
 async function callCron(
 	env: Env,
 	path: string,
@@ -1265,6 +1284,48 @@ export default {
 			);
 			return toWorkerResponse(new Response("OK", { status: 200 }));
 		}
+		const intakeInfo = extractTelegramMessage(update);
+		const intakeUpdateId =
+			typeof (update as { update_id?: unknown }).update_id === "number"
+				? (update as { update_id: number }).update_id
+				: null;
+		let runActive = false;
+		let clearedFollowups = 0;
+		if (intakeInfo.chatId) {
+			const sessionKey = buildTelegramSessionKey(
+				intakeInfo.chatId,
+				intakeInfo.chatType,
+			);
+			const statusResponse = await getRunStatus(effectiveEnv, sessionKey);
+			if (statusResponse.ok) {
+				const status = (await statusResponse.json()) as { active?: boolean };
+				runActive = status.active === true;
+				if (runActive) {
+					const clearResponse = await clearFollowupTurns(
+						effectiveEnv,
+						sessionKey,
+					);
+					if (clearResponse.ok) {
+						const cleared = (await clearResponse.json()) as {
+							cleared?: number;
+						};
+						clearedFollowups =
+							typeof cleared.cleared === "number" ? cleared.cleared : 0;
+					}
+				}
+			}
+			console.log(
+				JSON.stringify({
+					event: "telegram_intake",
+					update_id: intakeUpdateId,
+					chat_id: intakeInfo.chatId,
+					chat_type: intakeInfo.chatType,
+					session_key: sessionKey,
+					run_active: runActive,
+					cleared_followups: clearedFollowups,
+				}),
+			);
+		}
 		const shard = resolveTelegramShard(update);
 		const id = env.UPDATES_DO.idFromName(`telegram-updates:${shard}`);
 		const stub = env.UPDATES_DO.get(id);
@@ -1723,80 +1784,104 @@ export class TelegramUpdatesProcessorDO implements DurableObject {
 				}
 				const item = dequeued.item;
 				let startedItemAt: number | null = null;
+				const messageInfo = extractTelegramMessage(item.update);
+				const sessionKey = messageInfo.chatId
+					? buildTelegramSessionKey(
+							messageInfo.chatId,
+							messageInfo.chatType,
+						)
+					: null;
+				if (sessionKey) {
+					try {
+						await markRunStart(this.env, sessionKey);
+					} catch {
+						// Ignore run start failures to avoid blocking updates.
+					}
+				}
 				try {
-					const channel = await touchTelegramChannel(this.env, item.update);
-					if (!channel.enabled) {
-						await this.markProcessed(item.id);
-						skipped += 1;
+					try {
+						const channel = await touchTelegramChannel(this.env, item.update);
+						if (!channel.enabled) {
+							await this.markProcessed(item.id);
+							skipped += 1;
+							logBotInvocation("bot_invocation_end", item.update, {
+								route: "processed",
+								stream: false,
+								status: "skipped",
+								reason: "channel_disabled",
+								elapsed_ms: 0,
+							});
+							logUpdateHandled("processed", item.update, {
+								shard: this.shard ?? SHARD_FALLBACK,
+								status: "skipped",
+							});
+							continue;
+						}
+						if (channel.config) {
+							(
+								item.update as Update & { __channelConfig?: unknown }
+							).__channelConfig = channel.config;
+						}
+						startedItemAt = Date.now();
+						logBotInvocation("bot_invocation_start", item.update, {
+							route: "processed",
+							stream: false,
+						});
+						await runtime.bot.handleUpdate(item.update);
+						await touchTelegramSession(this.env, item.update);
+						await dispatchTelegramHooks(this.env, runtime, item.update);
+						const turnStats = await this.processTurnQueue(runtime);
+						turnProcessed += turnStats.processed;
+						turnRequeued += turnStats.requeued;
+						turnDropped += turnStats.dropped;
+						turnBudgetHit = turnBudgetHit || turnStats.hitBudget;
 						logBotInvocation("bot_invocation_end", item.update, {
 							route: "processed",
 							stream: false,
-							status: "skipped",
-							reason: "channel_disabled",
-							elapsed_ms: 0,
+							status: "ok",
+							elapsed_ms: startedItemAt ? Date.now() - startedItemAt : null,
 						});
+						await this.markProcessed(item.id);
+						processed += 1;
 						logUpdateHandled("processed", item.update, {
 							shard: this.shard ?? SHARD_FALLBACK,
-							status: "skipped",
+							status: "ok",
 						});
-						continue;
+					} catch (error) {
+						errors += 1;
+						lastError = String(error);
+						logBotInvocation("bot_invocation_end", item.update, {
+							route: "processed",
+							stream: false,
+							status: "error",
+							error: String(error),
+							elapsed_ms: startedItemAt ? Date.now() - startedItemAt : null,
+						});
+						console.error("telegram_update_error", error);
+						item.attempt += 1;
+						if (item.attempt >= MAX_ATTEMPTS) {
+							await this.markProcessed(item.id);
+							dropped += 1;
+							continue;
+						}
+						const delay = Math.min(
+							RETRY_BASE_MS * 2 ** (item.attempt - 1),
+							RETRY_MAX_MS,
+						);
+						item.nextAt = Date.now() + delay;
+						await this.requeue(item);
+						requeued += 1;
+						await this.state.storage.setAlarm(item.nextAt);
+						break;
 					}
-					if (channel.config) {
-						(
-							item.update as Update & { __channelConfig?: unknown }
-						).__channelConfig = channel.config;
+				} finally {
+					if (sessionKey) {
+						try {
+							await markRunEnd(this.env, sessionKey);
+						} catch {
+							// Ignore run end failures to avoid blocking updates.
+						}
 					}
-					startedItemAt = Date.now();
-					logBotInvocation("bot_invocation_start", item.update, {
-						route: "processed",
-						stream: false,
-					});
-					await runtime.bot.handleUpdate(item.update);
-					await touchTelegramSession(this.env, item.update);
-					await dispatchTelegramHooks(this.env, runtime, item.update);
-					const turnStats = await this.processTurnQueue(runtime);
-					turnProcessed += turnStats.processed;
-					turnRequeued += turnStats.requeued;
-					turnDropped += turnStats.dropped;
-					turnBudgetHit = turnBudgetHit || turnStats.hitBudget;
-					logBotInvocation("bot_invocation_end", item.update, {
-						route: "processed",
-						stream: false,
-						status: "ok",
-						elapsed_ms: startedItemAt ? Date.now() - startedItemAt : null,
-					});
-					await this.markProcessed(item.id);
-					processed += 1;
-					logUpdateHandled("processed", item.update, {
-						shard: this.shard ?? SHARD_FALLBACK,
-						status: "ok",
-					});
-				} catch (error) {
-					errors += 1;
-					lastError = String(error);
-					logBotInvocation("bot_invocation_end", item.update, {
-						route: "processed",
-						stream: false,
-						status: "error",
-						error: String(error),
-						elapsed_ms: startedItemAt ? Date.now() - startedItemAt : null,
-					});
-					console.error("telegram_update_error", error);
-					item.attempt += 1;
-					if (item.attempt >= MAX_ATTEMPTS) {
-						await this.markProcessed(item.id);
-						dropped += 1;
-						continue;
-					}
-					const delay = Math.min(
-						RETRY_BASE_MS * 2 ** (item.attempt - 1),
-						RETRY_MAX_MS,
-					);
-					item.nextAt = Date.now() + delay;
-					await this.requeue(item);
-					requeued += 1;
-					await this.state.storage.setAlarm(item.nextAt);
-					break;
 				}
 			}
 		} finally {

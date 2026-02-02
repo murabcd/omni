@@ -39,6 +39,9 @@ export type SessionEntry = {
 	model?: string;
 	modelProvider?: string;
 	contextTokens?: number;
+	runActive?: boolean;
+	runActiveAt?: number;
+	runEndedAt?: number;
 };
 
 export type SessionsListResult = {
@@ -140,6 +143,14 @@ export class SessionsDO implements DurableObject {
 				return this.markTurnProcessed(body as Record<string, unknown>);
 			case "/turns/list":
 				return this.listTurns(body as Record<string, unknown>);
+			case "/turns/clear":
+				return this.clearTurns(body as Record<string, unknown>);
+			case "/run/start":
+				return this.runStart(body as Record<string, unknown>);
+			case "/run/end":
+				return this.runEnd(body as Record<string, unknown>);
+			case "/run/status":
+				return this.runStatus(body as Record<string, unknown>);
 			case "/chat-state/get":
 				return this.getChatState(body as Record<string, unknown>);
 			case "/chat-state/set":
@@ -698,6 +709,29 @@ export class SessionsDO implements DurableObject {
 		return Response.json({ ok: true });
 	}
 
+	private async clearTurns(params: Record<string, unknown>) {
+		const sessionKey = String(params.sessionKey ?? "").trim();
+		if (!sessionKey) return new Response("sessionKey required", { status: 400 });
+		const kinds = Array.isArray(params.kinds)
+			? (params.kinds as unknown[]).filter((value): value is string =>
+					typeof value === "string",
+				)
+			: [];
+		const kindSet = new Set(kinds.map((value) => value.trim()).filter(Boolean));
+		const state = await this.load();
+		const before = state.turnQueue.length;
+		state.turnQueue = state.turnQueue.filter((item) => {
+			if (item.sessionKey !== sessionKey) return true;
+			if (kindSet.size === 0) return false;
+			return !kindSet.has(item.kind);
+		});
+		const cleared = before - state.turnQueue.length;
+		if (cleared > 0) {
+			await this.save(state);
+		}
+		return Response.json({ ok: true, cleared });
+	}
+
 	private async listTurns(params: Record<string, unknown>) {
 		const state = await this.load();
 		const limit = Number.parseInt(String(params.limit ?? ""), 10);
@@ -709,6 +743,57 @@ export class SessionsDO implements DurableObject {
 			ok: true,
 			count: state.turnQueue.length,
 			items,
+		});
+	}
+
+	private async runStart(params: Record<string, unknown>) {
+		const key = String(params.key ?? "").trim();
+		if (!key) return new Response("key required", { status: 400 });
+		const state = await this.load();
+		const entry = state.sessions[key] ?? {
+			key,
+			kind: "unknown",
+			updatedAt: now(),
+		};
+		state.sessions[key] = {
+			...entry,
+			runActive: true,
+			runActiveAt: now(),
+			runEndedAt: entry.runEndedAt,
+			updatedAt: now(),
+		};
+		await this.save(state);
+		return Response.json({ ok: true, key, active: true });
+	}
+
+	private async runEnd(params: Record<string, unknown>) {
+		const key = String(params.key ?? "").trim();
+		if (!key) return new Response("key required", { status: 400 });
+		const state = await this.load();
+		const entry = state.sessions[key];
+		if (!entry) return new Response("not_found", { status: 404 });
+		state.sessions[key] = {
+			...entry,
+			runActive: false,
+			runEndedAt: now(),
+			updatedAt: now(),
+		};
+		await this.save(state);
+		return Response.json({ ok: true, key, active: false });
+	}
+
+	private async runStatus(params: Record<string, unknown>) {
+		const key = String(params.key ?? "").trim();
+		if (!key) return new Response("key required", { status: 400 });
+		const state = await this.load();
+		const entry = state.sessions[key];
+		if (!entry) return new Response("not_found", { status: 404 });
+		return Response.json({
+			ok: true,
+			key,
+			active: entry.runActive === true,
+			runActiveAt: entry.runActiveAt ?? null,
+			runEndedAt: entry.runEndedAt ?? null,
 		});
 	}
 }
