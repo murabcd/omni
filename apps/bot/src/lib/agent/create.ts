@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -901,7 +902,7 @@ export function createAgentToolsFactory(
 					};
 
 					if (deps.uiStore && deps.createUiUrl) {
-						id = `ui_${createdAt}_${crypto.randomUUID()}`;
+						id = `ui_${createdAt}_${randomUUID()}`;
 						payload.id = id;
 						await deps.uiStore.putText(
 							`ui/${id}.json`,
@@ -3793,7 +3794,7 @@ export function buildUserUIMessage(
 		parts.push({ type: "text", text: "" });
 	}
 	return {
-		id: crypto.randomUUID(),
+		id: randomUUID(),
 		role: "user",
 		parts,
 	};

@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { UIMessageChunk } from "ai";
 import { regex } from "arkregex";
 import { markdownToTelegramHtml } from "../telegram/format.js";
@@ -201,7 +202,7 @@ export function createTelegramHelpers(options: TelegramHelpersOptions) {
 	}
 
 	function createTextStream(text: string): ReadableStream<UIMessageChunk> {
-		const messageId = crypto.randomUUID();
+		const messageId = randomUUID();
 		return new ReadableStream<UIMessageChunk>({
 			start(controller) {
 				controller.enqueue({ type: "start", messageId });

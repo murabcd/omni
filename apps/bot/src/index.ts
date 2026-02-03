@@ -24,8 +24,7 @@ const WORKER_STORAGE_TIMEOUT_MS = Number.parseInt(
 	process.env.WORKER_STORAGE_TIMEOUT_MS ?? "20000",
 	10,
 );
-const WORKER_MEDIA_URL =
-	process.env.WORKER_MEDIA_URL ?? WORKER_STORAGE_URL;
+const WORKER_MEDIA_URL = process.env.WORKER_MEDIA_URL ?? WORKER_STORAGE_URL;
 const WORKER_MEDIA_TIMEOUT_MS = Number.parseInt(
 	process.env.WORKER_MEDIA_TIMEOUT_MS ?? "20000",
 	10,
