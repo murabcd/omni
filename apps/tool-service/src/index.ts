@@ -1,23 +1,23 @@
 import "dotenv/config";
 import http from "node:http";
-import { createAgentToolsFactory } from "../bot/src/lib/agent/create.js";
-import type { BotContext } from "../bot/src/lib/bot/types.js";
-import { createFigmaClient } from "../bot/src/lib/clients/figma.js";
-import { createJiraClient } from "../bot/src/lib/clients/jira.js";
-import { createTrackerClient } from "../bot/src/lib/clients/tracker.js";
-import { createWikiClient } from "../bot/src/lib/clients/wiki.js";
-import { buildWorkspaceDefaults } from "../bot/src/lib/workspace/defaults.js";
-import { createWorkspaceManager } from "../bot/src/lib/workspace/manager.js";
-import { createLogger } from "../bot/src/lib/logger.js";
+import { createAgentToolsFactory } from "../../bot/src/lib/agent/create.js";
+import type { BotContext } from "../../bot/src/lib/bot/types.js";
+import { createFigmaClient } from "../../bot/src/lib/clients/figma.js";
+import { createJiraClient } from "../../bot/src/lib/clients/jira.js";
+import { createTrackerClient } from "../../bot/src/lib/clients/tracker.js";
+import { createWikiClient } from "../../bot/src/lib/clients/wiki.js";
+import { buildWorkspaceDefaults } from "../../bot/src/lib/workspace/defaults.js";
+import { createWorkspaceManager } from "../../bot/src/lib/workspace/manager.js";
+import { createLogger } from "../../bot/src/lib/logger.js";
 import { createWorkerTextStore } from "./worker-text-store.js";
 import { createWorkerImageStore } from "./worker-image-store.js";
-import { OFFLOADED_TOOL_NAMES } from "../bot/src/lib/tools/offloaded.js";
-import type { ApprovalStore } from "../bot/src/lib/tools/approvals.js";
-import type { ToolPolicy } from "../bot/src/lib/tools/policy.js";
-import type { SenderToolAccess } from "../bot/src/lib/tools/access.js";
+import { OFFLOADED_TOOL_NAMES } from "../../bot/src/lib/tools/offloaded.js";
+import type { ApprovalStore } from "../../bot/src/lib/tools/approvals.js";
+import type { ToolPolicy } from "../../bot/src/lib/tools/policy.js";
+import type { SenderToolAccess } from "../../bot/src/lib/tools/access.js";
 import { PostHogAgentToolkit } from "@posthog/agent-toolkit/integrations/ai-sdk";
-import { filterPosthogTools } from "../bot/src/lib/posthog-tools.js";
-import type { JiraClient } from "../bot/src/lib/clients/jira.js";
+import { filterPosthogTools } from "../../bot/src/lib/posthog-tools.js";
+import type { JiraClient } from "../../bot/src/lib/clients/jira.js";
 import type { ToolSet } from "ai";
 
 const PORT = Number.parseInt(process.env.TOOL_SERVICE_PORT ?? "8080", 10);
@@ -126,6 +126,8 @@ const toolPolicy: ToolPolicy = {
 };
 
 const senderToolAccess: SenderToolAccess = {
+	allowUserIds: new Set(),
+	denyUserIds: new Set(),
 	allowUserTools: new Map(),
 	denyUserTools: new Map(),
 	allowChatTools: new Map(),
@@ -202,19 +204,17 @@ const trackerClient = createTrackerClient({
 
 const wikiClient = createWikiClient({
 	token: WIKI_TOKEN,
+	apiBaseUrl: "https://api.wiki.yandex.net",
 	cloudOrgId: WIKI_CLOUD_ORG_ID,
-	logger,
 	logDebug: (event: string, payload?: Record<string, unknown>) =>
-		DEBUG_LOGS &&
-			logger.info({ event, ...(payload ?? {}) }),
+		DEBUG_LOGS && logger.info({ event, ...(payload ?? {}) }),
 });
 
 const figmaClient = createFigmaClient({
 	token: FIGMA_TOKEN,
-	logger,
+	apiBaseUrl: "https://api.figma.com",
 	logDebug: (event: string, payload?: Record<string, unknown>) =>
-		DEBUG_LOGS &&
-			logger.info({ event, ...(payload ?? {}) }),
+		DEBUG_LOGS && logger.info({ event, ...(payload ?? {}) }),
 });
 
 const jiraClient =
@@ -339,7 +339,10 @@ async function handleToolCall(body: ToolRequest): Promise<unknown> {
 	if (!toolDef?.execute) {
 		return { error: "tool_not_found" };
 	}
-	return await toolDef.execute(body.input ?? {});
+	return await toolDef.execute(body.input ?? {}, {
+		toolCallId: body.context?.requestId ?? "tool-service",
+		messages: [],
+	});
 }
 
 const server = http.createServer(async (req, res) => {
