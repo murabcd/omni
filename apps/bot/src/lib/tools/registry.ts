@@ -8,6 +8,7 @@ export type ToolSource =
 	| "wiki"
 	| "figma"
 	| "posthog"
+	| "diagram"
 	| "runtime-skill"
 	| "command"
 	| "plugin"
