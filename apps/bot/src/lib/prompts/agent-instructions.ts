@@ -169,7 +169,9 @@ export function buildAgentInstructions(
 
 	if (options.toolLines.includes("browser_open")) {
 		toolSections.push(
-			"- Use browser tools (`browser_open`, `browser_snapshot`, `browser_click`, `browser_get`, `browser_screenshot`) for website checks, UI validation, and screenshots.",
+			"- Use browser tools (`browser_open`, `browser_snapshot`, `browser_click`, `browser_get`, `browser_screenshot`, `browser_state_save`, `browser_state_load`) for website checks, UI validation, and screenshots.",
+			"- If `browser_open` returns `authRequired: true`, tell the user login is required and provide the `authUrl` so they can authenticate.",
+			"- For authenticated sites, login once, then call `browser_state_save` and reuse it with `browser_state_load` to persist sessions.",
 			"- Do not claim that HTML screenshots are unavailable; use `browser_screenshot` instead.",
 		);
 	}

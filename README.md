@@ -19,7 +19,7 @@
 
 - [GrammY](https://grammy.dev)
   - Telegram bot runtime with middleware, commands, and context helpers
-  - Webhook adapter used for Cloudflare Workers deployments
+  - Long-polling runtime for droplet deployments
 - [AI SDK](https://sdk.vercel.ai/docs)
   - Unified API for generating text, structured objects, and tool calls with LLMs
   - OpenAI is a primary LLM provider for chat responses
@@ -27,8 +27,8 @@
   - Generate UI trees from chat and publish preview links
   - See [`docs/tools/ui.md`](docs/tools/ui.md) for the `ui_publish` tool format
 - [Cloudflare Workers](https://developers.cloudflare.com/workers/)
-  - Serverless webhook hosting with global edge execution
-  - Durable Objects for reliable update processing with retries
+  - Optional: storage/media endpoints
+  - Optional: admin gateway + UI publish
 - [Cloudflare R2](https://developers.cloudflare.com/r2/)
 	- Stores generated images for admin chat + Telegram
 	- Serves public image URLs for outbound messages
@@ -75,7 +75,30 @@ Integration with REST API connectors via [AI SDK](https://sdk.vercel.ai/docs) fo
 
 ## Deploy your own
 
-You can deploy your own version of Omni to Cloudflare Workers:
+Recommended production setup uses a droplet (long‑polling) + optional Cloudflare Worker
+for storage/media/admin gateway.
+
+### Droplet (recommended)
+
+1) Configure `/etc/omni/bot.env` from `apps/bot/.env.example`
+
+2) Install the systemd unit:
+
+```
+sudo cp docs/deploy/bot.service /etc/systemd/system/omni-bot.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now omni-bot
+```
+
+3) Disable Telegram webhook (long‑polling):
+
+```
+https://api.telegram.org/bot<YOUR_TOKEN>/deleteWebhook
+```
+
+### Cloudflare Worker (optional)
+
+Use this if you want R2-backed storage/media and the admin gateway.
 
 1) Login
 
@@ -104,11 +127,7 @@ npx wrangler secret put IMAGE_SIGNING_SECRET --config worker/wrangler.toml
 npx wrangler deploy --config worker/wrangler.toml
 ```
 
-5) Set Telegram webhook
-
-```
-https://api.telegram.org/bot<YOUR_TOKEN>/setWebhook?url=https://<your-worker>.workers.dev/telegram
-```
+5) Done.
 
 ## Customization
 

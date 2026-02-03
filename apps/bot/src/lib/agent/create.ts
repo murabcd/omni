@@ -1169,7 +1169,34 @@ export function createAgentToolsFactory(
 						if (!browserAllowed(url)) {
 							return { error: "browser_url_not_allowed" };
 						}
-						return await runAgentBrowser(["open", url]);
+						const result = await runAgentBrowser(["open", url]);
+						const snapshotResult = await runAgentBrowser(["snapshot", "-i"]);
+						let currentUrl = "";
+						let title = "";
+						try {
+							const urlResult = await runAgentBrowser(["get", "url"]);
+							currentUrl = urlResult.stdout.trim();
+						} catch {
+							// Ignore url lookup errors.
+						}
+						try {
+							const titleResult = await runAgentBrowser(["get", "title"]);
+							title = titleResult.stdout.trim();
+						} catch {
+							// Ignore title lookup errors.
+						}
+						const looksLikeAuth = (value: string) =>
+							/\b(login|sign\s*in|sign\s*on|auth|oauth|sso)\b/i.test(value);
+						const authRequired =
+							looksLikeAuth(currentUrl) || looksLikeAuth(title);
+						return {
+							...result,
+							snapshot: snapshotResult.stdout,
+							currentUrl,
+							title,
+							authRequired,
+							authUrl: authRequired ? currentUrl || url : undefined,
+						};
 					},
 				}),
 			);
@@ -1449,6 +1476,48 @@ export function createAgentToolsFactory(
 					inputSchema: z.object({}),
 					execute: async () => {
 						return await runAgentBrowser(["close"]);
+					},
+				}),
+			);
+
+			registerTool(
+				{
+					name: "browser_state_save",
+					description: "Save browser storage state to a file.",
+					source: "browser",
+					origin: "agent-browser",
+					duration: "short",
+					cost: "low",
+					async_ok: true,
+				},
+				tool({
+					description: "Save browser storage state to a file.",
+					inputSchema: z.object({
+						path: z.string().min(1),
+					}),
+					execute: async ({ path: statePath }) => {
+						return await runAgentBrowser(["state", "save", statePath]);
+					},
+				}),
+			);
+
+			registerTool(
+				{
+					name: "browser_state_load",
+					description: "Load browser storage state from a file.",
+					source: "browser",
+					origin: "agent-browser",
+					duration: "short",
+					cost: "low",
+					async_ok: true,
+				},
+				tool({
+					description: "Load browser storage state from a file.",
+					inputSchema: z.object({
+						path: z.string().min(1),
+					}),
+					execute: async ({ path: statePath }) => {
+						return await runAgentBrowser(["state", "load", statePath]);
 					},
 				}),
 			);

@@ -1,12 +1,12 @@
 ---
-summary: "Telegram bot configuration and webhook behavior for Omni"
+summary: "Telegram bot configuration and long‑polling/webhook behavior for Omni"
 read_when:
   - Working on Telegram commands or webhook delivery
 ---
 # Telegram
 
-Omni uses grammY with a Telegram Bot API token. In production it runs as a
-Cloudflare Workers webhook; locally it can use long‑polling via `bun dev`.
+Omni uses grammY with a Telegram Bot API token. In production it typically runs
+as long‑polling on a droplet; Cloudflare Workers webhook is optional.
 
 ## Required env vars
 
@@ -18,7 +18,7 @@ Optional:
 - `TELEGRAM_TEXT_CHUNK_LIMIT` (default: 4000)
 - `DEBUG_LOGS` (set `1` to enable)
 
-## Webhook (Cloudflare Workers)
+## Webhook (Cloudflare Workers, optional)
 
 Webhook path is fixed to `/telegram`:
 
@@ -32,13 +32,18 @@ To verify:
 https://api.telegram.org/bot<YOUR_TOKEN>/getWebhookInfo
 ```
 
-## Local dev (polling)
+## Long‑polling (droplet / local dev)
 
 ```
 bun dev
 ```
 
-This starts long‑polling and ignores the webhook.
+This starts long‑polling and ignores the webhook. Disable the webhook before
+running long‑polling in production:
+
+```
+https://api.telegram.org/bot<YOUR_TOKEN>/deleteWebhook
+```
 
 ## Formatting
 

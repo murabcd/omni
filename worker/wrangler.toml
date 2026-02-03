@@ -57,14 +57,6 @@ invocation_logs = true
 enabled = true
 
 [[durable_objects.bindings]]
-name = "UPDATES_DO"
-class_name = "TelegramUpdatesDO"
-
-[[durable_objects.bindings]]
-name = "UPDATES_PROCESSOR_DO"
-class_name = "TelegramUpdatesProcessorDO"
-
-[[durable_objects.bindings]]
 name = "CHANNELS_DO"
 class_name = "ChannelsDO"
 
@@ -91,32 +83,28 @@ bucket_name = "omni"
 
 [[migrations]]
 tag = "v1"
-new_sqlite_classes = ["TelegramUpdatesDO"]
-
-[[migrations]]
-tag = "v2"
 new_sqlite_classes = ["GatewayConfigDO"]
 
 [[migrations]]
-tag = "v3"
+tag = "v2"
 new_sqlite_classes = ["SessionsDO", "CronDO"]
 
 [[migrations]]
-tag = "v4"
+tag = "v3"
 new_sqlite_classes = ["ChannelsDO"]
 
 [[migrations]]
-tag = "v5"
+tag = "v4"
 new_sqlite_classes = ["WikiIndexDO"]
 
 [[migrations]]
-tag = "v6"
+tag = "v5"
 deleted_classes = ["WikiIndexDO"]
 
 [[migrations]]
-tag = "v7"
-new_sqlite_classes = ["TelegramUpdatesProcessorDO"]
+tag = "v6"
+new_sqlite_classes = ["TasksDO"]
 
 [[migrations]]
-tag = "v8"
-new_sqlite_classes = ["TasksDO"]
+tag = "v9"
+deleted_classes = ["TelegramUpdatesDO", "TelegramUpdatesProcessorDO"]

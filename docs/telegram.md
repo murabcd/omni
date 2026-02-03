@@ -67,8 +67,9 @@ If `SUBAGENT_MODEL_PROVIDER=google`, ensure `GEMINI_API_KEY` is set.
 The bot replies to the triggering message in Telegram (uses `reply_to_message_id`)
 so conversations stay threaded in groups and channels.
 
-## Webhook reliability
+## Webhook reliability (optional)
 
-The Cloudflare Worker acknowledges webhooks immediately and defers processing
-to a Durable Object queue with retries and backoff. This avoids Telegram webhook
-timeouts while preserving at-least-once delivery.
+When using the Cloudflare Worker webhook, it acknowledges webhooks immediately
+and defers processing to a Durable Object queue with retries and backoff. This
+avoids Telegram webhook timeouts while preserving at-least-once delivery. If
+you run long‑polling on a droplet, this queue is not used.

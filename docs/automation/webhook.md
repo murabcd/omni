@@ -1,12 +1,13 @@
 ---
-summary: "Telegram webhook setup for Cloudflare Workers"
+summary: "Telegram webhook setup for Cloudflare Workers (optional)"
 read_when:
   - Deploying the bot to Cloudflare Workers
+  - Using webhook delivery instead of long‑polling
 ---
 # Webhook
 
 Omni exposes a single Telegram webhook endpoint at `/telegram` via
-Cloudflare Workers.
+Cloudflare Workers. This is optional if you run the bot with long‑polling.
 
 ## Steps
 
