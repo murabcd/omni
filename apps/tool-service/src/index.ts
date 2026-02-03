@@ -174,7 +174,7 @@ const workspaceDefaults = buildWorkspaceDefaults({
 const workspaceManager = createWorkspaceManager({
 	store: textStore,
 	defaults: workspaceDefaults,
-	logger: (event) =>
+	logger: (event: { event: string; workspaceId: string; key?: string }) =>
 		logger.info({
 			event: event.event,
 			workspace_id: event.workspaceId,
@@ -191,11 +191,11 @@ const trackerClient = createTrackerClient({
 	commentsCacheMax: COMMENTS_CACHE_MAX,
 	commentsFetchConcurrency: COMMENTS_FETCH_CONCURRENCY,
 	logger,
-	getLogContext: (ctx) => ctx.state?.logContext ?? {},
-	setLogContext: (ctx, payload) => {
+	getLogContext: (ctx: BotContext) => ctx.state?.logContext ?? {},
+	setLogContext: (ctx: BotContext, payload: Record<string, unknown>) => {
 		ctx.state = { ...(ctx.state ?? {}), logContext: payload };
 	},
-	logDebug: (event, payload) =>
+	logDebug: (event: string, payload?: Record<string, unknown>) =>
 		DEBUG_LOGS &&
 			logger.info({ event, ...(payload ?? {}) }),
 });
@@ -204,7 +204,7 @@ const wikiClient = createWikiClient({
 	token: WIKI_TOKEN,
 	cloudOrgId: WIKI_CLOUD_ORG_ID,
 	logger,
-	logDebug: (event, payload) =>
+	logDebug: (event: string, payload?: Record<string, unknown>) =>
 		DEBUG_LOGS &&
 			logger.info({ event, ...(payload ?? {}) }),
 });
@@ -212,10 +212,10 @@ const wikiClient = createWikiClient({
 const figmaClient = createFigmaClient({
 	token: FIGMA_TOKEN,
 	logger,
-	logDebug: (event, payload) =>
+	logDebug: (event: string, payload?: Record<string, unknown>) =>
 		DEBUG_LOGS &&
 			logger.info({ event, ...(payload ?? {}) }),
-	});
+});
 
 const jiraClient =
 	JIRA_BASE_URL && JIRA_EMAIL && JIRA_API_TOKEN
@@ -226,7 +226,7 @@ const jiraClient =
 				commentsCacheTtlMs: COMMENTS_CACHE_TTL_MS,
 				commentsCacheMax: COMMENTS_CACHE_MAX,
 				commentsFetchConcurrency: COMMENTS_FETCH_CONCURRENCY,
-				logDebug: (event, payload) =>
+				logDebug: (event: string, payload?: Record<string, unknown>) =>
 					DEBUG_LOGS && logger.info({ event, ...(payload ?? {}) }),
 			})
 		: stubJiraClient;
@@ -240,7 +240,7 @@ const posthogToolkit = POSTHOG_PERSONAL_API_KEY
 let posthogToolsPromise: Promise<ToolSet> | null = null;
 
 const createAgentTools = createAgentToolsFactory({
-	toolConflictLogger: (event) => logger.info(event),
+	toolConflictLogger: (event: Record<string, unknown>) => logger.info(event),
 	toolPolicy,
 	resolveChatToolPolicy: () => toolPolicy,
 	toolRateLimiter: {
@@ -250,7 +250,7 @@ const createAgentTools = createAgentToolsFactory({
 	approvalStore,
 	senderToolAccess,
 	logger,
-	logDebug: (event, payload) =>
+	logDebug: (event: string, payload?: Record<string, unknown>) =>
 		DEBUG_LOGS &&
 			logger.info({ event, ...(payload ?? {}) }),
 	debugLogs: DEBUG_LOGS,
@@ -273,7 +273,9 @@ const createAgentTools = createAgentToolsFactory({
 		if (!posthogToolkit) return {};
 		if (!posthogToolsPromise) {
 			posthogToolsPromise = (async () =>
-				filterPosthogTools((await posthogToolkit.getTools()) as ToolSet))();
+				filterPosthogTools(
+					(await posthogToolkit.getTools()) as unknown as ToolSet,
+				))();
 		}
 		return posthogToolsPromise;
 	},

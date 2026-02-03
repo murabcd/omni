@@ -4,12 +4,12 @@
 		"module": "NodeNext",
 		"moduleResolution": "NodeNext",
 		"types": ["node"],
-		"outDir": "dist",
-		"rootDir": "src",
+		"rootDir": "..",
 		"strict": true,
 		"esModuleInterop": true,
 		"forceConsistentCasingInFileNames": true,
-		"skipLibCheck": true
+		"skipLibCheck": true,
+		"noEmit": true
 	},
-	"include": ["src"]
+	"include": ["src", "../bot/src"]
 }
