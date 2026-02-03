@@ -1,0 +1,20 @@
+[Unit]
+Description=Omni Tool Service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/root/omni/apps/tool-service
+EnvironmentFile=/etc/omni/tool-service.env
+ExecStart=/root/.bun/bin/bun run start
+Restart=always
+RestartSec=3
+TimeoutStartSec=30
+TimeoutStopSec=30
+KillSignal=SIGINT
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

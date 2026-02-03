@@ -121,6 +121,8 @@ function resolveRequiredBotEnv(env: Env) {
 	if (!env.BOT_TOKEN?.trim()) missing.push("BOT_TOKEN");
 	if (!env.TRACKER_TOKEN?.trim()) missing.push("TRACKER_TOKEN");
 	if (!env.OPENAI_API_KEY?.trim()) missing.push("OPENAI_API_KEY");
+	if (!env.TOOL_SERVICE_URL?.trim()) missing.push("TOOL_SERVICE_URL");
+	if (!env.TOOL_SERVICE_SECRET?.trim()) missing.push("TOOL_SERVICE_SECRET");
 	if (!env.ALLOWED_TG_IDS?.trim()) missing.push("ALLOWED_TG_IDS");
 	const hasTrackerOrg =
 		(env.TRACKER_CLOUD_ORG_ID?.trim() ?? "") ||
@@ -163,6 +165,153 @@ function resolveUiPreviewBaseUrl(env: Env) {
 function resolveUiUrlTtlMs(env: Env) {
 	const value = Number.parseInt(env.UI_URL_TTL_MS ?? "3600000", 10);
 	return Number.isFinite(value) && value > 0 ? value : 3600000;
+}
+
+function isToolServiceAuthorized(request: WorkerRequest, env: Env) {
+	const secret = request.headers.get("x-omni-tool-secret") ?? "";
+	return Boolean(secret && env.TOOL_SERVICE_SECRET?.trim() && secret === env.TOOL_SERVICE_SECRET);
+}
+
+async function handleToolStorageRequest(
+	request: WorkerRequest,
+	env: Env,
+): Promise<Response> {
+	if (request.method !== "POST") {
+		return new Response("Method Not Allowed", { status: 405 });
+	}
+	if (!isToolServiceAuthorized(request, env)) {
+		return new Response("Forbidden", { status: 403 });
+	}
+	let body: { key?: string; text?: string; prefix?: string; contentType?: string; separator?: string };
+	try {
+		body = (await request.json()) as typeof body;
+	} catch {
+		return new Response("invalid_json", { status: 400 });
+	}
+	const url = new URL(request.url);
+	if (url.pathname === "/tool-storage/get") {
+		const key = body?.key?.trim();
+		if (!key) return new Response("missing_key", { status: 400 });
+		const object = await env.omni.get(key);
+		const text = object ? await object.text() : null;
+		return new Response(JSON.stringify({ text }), {
+			status: 200,
+			headers: { "Content-Type": "application/json" },
+		});
+	}
+	if (url.pathname === "/tool-storage/put") {
+		const key = body?.key?.trim();
+		if (!key) return new Response("missing_key", { status: 400 });
+		const text = typeof body?.text === "string" ? body.text : "";
+		await env.omni.put(key, text, {
+			httpMetadata: {
+				contentType: body?.contentType ?? "text/plain; charset=utf-8",
+			},
+		});
+		return new Response(JSON.stringify({ ok: true }), {
+			status: 200,
+			headers: { "Content-Type": "application/json" },
+		});
+	}
+	if (url.pathname === "/tool-storage/append") {
+		const key = body?.key?.trim();
+		if (!key) return new Response("missing_key", { status: 400 });
+		const text = typeof body?.text === "string" ? body.text : "";
+		const existing = await env.omni.get(key);
+		const existingText = existing ? await existing.text() : "";
+		const separator = body?.separator ?? "\n";
+		const next = existingText
+			? `${existingText}${existingText.endsWith("\n") ? "" : separator}${text}`
+			: text;
+		await env.omni.put(key, next, {
+			httpMetadata: { contentType: "text/plain; charset=utf-8" },
+		});
+		return new Response(JSON.stringify({ ok: true }), {
+			status: 200,
+			headers: { "Content-Type": "application/json" },
+		});
+	}
+	if (url.pathname === "/tool-storage/list") {
+		const prefix = body?.prefix?.trim() ?? "";
+		if (!prefix) return new Response("missing_prefix", { status: 400 });
+		const keys: string[] = [];
+		let cursor: string | undefined;
+		let truncated = true;
+		while (truncated) {
+			const result = await env.omni.list({ prefix, cursor });
+			for (const object of result.objects) {
+				keys.push(object.key);
+			}
+			truncated = result.truncated;
+			if (truncated && "cursor" in result) {
+				cursor = result.cursor;
+			} else {
+				cursor = undefined;
+			}
+		}
+		return new Response(JSON.stringify({ keys }), {
+			status: 200,
+			headers: { "Content-Type": "application/json" },
+		});
+	}
+	if (url.pathname === "/tool-storage/delete") {
+		const key = body?.key?.trim();
+		if (!key) return new Response("missing_key", { status: 400 });
+		await env.omni.delete(key);
+		return new Response(JSON.stringify({ ok: true }), {
+			status: 200,
+			headers: { "Content-Type": "application/json" },
+		});
+	}
+	return new Response("Not found", { status: 404 });
+}
+
+async function handleToolMediaUpload(
+	request: WorkerRequest,
+	env: Env,
+): Promise<Response> {
+	if (request.method !== "POST") {
+		return new Response("Method Not Allowed", { status: 405 });
+	}
+	if (!isToolServiceAuthorized(request, env)) {
+		return new Response("Forbidden", { status: 403 });
+	}
+	const imageStore = getImageStore(env);
+	if (!imageStore) {
+		return new Response("image_store_unavailable", { status: 500 });
+	}
+	let body: {
+		mediaType?: string;
+		filename?: string;
+		dataBase64?: string;
+		chatId?: string;
+		userId?: string;
+	};
+	try {
+		body = (await request.json()) as typeof body;
+	} catch {
+		return new Response("invalid_json", { status: 400 });
+	}
+	if (!body?.dataBase64 || !body?.mediaType) {
+		return new Response("missing_payload", { status: 400 });
+	}
+	let buffer: Uint8Array;
+	try {
+		buffer = Uint8Array.from(atob(body.dataBase64), (c) => c.charCodeAt(0));
+	} catch {
+		return new Response("invalid_base64", { status: 400 });
+	}
+	const stored = await imageStore.putImage({
+		buffer,
+		mediaType: body.mediaType,
+		filename: body.filename,
+		chatId: body.chatId,
+		userId: body.userId,
+	});
+	return new Response(JSON.stringify(stored), {
+		status: 200,
+		headers: { "Content-Type": "application/json" },
+	});
 }
 
 function getImageStore(env: Env) {
@@ -1221,6 +1370,13 @@ export default {
 			object.writeHttpMetadata(headers);
 			headers.set("Cache-Control", "private, max-age=600");
 			return toWorkerResponse(new Response(object.body, { status: 200, headers }));
+		}
+
+		if (url.pathname.startsWith("/tool-storage")) {
+			return toWorkerResponse(await handleToolStorageRequest(request, env));
+		}
+		if (url.pathname === "/tool-media/upload") {
+			return toWorkerResponse(await handleToolMediaUpload(request, env));
 		}
 
 		if (url.pathname === "/gateway" && isWebSocketUpgrade(request)) {

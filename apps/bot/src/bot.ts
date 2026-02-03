@@ -128,6 +128,7 @@ import {
 	type ToolConflict,
 	type ToolMeta,
 } from "./lib/tools/registry.js";
+import { createToolServiceClient } from "./lib/tools/tool-service.js";
 import { buildWorkspaceDefaults } from "./lib/workspace/defaults.js";
 import {
 	createWorkspaceManager,
@@ -285,6 +286,9 @@ export async function createBot(options: CreateBotOptions) {
 		TASK_AUTO_KEYWORDS,
 		TASK_PROGRESS_MIN_MS,
 		UI_SCREENSHOT_ENABLED,
+		TOOL_SERVICE_URL,
+		TOOL_SERVICE_SECRET,
+		TOOL_SERVICE_TIMEOUT_MS,
 		ORCHESTRATION_ALLOW_AGENTS,
 		ORCHESTRATION_DENY_AGENTS,
 		ORCHESTRATION_SUBAGENT_MAX_STEPS,
@@ -368,6 +372,25 @@ export async function createBot(options: CreateBotOptions) {
 					}),
 			})
 		: null;
+	const toolServiceClient =
+		TOOL_SERVICE_URL && TOOL_SERVICE_SECRET
+			? createToolServiceClient({
+					url: TOOL_SERVICE_URL,
+					secret: TOOL_SERVICE_SECRET,
+					timeoutMs:
+						Number.isFinite(TOOL_SERVICE_TIMEOUT_MS) &&
+						TOOL_SERVICE_TIMEOUT_MS > 0
+							? TOOL_SERVICE_TIMEOUT_MS
+							: 20000,
+					logger,
+				})
+			: null;
+	if (!toolServiceClient) {
+		logger.error({
+			event: "tool_service_missing",
+			reason: "TOOL_SERVICE_URL or TOOL_SERVICE_SECRET is empty",
+		});
+	}
 
 	if (!BOT_TOKEN) throw new Error("BOT_TOKEN is unset");
 	if (!TRACKER_TOKEN) throw new Error("TRACKER_TOKEN is unset");
@@ -1223,6 +1246,7 @@ export async function createBot(options: CreateBotOptions) {
 		getPosthogTools,
 		geminiApiKey: GEMINI_API_KEY ?? "",
 		cronClient,
+		toolServiceClient: toolServiceClient ?? undefined,
 		trackerClient,
 		wikiClient,
 		figmaClient,

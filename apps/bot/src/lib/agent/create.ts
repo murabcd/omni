@@ -73,6 +73,7 @@ import {
 } from "../tools/access.js";
 import type { ApprovalStore } from "../tools/approvals.js";
 import { wrapToolMapWithHooks } from "../tools/hooks.js";
+import { isOffloadedTool } from "../tools/offloaded.js";
 import {
 	filterToolMapByPolicy,
 	isToolAllowed,
@@ -85,6 +86,7 @@ import {
 	type ToolMeta,
 } from "../tools/registry.js";
 import { sanitizeToolCallIdsForTranscript } from "../tools/tool-call-id.js";
+import type { ToolServiceClient } from "../tools/tool-service.js";
 import { repairToolUseResultPairing } from "../tools/transcript-repair.js";
 import { omniUiCatalog } from "../ui/catalog.js";
 import type { WorkspaceManager } from "../workspace/manager.js";
@@ -292,6 +294,7 @@ export type AgentToolsDeps = {
 	posthogPersonalApiKey: string;
 	getPosthogTools: () => Promise<ToolSet>;
 	geminiApiKey: string;
+	toolServiceClient?: ToolServiceClient;
 	cronClient?: {
 		list: (params?: {
 			includeDisabled?: boolean;
@@ -3479,9 +3482,28 @@ export function createAgentToolsFactory(
 				suppressed,
 			});
 		}
+		const proxied = (() => {
+			if (!deps.toolServiceClient) return filteredByChat.tools as ToolSet;
+			const next: ToolSet = { ...(filteredByChat.tools as ToolSet) };
+			for (const [name, toolDef] of Object.entries(next)) {
+				if (!isOffloadedTool(name)) continue;
+				if (!toolDef?.execute) continue;
+				next[name] = {
+					...toolDef,
+					execute: async (input: unknown) =>
+						deps.toolServiceClient?.callTool({
+							tool: name,
+							input: (input ?? {}) as Record<string, unknown>,
+							ctx: options?.ctx,
+							chatId: options?.chatId,
+						}),
+				} as ToolSet[string];
+			}
+			return next;
+		})();
 		const chatId = options?.ctx?.chat?.id?.toString();
 		const userId = options?.ctx?.from?.id?.toString();
-		const wrapped = wrapToolMapWithHooks(filteredByChat.tools as ToolSet, {
+		const wrapped = wrapToolMapWithHooks(proxied as ToolSet, {
 			beforeToolCall: ({ toolName, toolCallId, input }) => {
 				if (chatPolicy && !isToolAllowed(toolName, chatPolicy)) {
 					deps.logger.info({
