@@ -11,6 +11,11 @@ export const OFFLOADED_TOOL_NAMES = [
 	"browser_wait",
 	"browser_screenshot",
 	"browser_close",
+	"browser_state_save",
+	"browser_state_load",
+	// mermaid
+	"mermaid_render_svg",
+	"mermaid_render_ascii",
 	// memory
 	"memory_read",
 	"memory_append",

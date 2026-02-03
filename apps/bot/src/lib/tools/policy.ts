@@ -94,7 +94,10 @@ export const TOOL_GROUPS: Record<string, string[]> = {
 		"browser_wait",
 		"browser_screenshot",
 		"browser_close",
+		"browser_state_save",
+		"browser_state_load",
 	],
+	"group:diagram": ["mermaid_render_svg", "mermaid_render_ascii"],
 	"group:firecrawl": [
 		"firecrawl_search",
 		"firecrawl_scrape",

@@ -16,9 +16,11 @@
 		"@posthog/agent-toolkit": "^0.2.4",
 		"ai": "^6.0.68",
 		"arkregex": "^0.0.5",
+		"beautiful-mermaid": "^0.1.0",
 		"dotenv": "^16.6.1",
 		"firecrawl-aisdk": "^0.8.1",
 		"zod": "^4.3.6",
+		"sharp": "^0.34.3",
 		"croner": "^9.1.0"
 	},
 	"devDependencies": {

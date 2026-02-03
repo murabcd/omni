@@ -1523,6 +1523,107 @@ export function createAgentToolsFactory(
 			);
 		}
 
+		registerTool(
+			{
+				name: "mermaid_render_svg",
+				description: "Render Mermaid diagram to SVG and PNG.",
+				source: "diagram",
+				origin: "tool-service",
+				duration: "long",
+				cost: "medium",
+				async_ok: true,
+			},
+			tool({
+				description: "Render Mermaid diagram to SVG and PNG.",
+				inputSchema: z.object({
+					diagram: z.string().min(1),
+					theme: z.string().optional(),
+					transparent: z.boolean().optional(),
+				}),
+				execute: async ({ diagram, theme, transparent }) => {
+					try {
+						const { renderMermaid, THEMES } = await import("beautiful-mermaid");
+						const themeName = theme?.trim() || "github-dark";
+						const themeConfig =
+							THEMES[themeName] ?? THEMES["github-dark"] ?? undefined;
+						const svg = await renderMermaid(diagram, {
+							...(themeConfig ?? {}),
+							transparent: Boolean(transparent),
+						});
+						const sharpModule = await import("sharp");
+						const sharp = sharpModule.default ?? sharpModule;
+						const pngBuffer = await sharp(Buffer.from(svg)).png().toBuffer();
+						if (!deps.imageStore) {
+							return {
+								ok: false,
+								error: "image_store_unavailable",
+								svg,
+							};
+						}
+						const stored = await deps.imageStore.putImage({
+							buffer: pngBuffer,
+							mediaType: "image/png",
+							filename: `mermaid-${Date.now()}.png`,
+						});
+						return {
+							ok: true,
+							theme: themeName,
+							svg,
+							image: {
+								url: stored.url,
+								mediaType: stored.mediaType,
+								filename: stored.filename,
+							},
+						};
+					} catch (error) {
+						return { error: String(error) };
+					}
+				},
+			}),
+		);
+
+		registerTool(
+			{
+				name: "mermaid_render_ascii",
+				description: "Render Mermaid diagram to ASCII/Unicode text.",
+				source: "diagram",
+				origin: "tool-service",
+				duration: "short",
+				cost: "low",
+				async_ok: true,
+			},
+			tool({
+				description: "Render Mermaid diagram to ASCII/Unicode text.",
+				inputSchema: z.object({
+					diagram: z.string().min(1),
+					ascii: z.boolean().optional(),
+					paddingX: z.number().int().min(1).max(20).optional(),
+					paddingY: z.number().int().min(1).max(20).optional(),
+					boxBorderPadding: z.number().int().min(0).max(5).optional(),
+				}),
+				execute: async ({
+					diagram,
+					ascii,
+					paddingX,
+					paddingY,
+					boxBorderPadding,
+				}) => {
+					try {
+						const { renderMermaidAscii } = await import("beautiful-mermaid");
+						const text = renderMermaidAscii(diagram, {
+							useAscii: Boolean(ascii),
+							paddingX: paddingX ?? 5,
+							paddingY: paddingY ?? 5,
+							boxBorderPadding: boxBorderPadding ?? 1,
+						});
+						return { ok: true, text };
+					} catch (error) {
+						return { error: String(error) };
+					}
+				},
+			}),
+		);
+
 		const runTrackerSearch = async (
 			question: string,
 			queue?: string,

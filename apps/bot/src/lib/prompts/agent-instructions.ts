@@ -176,6 +176,14 @@ export function buildAgentInstructions(
 		);
 	}
 
+	if (options.toolLines.includes("mermaid_render_svg")) {
+		toolSections.push(
+			"- For Mermaid diagrams, call `mermaid_render_svg` to return an SVG plus a PNG image URL.",
+			"- Use `mermaid_render_ascii` only when the user wants plain-text diagrams.",
+			"- Default theme is github-dark unless the user asks for a different theme.",
+		);
+	}
+
 	if (options.toolLines.includes("ui_publish")) {
 		toolSections.push(
 			"- For UI mockups or interface requests, call `ui_publish` with a JSON tree and optional data.",
