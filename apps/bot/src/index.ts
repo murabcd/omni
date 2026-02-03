@@ -3,6 +3,8 @@ import path from "node:path";
 import dotenv from "dotenv";
 import { createBot } from "./bot.js";
 import { createFsTextStore } from "./lib/storage/fs-store.js";
+import { createWorkerImageStore } from "./lib/storage/worker-image-store.js";
+import { createWorkerTextStore } from "./lib/storage/worker-text-store.js";
 import { buildWorkspaceDefaults } from "./lib/workspace/defaults.js";
 import { loadModelsConfig } from "./models.js";
 import { loadSkills } from "./skills.js";
@@ -16,6 +18,18 @@ const DEBUG_LOG_FILE = process.env.DEBUG_LOG_FILE ?? "";
 const SOUL_FILE_PATH = path.resolve("config/SOUL.md");
 const PROJECT_CONTEXT_ENV = process.env.PROJECT_CONTEXT;
 const PROJECT_CONTEXT_FILES = ["config/SOUL.md"];
+const TOOL_SERVICE_SECRET = process.env.TOOL_SERVICE_SECRET ?? "";
+const WORKER_STORAGE_URL = process.env.WORKER_STORAGE_URL ?? "";
+const WORKER_STORAGE_TIMEOUT_MS = Number.parseInt(
+	process.env.WORKER_STORAGE_TIMEOUT_MS ?? "20000",
+	10,
+);
+const WORKER_MEDIA_URL =
+	process.env.WORKER_MEDIA_URL ?? WORKER_STORAGE_URL;
+const WORKER_MEDIA_TIMEOUT_MS = Number.parseInt(
+	process.env.WORKER_MEDIA_TIMEOUT_MS ?? "20000",
+	10,
+);
 
 try {
 	const soul = fs.readFileSync(SOUL_FILE_PATH, "utf8").trim();
@@ -69,6 +83,31 @@ function createDebugAppender(filePath: string) {
 
 const onDebugLog = createDebugAppender(DEBUG_LOG_FILE);
 
+const workspaceStore =
+	WORKER_STORAGE_URL && TOOL_SERVICE_SECRET
+		? createWorkerTextStore({
+				baseUrl: WORKER_STORAGE_URL,
+				secret: TOOL_SERVICE_SECRET,
+				timeoutMs:
+					Number.isFinite(WORKER_STORAGE_TIMEOUT_MS) &&
+					WORKER_STORAGE_TIMEOUT_MS > 0
+						? WORKER_STORAGE_TIMEOUT_MS
+						: 20000,
+			})
+		: createFsTextStore({ baseDir: "data/workspace" });
+const imageStore =
+	WORKER_MEDIA_URL && TOOL_SERVICE_SECRET
+		? createWorkerImageStore({
+				baseUrl: WORKER_MEDIA_URL,
+				secret: TOOL_SERVICE_SECRET,
+				timeoutMs:
+					Number.isFinite(WORKER_MEDIA_TIMEOUT_MS) &&
+					WORKER_MEDIA_TIMEOUT_MS > 0
+						? WORKER_MEDIA_TIMEOUT_MS
+						: 20000,
+			})
+		: undefined;
+
 const localSessions = new Map<string, { timeZone?: string }>();
 const sessionClient = {
 	get: async ({ key }: { key: string }) => {
@@ -99,7 +138,8 @@ const { bot, allowedUpdates } = await createBot({
 	getUptimeSeconds: () => process.uptime(),
 	onDebugLog,
 	sessionClient,
-	workspaceStore: createFsTextStore({ baseDir: "data/workspace" }),
+	workspaceStore,
+	imageStore,
 	uiPublishUrl: process.env.UI_PUBLISH_URL,
 	uiPublishToken: process.env.UI_PUBLISH_TOKEN,
 	workspaceDefaults: buildWorkspaceDefaults({

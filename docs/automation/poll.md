@@ -14,3 +14,7 @@ bun dev
 Notes:
 - This does not use the webhook.
 - Use the same `BOT_TOKEN` as production.
+
+Production note:
+- Disable the Telegram webhook before running long‑polling:
+  `https://api.telegram.org/bot<YOUR_TOKEN>/deleteWebhook`
