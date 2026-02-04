@@ -138,6 +138,7 @@ export function buildAgentInstructions(
 		"- Use the appropriate tool for the task. Summarize results in Russian and do not invent facts.",
 		"- If a tool is blocked with approval_required, ask the user to run /approve <tool> and retry.",
 		"- Always include required params for each tool.",
+		"- If the user pastes error logs or stack traces, explain locally and do not call tools unless explicitly asked.",
 	];
 
 	if (options.toolLines.includes("yandex_tracker_search")) {
@@ -193,7 +194,6 @@ export function buildAgentInstructions(
 			"- `visible` is a top-level element field, not inside props.",
 			"- Use only the props listed below; do not invent props.",
 			"- Actions support confirmation and callbacks: `{ name, params?, confirm?, onSuccess?, onError? }`.",
-			'- Example action: `{ "name": "refresh_data", "confirm": { "title": "Refresh", "message": "Refresh data now?", "variant": "default" } }`.',
 			"UI tree format:",
 			'{\n  "root": "root-key",\n  "elements": {\n    "root-key": {\n      "key": "root-key",\n      "type": "Card",\n      "props": { ... },\n      "children": ["child-1", "child-2"]\n    }\n  }\n}',
 			"JSONL patch format (optional, for streaming):",
