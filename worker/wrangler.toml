@@ -83,26 +83,34 @@ bucket_name = "omni"
 
 [[migrations]]
 tag = "v1"
-new_sqlite_classes = ["GatewayConfigDO"]
+new_sqlite_classes = ["TelegramUpdatesDO"]
 
 [[migrations]]
 tag = "v2"
-new_sqlite_classes = ["SessionsDO", "CronDO"]
+new_sqlite_classes = ["GatewayConfigDO"]
 
 [[migrations]]
 tag = "v3"
-new_sqlite_classes = ["ChannelsDO"]
+new_sqlite_classes = ["SessionsDO", "CronDO"]
 
 [[migrations]]
 tag = "v4"
-new_sqlite_classes = ["WikiIndexDO"]
+new_sqlite_classes = ["ChannelsDO"]
 
 [[migrations]]
 tag = "v5"
-deleted_classes = ["WikiIndexDO"]
+new_sqlite_classes = ["WikiIndexDO"]
 
 [[migrations]]
 tag = "v6"
+deleted_classes = ["WikiIndexDO"]
+
+[[migrations]]
+tag = "v7"
+new_sqlite_classes = ["TelegramUpdatesProcessorDO"]
+
+[[migrations]]
+tag = "v8"
 new_sqlite_classes = ["TasksDO"]
 
 [[migrations]]
