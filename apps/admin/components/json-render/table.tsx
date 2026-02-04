@@ -24,6 +24,12 @@ export function Table({ element }: ComponentRenderProps) {
 		| Array<Record<string, unknown>>
 		| undefined;
 
+	if (!Array.isArray(columns) || columns.length === 0) {
+		return (
+			<div className="p-5 text-muted-foreground">No columns</div>
+		);
+	}
+
 	if (!tableData || !Array.isArray(tableData)) {
 		return (
 			<div className="p-5 text-muted-foreground">No data</div>

@@ -26,9 +26,16 @@ export function Tabs({ element, children }: ComponentRenderProps) {
 		React.isValidElement<TabPanelProps>(child),
 	) as Array<React.ReactElement<TabPanelProps>>;
 
-	const tabItems = panels.filter(
-		(panel) => typeof panel.props?.value === "string",
-	);
+	const seenValues = new Set<string>();
+	const tabItems = panels.filter((panel) => {
+		const rawValue = panel.props?.value;
+		if (typeof rawValue !== "string") return false;
+		const nextValue = rawValue.trim();
+		if (!nextValue) return false;
+		if (seenValues.has(nextValue)) return false;
+		seenValues.add(nextValue);
+		return true;
+	});
 
 	const fallbackValue = tabItems[0]?.props?.value as string | undefined;
 

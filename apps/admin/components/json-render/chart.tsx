@@ -14,7 +14,7 @@ export function Chart({ element }: ComponentRenderProps) {
 		| Array<{ label: string; value: number }>
 		| undefined;
 
-	if (!chartData || !Array.isArray(chartData)) {
+	if (!chartData || !Array.isArray(chartData) || chartData.length === 0) {
 		return (
 			<div style={{ padding: 20, color: "var(--muted-foreground)" }}>
 				No data
@@ -22,7 +22,26 @@ export function Chart({ element }: ComponentRenderProps) {
 		);
 	}
 
-	const maxValue = Math.max(...chartData.map((d) => d.value));
+	const values = chartData
+		.map((d) => (typeof d.value === "number" ? d.value : Number(d.value)))
+		.filter((value) => Number.isFinite(value));
+
+	if (values.length === 0) {
+		return (
+			<div style={{ padding: 20, color: "var(--muted-foreground)" }}>
+				No data
+			</div>
+		);
+	}
+
+	const maxValue = Math.max(...values);
+	if (!Number.isFinite(maxValue) || maxValue <= 0) {
+		return (
+			<div style={{ padding: 20, color: "var(--muted-foreground)" }}>
+				No data
+			</div>
+		);
+	}
 	const chartHeight = height ?? 120;
 
 	return (

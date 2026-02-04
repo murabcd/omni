@@ -26,23 +26,20 @@ export function Select({ element }: ComponentRenderProps) {
 		<div className="flex flex-col gap-2">
 			{label && <UiLabel className="text-sm font-medium">{label}</UiLabel>}
 			<UiSelect
-				value={value ?? ""}
+				value={value ?? undefined}
 				onValueChange={(next) => set(bindPath, next)}
 			>
 				<SelectTrigger>
 					<SelectValue placeholder={placeholder ?? ""} />
 				</SelectTrigger>
 				<SelectContent>
-					{placeholder && (
-						<SelectItem value="" disabled>
-							{placeholder}
-						</SelectItem>
-					)}
-					{options.map((opt) => (
-						<SelectItem key={opt.value} value={opt.value}>
+					{options
+						.filter((opt) => opt.value !== "")
+						.map((opt) => (
+							<SelectItem key={opt.value} value={opt.value}>
 							{opt.label}
-						</SelectItem>
-					))}
+							</SelectItem>
+						))}
 				</SelectContent>
 			</UiSelect>
 		</div>

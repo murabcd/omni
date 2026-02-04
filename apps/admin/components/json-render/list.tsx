@@ -11,7 +11,7 @@ export function List({ element, children }: ComponentRenderProps) {
 	const { data } = useData();
 	const listData = getByPath(data, dataPath) as Array<unknown> | undefined;
 
-	if (!listData || !Array.isArray(listData)) {
+	if (!listData || !Array.isArray(listData) || listData.length === 0) {
 		return (
 			<div style={{ color: "var(--muted-foreground)" }}>
 				{emptyMessage || "No items"}
