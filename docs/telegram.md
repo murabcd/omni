@@ -7,6 +7,10 @@ Set these environment variables:
 ```
 ALLOWED_TG_GROUPS="-1001234567890,-1009876543210"
 TELEGRAM_GROUP_REQUIRE_MENTION=1
+TELEGRAM_LINK_PREVIEW=1
+TELEGRAM_ABORT_ON_NEW_MESSAGE=0
+INBOUND_DEDUPE_TTL_MS=1200000
+INBOUND_DEDUPE_MAX=5000
 ```
 
 Behavior:
@@ -17,6 +21,14 @@ Behavior:
 
 To allow all groups, set `ALLOWED_TG_GROUPS=""`.
 To disable mention gating in groups, set `TELEGRAM_GROUP_REQUIRE_MENTION=0`.
+
+Link previews are enabled by default; set `TELEGRAM_LINK_PREVIEW=0` to disable them.
+
+Set `TELEGRAM_ABORT_ON_NEW_MESSAGE=1` to cancel in‑flight runs when a new message arrives
+in the same chat (useful for fast iteration).
+
+Inbound dedupe uses a per‑chat cache to skip repeated delivery of the same Telegram
+message ID. Tune TTL and size via `INBOUND_DEDUPE_TTL_MS` and `INBOUND_DEDUPE_MAX`.
 
 ## Tool availability by chat type
 

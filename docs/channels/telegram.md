@@ -16,6 +16,10 @@ as long‑polling on a droplet; Cloudflare Workers webhook is optional.
 Optional:
 - `TELEGRAM_TIMEOUT_SECONDS` (default: 60)
 - `TELEGRAM_TEXT_CHUNK_LIMIT` (default: 4000)
+- `TELEGRAM_LINK_PREVIEW` (default: 1) — set `0` to disable link previews
+- `TELEGRAM_ABORT_ON_NEW_MESSAGE` (default: 0) — set `1` to cancel in-flight runs on new messages
+- `INBOUND_DEDUPE_TTL_MS` (default: 1200000) — TTL for inbound message dedupe
+- `INBOUND_DEDUPE_MAX` (default: 5000) — max dedupe entries per chat
 - `DEBUG_LOGS` (set `1` to enable)
 
 ## Webhook (Cloudflare Workers, optional)
