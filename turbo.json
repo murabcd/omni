@@ -16,7 +16,7 @@
     "start": {
       "dependsOn": ["build"]
     },
-    "lint": {},
+    "check": {},
     "type-check": {},
     "test": {
       "dependsOn": ["build"],

@@ -1,4 +1,8 @@
-import { createCatalog, generateCatalogPrompt } from "@json-render/core";
+import {
+	ActionSchema,
+	createCatalog,
+	generateCatalogPrompt,
+} from "@json-render/core";
 import { z } from "zod";
 
 export const omniUiCatalog = createCatalog({
@@ -75,7 +79,7 @@ export const omniUiCatalog = createCatalog({
 				label: z.string(),
 				variant: z.enum(["primary", "secondary", "danger", "ghost"]).nullable(),
 				size: z.enum(["sm", "md", "lg"]).nullable(),
-				action: z.string(),
+				action: z.union([z.string(), ActionSchema]),
 				disabled: z.boolean().nullable(),
 			}),
 			description: "Clickable button with action",

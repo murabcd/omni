@@ -36,7 +36,9 @@ async function callWorker<T>(
 	}
 }
 
-export function createWorkerTextStore(config: WorkerTextStoreConfig): TextStore {
+export function createWorkerTextStore(
+	config: WorkerTextStoreConfig,
+): TextStore {
 	const baseUrl = config.baseUrl.replace(/\/+$/, "");
 	const resolved = { ...config, baseUrl };
 

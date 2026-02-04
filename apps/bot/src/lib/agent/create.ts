@@ -5,6 +5,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { createGoogleGenerativeAI } from "@ai-sdk/google";
 import { openai } from "@ai-sdk/openai";
+import type { UITree } from "@json-render/core";
 import { setByPath } from "@json-render/core";
 import {
 	createAgentUIStream,
@@ -181,6 +182,63 @@ function applyUiPatch(
 		default:
 			return next;
 	}
+}
+
+function lintUiTree(tree: UITree): string[] {
+	const issues: string[] = [];
+	const { root, elements } = tree;
+
+	if (!root) {
+		issues.push("root is missing");
+	} else if (!elements[root]) {
+		issues.push(`root "${root}" not found in elements`);
+	}
+
+	for (const [key, element] of Object.entries(elements)) {
+		if (!element || typeof element !== "object") {
+			issues.push(`element "${key}" is not an object`);
+			continue;
+		}
+		if ((element as { key?: string }).key !== key) {
+			issues.push(`element "${key}" has mismatched key`);
+		}
+		const children = (element as { children?: string[] }).children ?? [];
+		for (const child of children) {
+			if (!elements[child]) {
+				issues.push(`element "${key}" references missing child "${child}"`);
+			}
+		}
+	}
+
+	if (root && elements[root]) {
+		const visiting = new Set<string>();
+		const visited = new Set<string>();
+
+		const dfs = (key: string, path: string[]) => {
+			if (visiting.has(key)) {
+				issues.push(`cycle detected: ${[...path, key].join(" -> ")}`);
+				return;
+			}
+			if (visited.has(key)) return;
+			visiting.add(key);
+			const element = elements[key] as { children?: string[] };
+			for (const child of element.children ?? []) {
+				if (elements[child]) dfs(child, [...path, key]);
+			}
+			visiting.delete(key);
+			visited.add(key);
+		};
+
+		dfs(root, []);
+
+		for (const key of Object.keys(elements)) {
+			if (!visited.has(key)) {
+				issues.push(`element "${key}" is not reachable from root`);
+			}
+		}
+	}
+
+	return issues;
 }
 
 function resolveImageExtension(mediaType: string): string {
@@ -885,9 +943,19 @@ export function createAgentToolsFactory(
 						resolvedTree = currentTree;
 					}
 
-					const treeParse = omniUiCatalog.treeSchema.safeParse(resolvedTree);
+					const treeParse = omniUiCatalog.validateTree(resolvedTree);
 					if (!treeParse.success) {
-						return { error: "ui_tree_invalid" };
+						const issues = treeParse.error
+							? treeParse.error.issues.map(
+									(issue) =>
+										`${issue.path.join(".") || "tree"}: ${issue.message}`,
+								)
+							: ["tree validation failed"];
+						return { error: "ui_tree_invalid", issues };
+					}
+					const lintIssues = lintUiTree(treeParse.data as UITree);
+					if (lintIssues.length > 0) {
+						return { error: "ui_tree_invalid", issues: lintIssues };
 					}
 					let id = "";
 					let url = "";

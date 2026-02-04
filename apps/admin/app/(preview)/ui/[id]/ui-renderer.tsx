@@ -1,12 +1,9 @@
 "use client";
 
 import {
-	ActionProvider,
-	DataProvider,
+	JSONUIProvider,
 	Renderer,
 	type RendererProps,
-	ValidationProvider,
-	VisibilityProvider,
 } from "@json-render/react";
 import { useMemo } from "react";
 import { componentRegistry } from "../../../../components/json-render";
@@ -67,20 +64,18 @@ export function UiRenderer({ payload }: { payload: UiPayload }) {
 				</div>
 			</div>
 
-			<DataProvider initialData={dataModel}>
-				<VisibilityProvider>
-					<ActionProvider handlers={actions}>
-						<ValidationProvider>
-							<div className="mx-auto max-w-6xl px-6 pb-10">
-								<Renderer
-									tree={payload.tree as RendererTree}
-									registry={componentRegistry}
-								/>
-							</div>
-						</ValidationProvider>
-					</ActionProvider>
-				</VisibilityProvider>
-			</DataProvider>
+			<JSONUIProvider
+				registry={componentRegistry}
+				initialData={dataModel}
+				actionHandlers={actions}
+			>
+				<div className="mx-auto max-w-6xl px-6 pb-10">
+					<Renderer
+						tree={payload.tree as RendererTree}
+						registry={componentRegistry}
+					/>
+				</div>
+			</JSONUIProvider>
 		</div>
 	);
 }

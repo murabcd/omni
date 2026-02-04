@@ -1,24 +1,24 @@
 import "dotenv/config";
 import http from "node:http";
+import { PostHogAgentToolkit } from "@posthog/agent-toolkit/integrations/ai-sdk";
+import type { ToolSet } from "ai";
 import { createAgentToolsFactory } from "../../bot/src/lib/agent/create.js";
 import type { BotContext } from "../../bot/src/lib/bot/types.js";
 import { createFigmaClient } from "../../bot/src/lib/clients/figma.js";
+import type { JiraClient } from "../../bot/src/lib/clients/jira.js";
 import { createJiraClient } from "../../bot/src/lib/clients/jira.js";
 import { createTrackerClient } from "../../bot/src/lib/clients/tracker.js";
 import { createWikiClient } from "../../bot/src/lib/clients/wiki.js";
+import { createLogger } from "../../bot/src/lib/logger.js";
+import { filterPosthogTools } from "../../bot/src/lib/posthog-tools.js";
+import type { SenderToolAccess } from "../../bot/src/lib/tools/access.js";
+import type { ApprovalStore } from "../../bot/src/lib/tools/approvals.js";
+import { OFFLOADED_TOOL_NAMES } from "../../bot/src/lib/tools/offloaded.js";
+import type { ToolPolicy } from "../../bot/src/lib/tools/policy.js";
 import { buildWorkspaceDefaults } from "../../bot/src/lib/workspace/defaults.js";
 import { createWorkspaceManager } from "../../bot/src/lib/workspace/manager.js";
-import { createLogger } from "../../bot/src/lib/logger.js";
-import { createWorkerTextStore } from "./worker-text-store.js";
 import { createWorkerImageStore } from "./worker-image-store.js";
-import { OFFLOADED_TOOL_NAMES } from "../../bot/src/lib/tools/offloaded.js";
-import type { ApprovalStore } from "../../bot/src/lib/tools/approvals.js";
-import type { ToolPolicy } from "../../bot/src/lib/tools/policy.js";
-import type { SenderToolAccess } from "../../bot/src/lib/tools/access.js";
-import { PostHogAgentToolkit } from "@posthog/agent-toolkit/integrations/ai-sdk";
-import { filterPosthogTools } from "../../bot/src/lib/posthog-tools.js";
-import type { JiraClient } from "../../bot/src/lib/clients/jira.js";
-import type { ToolSet } from "ai";
+import { createWorkerTextStore } from "./worker-text-store.js";
 
 const PORT = Number.parseInt(process.env.TOOL_SERVICE_PORT ?? "8080", 10);
 const TOOL_SERVICE_SECRET = process.env.TOOL_SERVICE_SECRET ?? "";
@@ -198,8 +198,7 @@ const trackerClient = createTrackerClient({
 		ctx.state = { ...(ctx.state ?? {}), logContext: payload };
 	},
 	logDebug: (event: string, payload?: Record<string, unknown>) =>
-		DEBUG_LOGS &&
-			logger.info({ event, ...(payload ?? {}) }),
+		DEBUG_LOGS && logger.info({ event, ...(payload ?? {}) }),
 });
 
 const wikiClient = createWikiClient({
@@ -251,8 +250,7 @@ const createAgentTools = createAgentToolsFactory({
 	senderToolAccess,
 	logger,
 	logDebug: (event: string, payload?: Record<string, unknown>) =>
-		DEBUG_LOGS &&
-			logger.info({ event, ...(payload ?? {}) }),
+		DEBUG_LOGS && logger.info({ event, ...(payload ?? {}) }),
 	debugLogs: DEBUG_LOGS,
 	webSearchEnabled: WEB_SEARCH_ENABLED,
 	webSearchContextSize: WEB_SEARCH_CONTEXT_SIZE,

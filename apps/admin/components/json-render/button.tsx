@@ -1,5 +1,6 @@
 "use client";
 
+import type { Action } from "@json-render/core";
 import { type ComponentRenderProps } from "@json-render/react";
 import { Button as UiButton } from "@/components/ui/button";
 
@@ -8,7 +9,7 @@ export function Button({ element, onAction, loading }: ComponentRenderProps) {
 		label: string;
 		variant?: string | null;
 		size?: string | null;
-		action: string | { name: string };
+		action: string | Action;
 		disabled?: boolean | null;
 	};
 

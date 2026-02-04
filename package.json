@@ -9,7 +9,7 @@
 		"start": "turbo run start",
 		"build": "turbo run build",
 		"build:skills": "turbo run build:skills",
-		"check": "turbo run lint",
+		"check": "turbo run check",
 		"type-check": "turbo run type-check",
 		"test": "turbo run test",
 		"dev:admin": "turbo run dev --filter=@omni/admin",
