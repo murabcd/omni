@@ -154,4 +154,81 @@ process.once("SIGTERM", () => {
 	bot.stop();
 });
 
-bot.start({ allowed_updates: allowedUpdates });
+let stopRequested = false;
+process.once("SIGINT", () => {
+	stopRequested = true;
+});
+process.once("SIGTERM", () => {
+	stopRequested = true;
+});
+
+function isGetUpdatesConflict(error: unknown) {
+	if (!error || typeof error !== "object") return false;
+	const typed = error as {
+		error_code?: number;
+		errorCode?: number;
+		description?: string;
+		method?: string;
+		message?: string;
+	};
+	const code = typed.error_code ?? typed.errorCode;
+	if (code !== 409) return false;
+	const haystack = [typed.description, typed.method, typed.message]
+		.filter((value): value is string => typeof value === "string")
+		.join(" ")
+		.toLowerCase();
+	return haystack.includes("getupdates") || haystack.includes("conflict");
+}
+
+function isNetworkError(error: unknown) {
+	const message =
+		error && typeof error === "object" && "message" in error
+			? String((error as { message?: unknown }).message ?? "")
+			: String(error ?? "");
+	const lower = message.toLowerCase();
+	return (
+		lower.includes("network") ||
+		lower.includes("timeout") ||
+		lower.includes("socket") ||
+		lower.includes("econnreset") ||
+		lower.includes("econnrefused") ||
+		lower.includes("fetch failed")
+	);
+}
+
+async function sleep(ms: number) {
+	await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function computeBackoff(attempt: number) {
+	const initialMs = 2000;
+	const maxMs = 30_000;
+	const factor = 1.8;
+	const jitter = 0.25;
+	const base = Math.min(maxMs, initialMs * factor ** Math.max(0, attempt - 1));
+	const jittered = base * (1 + (Math.random() * 2 - 1) * jitter);
+	return Math.max(0, Math.round(jittered));
+}
+
+async function startBotWithRetry() {
+	let attempts = 0;
+	while (!stopRequested) {
+		try {
+			await bot.start({ allowed_updates: allowedUpdates });
+			return;
+		} catch (error) {
+			if (stopRequested) return;
+			if (!isGetUpdatesConflict(error) && !isNetworkError(error)) {
+				throw error;
+			}
+			attempts += 1;
+			const delayMs = computeBackoff(attempts);
+			console.error(
+				`[bot] polling error: ${String(error)}; retrying in ${delayMs}ms`,
+			);
+			await sleep(delayMs);
+		}
+	}
+}
+
+await startBotWithRetry();

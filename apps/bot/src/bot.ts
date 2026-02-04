@@ -44,6 +44,7 @@ import {
 } from "./lib/attachments.js";
 import { createAccessHelpers, isGroupChat } from "./lib/bot/access.js";
 import { registerCommands } from "./lib/bot/commands.js";
+import { createInboundDedupe } from "./lib/bot/inbound-dedupe.js";
 import {
 	createLogHelpers,
 	createRequestLoggerMiddleware,
@@ -259,6 +260,8 @@ export async function createBot(options: CreateBotOptions) {
 		COMMENTS_FETCH_BUDGET_MS,
 		TELEGRAM_TIMEOUT_SECONDS,
 		TELEGRAM_TEXT_CHUNK_LIMIT,
+		TELEGRAM_LINK_PREVIEW,
+		TELEGRAM_ABORT_ON_NEW_MESSAGE,
 		ALLOWED_TG_GROUPS,
 		TELEGRAM_GROUP_REQUIRE_MENTION,
 		IMAGE_MAX_BYTES,
@@ -300,6 +303,8 @@ export async function createBot(options: CreateBotOptions) {
 		AGENT_CONFIG_OVERRIDES,
 		SUBAGENT_MODEL_PROVIDER,
 		SUBAGENT_MODEL_ID,
+		INBOUND_DEDUPE_TTL_MS,
+		INBOUND_DEDUPE_MAX,
 		SERVICE_NAME,
 		RELEASE_VERSION,
 		COMMIT_HASH,
@@ -916,10 +921,43 @@ export async function createBot(options: CreateBotOptions) {
 			logger,
 			onDebugLog: options.onDebugLog,
 		});
-	const { sendText, appendSources, createTextStream } = createTelegramHelpers({
-		textChunkLimit: TELEGRAM_TEXT_CHUNK_LIMIT,
-		logDebug,
+	const { sendText, appendSources, createTextStream, retryTelegramCall } =
+		createTelegramHelpers({
+			textChunkLimit: TELEGRAM_TEXT_CHUNK_LIMIT,
+			logDebug,
+			linkPreviewEnabled: TELEGRAM_LINK_PREVIEW,
+		});
+	const inboundDedupe = createInboundDedupe({
+		ttlMs: INBOUND_DEDUPE_TTL_MS,
+		maxPerChat: INBOUND_DEDUPE_MAX,
 	});
+	const inFlightByChat = new Map<string, AbortController>();
+
+	const shouldSkipInbound = (ctx: BotContext) => {
+		if (ctx.state.systemEvent) return false;
+		const chatId = ctx.chat?.id?.toString() ?? "";
+		const messageId = ctx.message?.message_id;
+		if (!chatId || typeof messageId !== "number") return false;
+		return inboundDedupe.shouldSkip(chatId, messageId);
+	};
+
+	const abortInFlight = (chatId: string, reason: string) => {
+		const current = inFlightByChat.get(chatId);
+		if (!current) return false;
+		current.abort(new Error(reason));
+		return true;
+	};
+
+	const registerInFlight = (chatId: string, controller: AbortController) => {
+		inFlightByChat.set(chatId, controller);
+	};
+
+	const clearInFlight = (chatId: string, controller: AbortController) => {
+		const current = inFlightByChat.get(chatId);
+		if (current === controller) {
+			inFlightByChat.delete(chatId);
+		}
+	};
 
 	const trackerClient = createTrackerClient({
 		token: TRACKER_TOKEN ?? "",
@@ -1818,16 +1856,22 @@ export async function createBot(options: CreateBotOptions) {
 		}>;
 		replyToMessageId?: number;
 	}) {
-		if (!params.ctx.chat?.id) return;
-		if (!("api" in params.ctx) || !params.ctx.api?.sendDocument) return;
+		const ctx = params.ctx;
+		const chatId = ctx?.chat?.id;
+		if (!chatId) return;
+		if (!("api" in ctx) || !ctx.api?.sendDocument) return;
 		for (const file of params.files) {
 			try {
-				await params.ctx.api.sendDocument(
-					params.ctx.chat.id,
-					new InputFile(file.buffer, file.filename),
-					params.replyToMessageId
-						? { reply_to_message_id: params.replyToMessageId }
-						: undefined,
+				await retryTelegramCall(
+					() =>
+						ctx.api.sendDocument(
+							chatId,
+							new InputFile(file.buffer, file.filename),
+							params.replyToMessageId
+								? { reply_to_message_id: params.replyToMessageId }
+								: undefined,
+						),
+					"sendDocument",
 				);
 			} catch (error) {
 				logDebug("send attachment failed", { error: String(error) });
@@ -1841,12 +1885,18 @@ export async function createBot(options: CreateBotOptions) {
 		filename: string;
 		mimeType: string;
 	}) {
-		if (!params.ctx?.chat?.id) return;
-		if (!("api" in params.ctx) || !params.ctx.api?.sendDocument) return;
+		const ctx = params.ctx;
+		const chatId = ctx?.chat?.id;
+		if (!chatId) return;
+		if (!("api" in ctx) || !ctx.api?.sendDocument) return;
 		try {
-			await params.ctx.api.sendDocument(
-				params.ctx.chat.id,
-				new InputFile(params.buffer, params.filename),
+			await retryTelegramCall(
+				() =>
+					ctx.api.sendDocument(
+						chatId,
+						new InputFile(params.buffer, params.filename),
+					),
+				"sendDocument",
 			);
 		} catch (error) {
 			logDebug("send generated file failed", { error: String(error) });
@@ -1857,14 +1907,16 @@ export async function createBot(options: CreateBotOptions) {
 		ctx?: BotContext;
 		path: string;
 	}) {
-		if (!params.ctx?.chat?.id) return;
-		if (!("api" in params.ctx) || !params.ctx.api?.sendPhoto) return;
+		const ctx = params.ctx;
+		const chatId = ctx?.chat?.id;
+		if (!chatId) return;
+		if (!("api" in ctx) || !ctx.api?.sendPhoto) return;
 		try {
 			const buffer = await fs.readFile(params.path);
 			const filename = params.path.split("/").pop() ?? "screenshot.png";
-			await params.ctx.api.sendPhoto(
-				params.ctx.chat.id,
-				new InputFile(buffer, filename),
+			await retryTelegramCall(
+				() => ctx.api.sendPhoto(chatId, new InputFile(buffer, filename)),
+				"sendPhoto",
 			);
 			await fs.unlink(params.path).catch(() => undefined);
 		} catch (error) {
@@ -1911,6 +1963,31 @@ export async function createBot(options: CreateBotOptions) {
 			error.description.includes(needle)
 		) {
 			return true;
+		}
+		return false;
+	};
+
+	const isAbortError = (error: unknown) => {
+		if (!error) return false;
+		if (typeof error === "string") {
+			const msg = error.toLowerCase();
+			return msg.includes("aborted") || msg.includes("aborterror");
+		}
+		if (typeof error === "object") {
+			if (
+				"name" in error &&
+				typeof (error as { name?: unknown }).name === "string" &&
+				(error as { name: string }).name.toLowerCase() === "aborterror"
+			) {
+				return true;
+			}
+			if (
+				"message" in error &&
+				typeof (error as { message?: unknown }).message === "string"
+			) {
+				const msg = (error as { message: string }).message.toLowerCase();
+				return msg.includes("aborted") || msg.includes("aborterror");
+			}
 		}
 		return false;
 	};
@@ -1964,7 +2041,10 @@ export async function createBot(options: CreateBotOptions) {
 			if (!nextText || nextText === lastSentText) return;
 			editInFlight = true;
 			try {
-				await ctx.api.editMessageText(chatId, messageId, nextText);
+				await retryTelegramCall(
+					() => ctx.api.editMessageText(chatId, messageId, nextText),
+					"editMessageText",
+				);
 				lastSentText = nextText;
 			} catch (error) {
 				if (isTelegramMessageNotModified(error)) {
@@ -2018,10 +2098,10 @@ export async function createBot(options: CreateBotOptions) {
 		const trimmed = fullText.trim();
 		if (!trimmed) {
 			try {
-				await ctx.api.editMessageText(
-					chatId,
-					messageId,
-					"Ошибка: пустой ответ.",
+				await retryTelegramCall(
+					() =>
+						ctx.api.editMessageText(chatId, messageId, "Ошибка: пустой ответ."),
+					"editMessageText_empty",
 				);
 			} catch (error) {
 				if (!isTelegramMessageNotModified(error)) {
@@ -2035,7 +2115,10 @@ export async function createBot(options: CreateBotOptions) {
 		const chunks = markdownToTelegramChunks(reply, limit);
 		if (chunks.length === 0) {
 			try {
-				await ctx.api.editMessageText(chatId, messageId, reply);
+				await retryTelegramCall(
+					() => ctx.api.editMessageText(chatId, messageId, reply),
+					"editMessageText_final",
+				);
 			} catch (error) {
 				if (!isTelegramMessageNotModified(error)) {
 					throw error;
@@ -2045,13 +2128,20 @@ export async function createBot(options: CreateBotOptions) {
 		}
 		const first = chunks[0];
 		try {
-			await ctx.api.editMessageText(chatId, messageId, first.html, {
-				parse_mode: "HTML",
-			});
+			await retryTelegramCall(
+				() =>
+					ctx.api.editMessageText(chatId, messageId, first.html, {
+						parse_mode: "HTML",
+					}),
+				"editMessageText_html",
+			);
 		} catch (error) {
 			if (!isTelegramMessageNotModified(error)) {
 				try {
-					await ctx.api.editMessageText(chatId, messageId, first.text);
+					await retryTelegramCall(
+						() => ctx.api.editMessageText(chatId, messageId, first.text),
+						"editMessageText_plain",
+					);
 				} catch (fallbackError) {
 					if (!isTelegramMessageNotModified(fallbackError)) {
 						throw fallbackError;
@@ -2189,14 +2279,30 @@ export async function createBot(options: CreateBotOptions) {
 		return { stream };
 	}
 
+	const prepareInboundHandling = (ctx: BotContext) => {
+		if (shouldSkipInbound(ctx)) return false;
+		if (TELEGRAM_ABORT_ON_NEW_MESSAGE) {
+			const chatId = ctx.chat?.id?.toString();
+			if (chatId) {
+				const aborted = abortInFlight(chatId, "new_message");
+				if (aborted) {
+					logDebug("aborted in-flight run", { chatId });
+				}
+			}
+		}
+		return true;
+	};
+
 	bot.on("message:text", async (ctx) => {
 		setLogContext(ctx, { message_type: "text" });
+		if (!prepareInboundHandling(ctx)) return;
 		const text = ctx.message.text.trim();
 		await handleIncomingText(ctx, text);
 	});
 
 	bot.on("message:photo", async (ctx) => {
 		setLogContext(ctx, { message_type: "photo" });
+		if (!prepareInboundHandling(ctx)) return;
 		const caption = ctx.message.caption?.trim() ?? "";
 		try {
 			const files = await loadTelegramImageParts(ctx);
@@ -2210,6 +2316,7 @@ export async function createBot(options: CreateBotOptions) {
 
 	bot.on("message:document", async (ctx) => {
 		setLogContext(ctx, { message_type: "document" });
+		if (!prepareInboundHandling(ctx)) return;
 		const caption = ctx.message.caption?.trim() ?? "";
 		try {
 			const payload = await loadTelegramDocumentPayload(ctx);
@@ -2237,6 +2344,7 @@ export async function createBot(options: CreateBotOptions) {
 
 	bot.on("message:voice", async (ctx) => {
 		setLogContext(ctx, { message_type: "voice" });
+		if (!prepareInboundHandling(ctx)) return;
 		const voice = ctx.message.voice;
 		if (!voice?.file_id) {
 			await sendText(ctx, "Не удалось прочитать голосовое сообщение.");
@@ -2358,6 +2466,7 @@ export async function createBot(options: CreateBotOptions) {
 		let cancelFileStatus: (() => void) | null = null;
 		let queueFollowup: ((toolNames: string[]) => void) | null = null;
 		let taskId: string | undefined;
+		let runAbortController: AbortController | null = null;
 		const handleToolStep = (toolNames: string[]) => {
 			onToolStep?.(toolNames);
 			queueFollowup?.(toolNames);
@@ -2388,6 +2497,10 @@ export async function createBot(options: CreateBotOptions) {
 			}
 			stopTyping = startTypingHeartbeat(ctx);
 			chatId = ctx.chat?.id?.toString() ?? "";
+			if (TELEGRAM_ABORT_ON_NEW_MESSAGE && chatId) {
+				runAbortController = new AbortController();
+				registerInFlight(chatId, runAbortController);
+			}
 			const { workspaceId, sessionKey, workspaceSnapshot, historyText } =
 				await buildConversationContext({
 					ctx,
@@ -2539,14 +2652,15 @@ export async function createBot(options: CreateBotOptions) {
 				agent: ToolLoopAgent,
 				prompt: string,
 				agentFiles: FilePart[],
+				abortSignal?: AbortSignal,
 			) => {
 				if (agentFiles.length === 0) {
-					return agent.generate({ prompt });
+					return agent.generate({ prompt, abortSignal });
 				}
 				const messages = await convertToModelMessages([
 					buildUserUIMessage(prompt, agentFiles),
 				]);
-				return agent.generate({ messages });
+				return agent.generate({ messages, abortSignal });
 			};
 			const docxExtracted = await extractDocxFromFileParts(files);
 			const filesForModel = docxExtracted.files;
@@ -2619,6 +2733,7 @@ export async function createBot(options: CreateBotOptions) {
 						agent,
 						researchPrompt,
 						pendingFiles,
+						runAbortController?.signal,
 					);
 					clearAllStatuses();
 					const replyText = result.text?.trim();
@@ -2829,6 +2944,7 @@ export async function createBot(options: CreateBotOptions) {
 										agent,
 										pendingRequest.question,
 										fileParts,
+										runAbortController?.signal,
 									);
 									const replyText = result.text?.trim();
 									const sources = (
@@ -2897,7 +3013,12 @@ export async function createBot(options: CreateBotOptions) {
 					? webSearchEnabled
 					: WEB_SEARCH_ENABLED;
 			const generateAgent = async (agent: ToolLoopAgent) =>
-				generateAgentWithFiles(agent, modelPrompt, filesForModel);
+				generateAgentWithFiles(
+					agent,
+					modelPrompt,
+					filesForModel,
+					runAbortController?.signal,
+				);
 			const sprintQuery = isSprintQuery(promptText);
 			const jiraKeysFromUrl = extractJiraIssueKeysFromUrls(promptText);
 			const trackerKeysFromUrl = extractTrackerIssueKeysFromUrls(promptText);
@@ -3429,6 +3550,10 @@ export async function createBot(options: CreateBotOptions) {
 			await sendReply(`Ошибка: ${String(lastError ?? "unknown")}`);
 		} catch (error) {
 			clearAllStatuses();
+			if (runAbortController?.signal.aborted && isAbortError(error)) {
+				logDebug("request aborted", { chatId, error: String(error) });
+				return;
+			}
 			setLogError(ctx, error);
 			if (taskClient && taskId) {
 				await taskClient.fail({ id: taskId, error: String(error) });
@@ -3439,6 +3564,9 @@ export async function createBot(options: CreateBotOptions) {
 			clearAllStatuses();
 			cancelFileStatus?.();
 			stopTyping?.();
+			if (runAbortController && chatId) {
+				clearInFlight(chatId, runAbortController);
+			}
 		}
 	}
 
@@ -3970,6 +4098,7 @@ export async function createBot(options: CreateBotOptions) {
 	}
 
 	bot.on("message", (ctx) => {
+		if (!prepareInboundHandling(ctx)) return;
 		if (
 			!ctx.state.systemEvent &&
 			isGroupChat(ctx) &&

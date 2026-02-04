@@ -10,6 +10,7 @@ type SendTextContext = {
 type TelegramHelpersOptions = {
 	textChunkLimit: number;
 	logDebug: (message: string, data?: unknown) => void;
+	linkPreviewEnabled?: boolean;
 };
 
 type RetryConfig = {
@@ -36,7 +37,7 @@ const TELEGRAM_PARSE_ERR_RE = regex.as(
 );
 
 export function createTelegramHelpers(options: TelegramHelpersOptions) {
-	const { textChunkLimit, logDebug } = options;
+	const { textChunkLimit, logDebug, linkPreviewEnabled } = options;
 
 	function formatError(error: unknown) {
 		if (typeof error === "string") return error;
@@ -136,12 +137,17 @@ export function createTelegramHelpers(options: TelegramHelpersOptions) {
 		const replyOptions = options?.parse_mode
 			? options
 			: { ...(options ?? {}), parse_mode: "HTML" };
+		const replyWithPreview =
+			linkPreviewEnabled === false &&
+			!Object.hasOwn(replyOptions, "link_preview_options")
+				? { ...replyOptions, link_preview_options: { is_disabled: true } }
+				: replyOptions;
 		const formatted = formatTelegram(text);
 
 		try {
 			if (formatted.length <= limit) {
 				await retryTelegram(
-					() => ctx.reply(formatted, replyOptions),
+					() => ctx.reply(formatted, replyWithPreview),
 					"sendMessage",
 				);
 				return;
@@ -149,7 +155,7 @@ export function createTelegramHelpers(options: TelegramHelpersOptions) {
 			for (let i = 0; i < formatted.length; i += limit) {
 				const chunk = formatted.slice(i, i + limit);
 				await retryTelegram(
-					() => ctx.reply(chunk, replyOptions),
+					() => ctx.reply(chunk, replyWithPreview),
 					"sendMessage",
 				);
 			}
@@ -162,9 +168,14 @@ export function createTelegramHelpers(options: TelegramHelpersOptions) {
 
 		const plainOptions = { ...(options ?? {}) };
 		delete (plainOptions as { parse_mode?: string }).parse_mode;
+		const plainWithPreview =
+			linkPreviewEnabled === false &&
+			!Object.hasOwn(plainOptions, "link_preview_options")
+				? { ...plainOptions, link_preview_options: { is_disabled: true } }
+				: plainOptions;
 		if (text.length <= limit) {
 			await retryTelegram(
-				() => ctx.reply(text, plainOptions),
+				() => ctx.reply(text, plainWithPreview),
 				"sendMessage_plain",
 			);
 			return;
@@ -172,7 +183,7 @@ export function createTelegramHelpers(options: TelegramHelpersOptions) {
 		for (let i = 0; i < text.length; i += limit) {
 			const chunk = text.slice(i, i + limit);
 			await retryTelegram(
-				() => ctx.reply(chunk, plainOptions),
+				() => ctx.reply(chunk, plainWithPreview),
 				"sendMessage_plain",
 			);
 		}
@@ -222,5 +233,6 @@ export function createTelegramHelpers(options: TelegramHelpersOptions) {
 		formatTelegram,
 		appendSources,
 		createTextStream,
+		retryTelegramCall: retryTelegram,
 	};
 }
