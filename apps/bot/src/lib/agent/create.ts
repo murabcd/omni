@@ -1143,21 +1143,21 @@ export function createAgentToolsFactory(
 								const buffer =
 									file.uint8Array ??
 									(file.base64 ? decodeBase64Payload(file.base64) : null);
-							if (deps.imageStore && buffer) {
-								const stored = await deps.imageStore.putImage({
-									buffer,
-									mediaType,
-									filename,
-									chatId: options?.chatId,
-									userId: options?.ctx?.from?.id?.toString(),
-								});
-								images.push({
-									mediaType: stored.mediaType,
-									url: stored.url,
-									filename: stored.filename ?? filename,
-								});
-								continue;
-							}
+								if (deps.imageStore && buffer) {
+									const stored = await deps.imageStore.putImage({
+										buffer,
+										mediaType,
+										filename,
+										chatId: options?.chatId,
+										userId: options?.ctx?.from?.id?.toString(),
+									});
+									images.push({
+										mediaType: stored.mediaType,
+										url: stored.url,
+										filename: stored.filename ?? filename,
+									});
+									continue;
+								}
 								if (buffer) {
 									images.push(
 										toFilePart({

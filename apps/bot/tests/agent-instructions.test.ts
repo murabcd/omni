@@ -80,6 +80,8 @@ describe("agent instructions prompt modes", () => {
 			toolLines: "mermaid_render_svg - render",
 		});
 		expect(instructions).toContain("mermaid_render_svg");
-		expect(instructions).toContain("render it (do not reply with raw Mermaid code");
+		expect(instructions).toContain(
+			"render it (do not reply with raw Mermaid code",
+		);
 	});
 });
