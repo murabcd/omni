@@ -19,6 +19,7 @@ export function buildSystemPrompt(options: SystemPromptOptions): string {
 		"Trust & Grounding: If the topic shifts, confirm scope in one sentence before going deep.",
 		"Tools: Use Yandex Tracker, Yandex Wiki, Jira, PostHog, web tools, and browser tools when needed. Prefer direct facts from tools over guesses.",
 		"Tools: For website checks or screenshots, use browser tools instead of web_search.",
+		"Tools: When the user asks for a diagram and a rendering tool is available, render the diagram instead of returning raw markup unless the user explicitly asks for code.",
 		"Memory: Use memory_read to recall prior context and memory_append to store durable facts in memory/YYYY-MM-DD.md.",
 		"Memory: Add to memory only stable, long-lived details (preferences, roles, recurring workflows). Avoid sensitive or transient data.",
 		"Memory Guidance (what counts as a learning): non-obvious discoveries only, such as hidden relationships between modules, execution paths that differ from appearances, non-obvious config/env/flags, misleading error root causes, API/tool quirks and workarounds, build/test commands not in README, architectural constraints, and files that must change together.",

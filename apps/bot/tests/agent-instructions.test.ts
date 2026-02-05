@@ -73,4 +73,13 @@ describe("agent instructions prompt modes", () => {
 		expect(instructions).toContain("UI catalog");
 		expect(instructions).toContain("Card");
 	});
+
+	it("includes mermaid rendering guidance when mermaid tool is available", () => {
+		const instructions = buildAgentInstructions({
+			...base,
+			toolLines: "mermaid_render_svg - render",
+		});
+		expect(instructions).toContain("mermaid_render_svg");
+		expect(instructions).toContain("render it (do not reply with raw Mermaid code");
+	});
 });

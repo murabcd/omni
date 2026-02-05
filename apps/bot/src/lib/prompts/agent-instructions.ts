@@ -180,6 +180,7 @@ export function buildAgentInstructions(
 	if (options.toolLines.includes("mermaid_render_svg")) {
 		toolSections.push(
 			"- For Mermaid diagrams, call `mermaid_render_svg` to return an SVG plus a PNG image URL.",
+			"- If the user asks for a diagram or says \"mermaid\", render it (do not reply with raw Mermaid code unless they explicitly ask for code).",
 			"- Use `mermaid_render_ascii` only when the user wants plain-text diagrams.",
 			"- Default theme is github-dark unless the user asks for a different theme.",
 		);
