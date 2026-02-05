@@ -2073,10 +2073,7 @@ export async function createBot(options: CreateBotOptions) {
 						pendingText = fullText.slice(0, limit);
 						scheduleEdit();
 					}
-				} else if (
-					value.type === "file" ||
-					value.type === "file-delta"
-				) {
+				} else if (value.type === "file") {
 					const file = value as {
 						mediaType?: unknown;
 						url?: unknown;

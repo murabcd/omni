@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import dotenv from "dotenv";
 import { createBot } from "./bot.js";
+import { GatewayWsClient } from "./lib/gateway/ws-client.js";
 import { createFsTextStore } from "./lib/storage/fs-store.js";
 import { createWorkerImageStore } from "./lib/storage/worker-image-store.js";
 import { createWorkerTextStore } from "./lib/storage/worker-text-store.js";
@@ -29,6 +30,9 @@ const WORKER_MEDIA_TIMEOUT_MS = Number.parseInt(
 	process.env.WORKER_MEDIA_TIMEOUT_MS ?? "20000",
 	10,
 );
+const GATEWAY_URL = process.env.GATEWAY_URL ?? "";
+const GATEWAY_TOKEN =
+	process.env.GATEWAY_TOKEN ?? process.env.ADMIN_API_TOKEN ?? "";
 
 try {
 	const soul = fs.readFileSync(SOUL_FILE_PATH, "utf8").trim();
@@ -107,6 +111,31 @@ const imageStore =
 			})
 		: undefined;
 
+const gatewayClient =
+	GATEWAY_URL && GATEWAY_TOKEN
+		? new GatewayWsClient({ url: GATEWAY_URL, token: GATEWAY_TOKEN })
+		: null;
+const cronClient = gatewayClient
+	? {
+			list: (params?: { includeDisabled?: boolean }) =>
+				gatewayClient.request<{ jobs?: unknown[] }>("cron.list", params ?? {}),
+			add: (params: Record<string, unknown>) =>
+				gatewayClient.request("cron.add", params),
+			remove: (params: { jobId: string }) =>
+				gatewayClient.request("cron.remove", params),
+			run: (params: { jobId: string; mode?: "due" | "force" }) =>
+				gatewayClient.request("cron.run", params),
+			update: (params: {
+				id?: string;
+				jobId?: string;
+				patch: Record<string, unknown>;
+			}) => gatewayClient.request("cron.update", params),
+			runs: (params: { id?: string; jobId?: string; limit?: number }) =>
+				gatewayClient.request("cron.runs", params),
+			status: () => gatewayClient.request("cron.status"),
+		}
+	: undefined;
+
 const localSessions = new Map<string, { timeZone?: string }>();
 const sessionClient = {
 	get: async ({ key }: { key: string }) => {
@@ -136,6 +165,7 @@ const { bot, allowedUpdates } = await createBot({
 	runtimeSkills,
 	getUptimeSeconds: () => process.uptime(),
 	onDebugLog,
+	cronClient,
 	sessionClient,
 	workspaceStore,
 	imageStore,
