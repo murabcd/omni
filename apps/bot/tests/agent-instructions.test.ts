@@ -72,6 +72,7 @@ describe("agent instructions prompt modes", () => {
 		expect(instructions).toContain("ui_publish");
 		expect(instructions).toContain("UI catalog");
 		expect(instructions).toContain("Card");
+		expect(instructions).toContain("UI quality rules");
 	});
 
 	it("includes mermaid rendering guidance when mermaid tool is available", () => {
@@ -83,5 +84,15 @@ describe("agent instructions prompt modes", () => {
 		expect(instructions).toContain(
 			"render it (do not reply with raw Mermaid code",
 		);
+	});
+
+	it("includes subagent guidance when subagent tools are available", () => {
+		const instructions = buildAgentInstructions({
+			...base,
+			toolLines: "subagent_tracker - delegate",
+		});
+		expect(instructions).toContain("subagent tools");
+		expect(instructions).toContain("context-heavy tasks");
+		expect(instructions).toContain("subagent_route");
 	});
 });

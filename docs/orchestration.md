@@ -7,6 +7,13 @@ read_when:
 # Orchestration (sub-agents)
 
 Omni can spawn sub-agents for specialized work (tracker/jira/posthog/web/memory).
+There are two paths:
+
+- **Tool-based subagents** (AI SDK): the main agent calls `subagent_route` to
+  pick a target, then invokes a `subagent_*` tool for a concise summary.
+- **Hook-based background subagents**: `spawn_subagent` actions run asynchronously
+  and announce results back into the chat.
+
 Sub-agents default to the same model as the main agent, but you can override
 model and provider.
 
@@ -40,3 +47,13 @@ Supported keys:
 - `provider`: `"openai"` or `"google"`
 - `modelId`: provider-specific model id
 - `maxSteps`, `timeoutMs`, `instructions`
+
+## Tool-based subagents (AI SDK)
+
+The AI SDK path uses a router tool to decide which subagent to call:
+
+- Call `subagent_route` first (router returns suggested subagents + rationale).
+- Then call the recommended `subagent_*` tool with a clear task.
+- The tool returns a concise summary, keeping the main context small.
+
+See `docs/subagents.md` for the full behavior and guidance.

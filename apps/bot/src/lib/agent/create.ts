@@ -37,6 +37,8 @@ import {
 import { z } from "zod";
 import type { ModelConfig } from "../../models-core.js";
 import type { RuntimeSkill } from "../../skills-core.js";
+import { routeRequest } from "../agents/orchestrator.js";
+import { isGroupChat } from "../bot/access.js";
 import {
 	buildCronExpr,
 	findCronJob,
@@ -292,6 +294,7 @@ export type CreateAgentToolsOptions = {
 	history?: string;
 	chatId?: string;
 	ctx?: BotContext;
+	modelId?: string;
 	webSearchEnabled?: boolean;
 	onToolStart?: (toolName: string) => void;
 	onToolResult?: (result: {
@@ -428,6 +431,15 @@ export type CreateAgentOptions = {
 export type AgentDeps = {
 	getAgentTools: () => Promise<ToolMeta[]>;
 	createAgentTools: AgentToolsFactory;
+	buildSubagentTools?: (params: {
+		baseTools: ToolSet;
+		ctx?: BotContext;
+		modelId: string;
+		modelRef: string;
+		modelName: string;
+		reasoning: string;
+		globalSoul?: string;
+	}) => ToolSet;
 	resolveReasoningFor: (config: ModelConfig) => string;
 	logDebug: (event: string, payload?: Record<string, unknown>) => void;
 	debugLogs: boolean;
@@ -591,6 +603,29 @@ export function createAgentToolsFactory(
 			chatType: options?.ctx?.chat?.type ?? "private",
 			chatId: options?.chatId ?? "unknown",
 		});
+
+		registerTool(
+			{
+				name: "subagent_route",
+				description:
+					"Recommend which subagent should handle a context-heavy task.",
+				source: "core",
+				origin: "orchestration",
+			},
+			tool({
+				description:
+					"Recommend which subagent should handle a context-heavy task.",
+				inputSchema: z.object({
+					prompt: z.string().min(1).describe("User request to route"),
+				}),
+				execute: async ({ prompt }) => {
+					const modelId = options?.modelId;
+					if (!modelId) return { agents: [] };
+					const isGroup = options?.ctx ? isGroupChat(options.ctx) : false;
+					return await routeRequest(prompt, modelId, isGroup);
+				},
+			}),
+		);
 
 		if (workspaceManager) {
 			const resolvePath = (path?: string) =>
@@ -3891,11 +3926,25 @@ export function createAgentFactory(deps: AgentDeps) {
 			skillsPrompt,
 			promptMode: options?.promptMode,
 		});
-		const agentTools = await deps.createAgentTools(options);
+		const agentTools = await deps.createAgentTools({
+			...(options ?? {}),
+			modelId: modelConfig.id,
+		});
+		const subagentTools =
+			deps.buildSubagentTools?.({
+				baseTools: agentTools,
+				ctx: options?.ctx,
+				modelId: modelConfig.id,
+				modelRef,
+				modelName: modelConfig.label ?? modelConfig.id,
+				reasoning: deps.resolveReasoningFor(modelConfig),
+				globalSoul: deps.soulPrompt,
+			}) ?? {};
+		const mergedTools = { ...agentTools, ...subagentTools };
 		return new ToolLoopAgent({
 			model: openai(modelConfig.id),
 			instructions,
-			tools: agentTools,
+			tools: mergedTools,
 			stopWhen: stepCountIs(6),
 			prepareCall: (params) => {
 				const messages = params.messages;

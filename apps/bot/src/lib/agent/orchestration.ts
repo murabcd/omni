@@ -33,7 +33,7 @@ export type OrchestrationHelpers = {
 		summaries: Array<{ agentId: string; text: string; toolUsage: string[] }>;
 	}) => string;
 	mergeHistoryBlocks: (primary?: string, extra?: string) => string;
-	resolveOrchestrationPolicy: (ctx: BotContext) => {
+	resolveOrchestrationPolicy: (ctx?: BotContext) => {
 		allowAgents?: OrchestrationAgentId[];
 		denyAgents: OrchestrationAgentId[];
 		budgets: Record<
@@ -159,17 +159,18 @@ export function createOrchestrationHelpers(
 		return primary ?? extra ?? "";
 	}
 
-	function resolveOrchestrationPolicy(ctx: BotContext) {
+	function resolveOrchestrationPolicy(ctx?: BotContext) {
+		const isGroup = ctx ? config.isGroupChat(ctx) : false;
 		const allowAgents = parseOrchestrationAgentList(config.allowAgentsRaw);
 		const denyAgents = new Set(
 			parseOrchestrationAgentList(config.denyAgentsRaw),
 		);
-		if (config.isGroupChat(ctx)) {
+		if (isGroup) {
 			denyAgents.add("web");
 			denyAgents.add("memory");
 		}
 		const blockedTools = new Set<string>();
-		if (config.isGroupChat(ctx)) {
+		if (isGroup) {
 			blockedTools.add("web_search");
 			blockedTools.add("memory_read");
 			blockedTools.add("memory_append");

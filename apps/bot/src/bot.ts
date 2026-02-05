@@ -26,7 +26,10 @@ import {
 	createIssueAgent,
 	createMultiIssueAgent,
 } from "./lib/agents/issue-agent.js";
-import { runOrchestration } from "./lib/agents/orchestrator.js";
+import {
+	buildSubagentToolset,
+	type OrchestrationAgentId,
+} from "./lib/agents/orchestrator.js";
 import {
 	buildJiraTools,
 	buildMemoryTools as buildMemorySubagentTools,
@@ -115,6 +118,7 @@ import {
 	parseApprovalList,
 } from "./lib/tools/approvals.js";
 import {
+	filterToolMapByPolicy,
 	filterToolMetasByPolicy,
 	mergeToolPolicies,
 	parseToolPolicyVariants,
@@ -847,6 +851,60 @@ export async function createBot(options: CreateBotOptions) {
 		}
 
 		// memory tools are registered in agentTools only (shared list via registry)
+		register(
+			{
+				name: "subagent_route",
+				description: "Recommend which subagent should run for a request.",
+				source: "core",
+				origin: "orchestration",
+			},
+			agentTools,
+		);
+		register(
+			{
+				name: "subagent_tracker",
+				description: "Delegate a task to the tracker subagent.",
+				source: "core",
+				origin: "orchestration",
+			},
+			agentTools,
+		);
+		register(
+			{
+				name: "subagent_jira",
+				description: "Delegate a task to the Jira subagent.",
+				source: "core",
+				origin: "orchestration",
+			},
+			agentTools,
+		);
+		register(
+			{
+				name: "subagent_posthog",
+				description: "Delegate a task to the PostHog subagent.",
+				source: "core",
+				origin: "orchestration",
+			},
+			agentTools,
+		);
+		register(
+			{
+				name: "subagent_web",
+				description: "Delegate a task to the web research subagent.",
+				source: "core",
+				origin: "orchestration",
+			},
+			agentTools,
+		);
+		register(
+			{
+				name: "subagent_memory",
+				description: "Delegate a task to the memory subagent.",
+				source: "core",
+				origin: "orchestration",
+			},
+			agentTools,
+		);
 
 		register(
 			{
@@ -1165,12 +1223,7 @@ export async function createBot(options: CreateBotOptions) {
 			clearTimeout(timer);
 		};
 	}
-	const {
-		buildOrchestrationPlan,
-		buildOrchestrationSummary,
-		mergeHistoryBlocks,
-		resolveOrchestrationPolicy,
-	} = createOrchestrationHelpers({
+	const { resolveOrchestrationPolicy } = createOrchestrationHelpers({
 		allowAgentsRaw: ORCHESTRATION_ALLOW_AGENTS,
 		denyAgentsRaw: ORCHESTRATION_DENY_AGENTS,
 		subagentMaxSteps: ORCHESTRATION_SUBAGENT_MAX_STEPS,
@@ -1300,9 +1353,73 @@ export async function createBot(options: CreateBotOptions) {
 				: "1K",
 	});
 
+	function buildSubagentToolsForAgent(params: {
+		baseTools: ToolSet;
+		ctx?: BotContext;
+		modelId: string;
+		modelRef: string;
+		modelName: string;
+		reasoning: string;
+		globalSoul?: string;
+	}): ToolSet {
+		const policy = resolveOrchestrationPolicy(params.ctx);
+		const allowed = policy.allowAgents ? new Set(policy.allowAgents) : null;
+		const denied = new Set<OrchestrationAgentId>(policy.denyAgents ?? []);
+		const shouldInclude = (agentId: OrchestrationAgentId) => {
+			if (denied.has(agentId)) return false;
+			if (allowed && !allowed.has(agentId)) return false;
+			return true;
+		};
+		const toolsByAgent: Record<OrchestrationAgentId, ToolSet> = {
+			tracker: buildTrackerTools(params.baseTools),
+			jira: buildJiraTools(params.baseTools),
+			posthog: buildPosthogTools(params.baseTools),
+			web: buildWebTools(params.baseTools),
+			memory: buildMemorySubagentTools(params.baseTools),
+		};
+		const filtered: Record<OrchestrationAgentId, ToolSet> = {
+			tracker: {},
+			jira: {},
+			posthog: {},
+			web: {},
+			memory: {},
+		};
+		for (const [agentId, agentTools] of Object.entries(toolsByAgent) as Array<
+			[OrchestrationAgentId, ToolSet]
+		>) {
+			if (!shouldInclude(agentId)) continue;
+			if (Object.keys(agentTools).length === 0) continue;
+			filtered[agentId] = agentTools;
+		}
+		const subagentTools = buildSubagentToolset({
+			toolsByAgent: filtered,
+			modelId: params.modelId,
+			promptContext: {
+				modelRef: params.modelRef,
+				modelName: params.modelName,
+				reasoning: params.reasoning,
+				globalSoul: params.globalSoul,
+			},
+			getModel: getSubagentModel,
+			defaultSubagentModelProvider: subagentProvider,
+			defaultSubagentModelId: subagentModelId,
+			budgets: policy.budgets,
+			agentOverrides: policy.agentOverrides,
+			defaultMaxSteps: policy.defaultMaxSteps,
+			defaultTimeoutMs: policy.defaultTimeoutMs,
+			hooks: policy.hooks,
+		});
+		const mergedPolicy = mergeToolPolicies(
+			toolPolicy,
+			resolveChatToolPolicy(params.ctx),
+		);
+		return filterToolMapByPolicy(subagentTools, mergedPolicy).tools as ToolSet;
+	}
+
 	const createAgent = createAgentFactory({
 		getAgentTools,
 		createAgentTools,
+		buildSubagentTools: buildSubagentToolsForAgent,
 		resolveReasoningFor,
 		logDebug,
 		debugLogs: DEBUG_LOGS,
@@ -3422,55 +3539,6 @@ export async function createBot(options: CreateBotOptions) {
 				}
 				try {
 					setLogContext(ctx, { model_ref: ref, model_id: config.id });
-					const plan = await buildOrchestrationPlan(modelPrompt, ctx);
-					const orchestrationPolicy = resolveOrchestrationPolicy(ctx);
-					let orchestrationSummary = "";
-					if (plan.agents.length > 0) {
-						const allTools = await createAgentTools({
-							history: historyText,
-							chatId,
-							ctx,
-							webSearchEnabled: allowWebSearch,
-						});
-						const toolsByAgent = {
-							tracker: buildTrackerTools(allTools),
-							jira: buildJiraTools(allTools),
-							posthog: buildPosthogTools(allTools),
-							web: buildWebTools(allTools),
-							memory: buildMemorySubagentTools(allTools),
-						};
-						const orchestrationResult = await runOrchestration(plan, {
-							prompt: modelPrompt,
-							modelId: config.id,
-							toolsByAgent,
-							isGroupChat: isGroupChat(ctx),
-							log: logger.info,
-							promptMode: "minimal",
-							promptContext: {
-								modelRef: ref,
-								modelName: config.label ?? config.id,
-								reasoning: resolveReasoningFor(config),
-								globalSoul: workspaceSnapshot?.soul ?? SOUL_PROMPT,
-							},
-							getModel: getSubagentModel,
-							defaultSubagentModelProvider: subagentProvider,
-							defaultSubagentModelId: subagentModelId,
-							allowAgents: orchestrationPolicy.allowAgents,
-							denyAgents: orchestrationPolicy.denyAgents,
-							budgets: orchestrationPolicy.budgets,
-							parallelism: orchestrationPolicy.parallelism,
-							agentOverrides: orchestrationPolicy.agentOverrides,
-							defaultMaxSteps: orchestrationPolicy.defaultMaxSteps,
-							defaultTimeoutMs: orchestrationPolicy.defaultTimeoutMs,
-							hooks: orchestrationPolicy.hooks,
-						});
-						orchestrationSummary =
-							buildOrchestrationSummary(orchestrationResult);
-					}
-					const mergedHistory = mergeHistoryBlocks(
-						historyText,
-						orchestrationSummary,
-					);
 					const agent = await createAgent(modelPrompt, ref, config, {
 						onCandidates: (candidates) => {
 							updateChatState((state) => {
@@ -3480,7 +3548,7 @@ export async function createBot(options: CreateBotOptions) {
 							});
 						},
 						recentCandidates: chatState?.lastCandidates,
-						history: mergedHistory,
+						history: historyText,
 						workspaceSnapshot,
 						chatId,
 						userName,
@@ -4044,54 +4112,6 @@ export async function createBot(options: CreateBotOptions) {
 				return createTextStream(modelNotConfigured);
 			}
 			setLogContext(ctx, { model_ref: activeModelRef, model_id: config.id });
-			const plan = await buildOrchestrationPlan(modelPrompt, ctx);
-			const orchestrationPolicy = resolveOrchestrationPolicy(ctx);
-			let orchestrationSummary = "";
-			if (plan.agents.length > 0) {
-				const allTools = await createAgentTools({
-					history: historyText,
-					chatId,
-					ctx,
-					webSearchEnabled: allowWebSearch,
-				});
-				const toolsByAgent = {
-					tracker: buildTrackerTools(allTools),
-					jira: buildJiraTools(allTools),
-					posthog: buildPosthogTools(allTools),
-					web: buildWebTools(allTools),
-					memory: buildMemorySubagentTools(allTools),
-				};
-				const orchestrationResult = await runOrchestration(plan, {
-					prompt: modelPrompt,
-					modelId: config.id,
-					toolsByAgent,
-					isGroupChat: isGroupChat(ctx),
-					log: logger.info,
-					promptMode: "minimal",
-					promptContext: {
-						modelRef: activeModelRef,
-						modelName: config.label ?? config.id,
-						reasoning: resolveReasoningFor(config),
-						globalSoul: workspaceSnapshot?.soul ?? SOUL_PROMPT,
-					},
-					getModel: getSubagentModel,
-					defaultSubagentModelProvider: subagentProvider,
-					defaultSubagentModelId: subagentModelId,
-					allowAgents: orchestrationPolicy.allowAgents,
-					denyAgents: orchestrationPolicy.denyAgents,
-					budgets: orchestrationPolicy.budgets,
-					parallelism: orchestrationPolicy.parallelism,
-					agentOverrides: orchestrationPolicy.agentOverrides,
-					defaultMaxSteps: orchestrationPolicy.defaultMaxSteps,
-					defaultTimeoutMs: orchestrationPolicy.defaultTimeoutMs,
-					hooks: orchestrationPolicy.hooks,
-				});
-				orchestrationSummary = buildOrchestrationSummary(orchestrationResult);
-			}
-			const mergedHistory = mergeHistoryBlocks(
-				historyText,
-				orchestrationSummary,
-			);
 			const agent = await createAgent(modelPrompt, activeModelRef, config, {
 				onCandidates: (candidates) => {
 					updateChatState((state) => {
@@ -4101,7 +4121,7 @@ export async function createBot(options: CreateBotOptions) {
 					});
 				},
 				recentCandidates: chatState?.lastCandidates,
-				history: mergedHistory,
+				history: historyText,
 				workspaceSnapshot,
 				chatId,
 				userName,

@@ -125,6 +125,99 @@ function buildSubagentSystemPrompt(params: {
 		.join("\n\n");
 }
 
+export function buildSubagentToolset(params: {
+	toolsByAgent: Record<OrchestrationAgentId, ToolSet>;
+	modelId: string;
+	promptContext?: OrchestrationContext["promptContext"];
+	getModel?: (provider: "openai" | "google", modelId: string) => LanguageModel;
+	defaultSubagentModelProvider?: "openai" | "google";
+	defaultSubagentModelId?: string;
+	agentOverrides?: Record<
+		string,
+		{
+			modelId?: string;
+			provider?: "openai" | "google";
+			maxSteps?: number;
+			timeoutMs?: number;
+			instructions?: string;
+		}
+	>;
+	budgets?: Partial<
+		Record<
+			OrchestrationAgentId,
+			{ maxSteps?: number; maxToolCalls?: number; timeoutMs?: number }
+		>
+	>;
+	defaultMaxSteps?: number;
+	defaultTimeoutMs?: number;
+	hooks?: OrchestrationContext["hooks"];
+}): ToolSet {
+	const tools: ToolSet = {};
+	const modelFactory =
+		params.getModel ??
+		((provider: "openai" | "google", modelId: string) =>
+			provider === "google" ? openai(modelId) : openai(modelId));
+	const defaultProvider = params.defaultSubagentModelProvider ?? "openai";
+	const defaultMaxSteps = params.defaultMaxSteps ?? 3;
+	const defaultTimeoutMs = params.defaultTimeoutMs ?? 20_000;
+
+	for (const [agentId, agentTools] of Object.entries(
+		params.toolsByAgent,
+	) as Array<[OrchestrationAgentId, ToolSet]>) {
+		if (!agentTools || Object.keys(agentTools).length === 0) continue;
+		const budget = params.budgets?.[agentId];
+		const override = params.agentOverrides?.[agentId] ?? {};
+		const wrappedTools = wrapToolsForAgent(agentId, agentTools, {
+			maxToolCalls: budget?.maxToolCalls,
+			hooks: params.hooks,
+		});
+		const baseInstruction =
+			override.instructions ??
+			`You are the ${agentId} subagent. Use tools as needed. Provide a concise, actionable summary as your final response.`;
+		const toolNames = Object.keys(agentTools);
+		const instructions = buildSubagentSystemPrompt({
+			promptContext: params.promptContext,
+			toolNames,
+			baseInstruction,
+		});
+		const modelId =
+			override.modelId ?? params.defaultSubagentModelId ?? params.modelId;
+		const provider = override.provider ?? defaultProvider;
+		const maxSteps = override.maxSteps ?? budget?.maxSteps ?? defaultMaxSteps;
+		const timeoutMs =
+			override.timeoutMs ?? budget?.timeoutMs ?? defaultTimeoutMs;
+		const agent = new ToolLoopAgent({
+			model: modelFactory(provider, modelId),
+			instructions,
+			tools: wrappedTools,
+			stopWhen: stepCountIs(maxSteps),
+		});
+
+		const toolName = `subagent_${agentId}`;
+		tools[toolName] = tool({
+			description: `Delegate a context-heavy task to the ${agentId} subagent.`,
+			inputSchema: z.object({
+				task: z.string().min(1).describe("Task for the subagent"),
+			}),
+			execute: async ({ task }, { abortSignal }) => {
+				const result = await withTimeout(
+					agent.generate({ prompt: task, abortSignal }),
+					timeoutMs,
+				);
+				return result.text ?? "";
+			},
+			toModelOutput: ({ output }) => {
+				if (typeof output === "string") {
+					return { type: "text", value: output };
+				}
+				return { type: "json", value: output as never };
+			},
+		});
+	}
+
+	return tools;
+}
+
 function buildRouterTool() {
 	return tool({
 		description:

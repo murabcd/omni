@@ -1,15 +1,17 @@
 ---
-summary: "Sub-agents: isolated background runs that announce results back to the chat"
+summary: "Background sub-agents spawned by hooks"
 read_when:
   - You want background/parallel work that should not block the main turn
   - You are configuring hooks that spawn sub-agents
 ---
-# Sub-agents
+# Background sub-agents (hooks)
 
-Sub-agents are background agent runs spawned from the gateway. Each run is enqueued
+Sub-agents are background agent runs spawned from the gateway via hooks. Each run is enqueued
 and processed asynchronously, so it does not block the main turn. The run uses its
 own session key and workspace scope, then posts an **announce** message back into the
 original chat as a new turn.
+
+For tool-based subagents (AI SDK, synchronous in the same turn), see `docs/subagents.md`.
 
 ## How to spawn
 

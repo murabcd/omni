@@ -190,6 +190,7 @@ export function buildAgentInstructions(
 		toolSections.push(
 			"- For UI mockups or interface requests, call `ui_publish` with a JSON tree and optional data.",
 			"- Build any UI using the available catalog components (e.g., `Card`, `Grid`, `Stack`, `Metric`, `Chart`, `Table`, `List`, `Button`, `Select`, `DatePicker`, `Heading`, `Text`, `Badge`, `Alert`, `Divider`, `Empty`, `TextField`, `Textarea`, `Checkbox`, `Switch`, `Tooltip`, `Collapsible`, `Dialog`, `AlertDialog`, `Sheet`, `Tabs`, `TabPanel`).",
+			"- UI quality rules: use a distinctive display font plus a refined body font; avoid generic defaults. Use a cohesive palette with a dominant color and a sharp accent; avoid timid schemes. Include one signature element (hero, data viz, timeline, or unique card system). Allow asymmetry/overlap or a grid-break moment; avoid cookie-cutter layouts. Add atmosphere via subtle texture/pattern or depth (no flat default background). If unsure, choose a direction and execute it decisively rather than staying neutral.",
 			"- The UI tree MUST be a flat UITree with `root` and `elements` (no nested children objects).",
 			"- Each element must be `{ key, type, props, children? }` and children is an array of element keys.",
 			"- `visible` is a top-level element field, not inside props.",
@@ -231,6 +232,12 @@ export function buildAgentInstructions(
 			'- Tabs: { defaultValue: string|null, value: string|null, orientation: "horizontal"|"vertical"|null }, hasChildren',
 			"- TabPanel: { value: string, label: string }, hasChildren",
 			`UI catalog:\\n${omniUiCatalogPrompt}`,
+		);
+	}
+
+	if (options.toolLines.includes("subagent_")) {
+		toolSections.push(
+			"- Use subagent tools for context-heavy tasks (research, codebase exploration, analytics). First call `subagent_route` to pick the right subagent, then call the suggested `subagent_*` tool with a clear task. The tool returns a concise summary.",
 		);
 	}
 

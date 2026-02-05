@@ -74,6 +74,20 @@ SUBAGENT_MODEL_ID="gemini-2.5-flash"
 
 If `SUBAGENT_MODEL_PROVIDER=google`, ensure `GEMINI_API_KEY` is set.
 
+### Tool-based subagents (AI SDK)
+
+In chat, the bot can delegate to subagents via tools:
+
+- Call `subagent_route` first to pick the target subagent(s).
+- Then call the recommended `subagent_*` tool(s) to get a concise summary.
+
+This is synchronous (part of the same turn) and keeps the main context small.
+
+### Hook-based background subagents
+
+If you use `spawn_subagent` hooks, they run asynchronously and announce results
+back into the chat as a new turn. See `docs/tools/subagents.md`.
+
 ## Reply threading
 
 The bot replies to the triggering message in Telegram (uses `reply_to_message_id`)

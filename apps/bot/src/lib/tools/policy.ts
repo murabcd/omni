@@ -6,11 +6,12 @@ export type ToolPolicy = {
 };
 
 export const TOOL_GROUPS: Record<string, string[]> = {
-	"group:web": ["web_search"],
+	"group:web": ["web_search", "subagent_web"],
 	"group:tracker": [
 		"yandex_tracker_search",
 		"yandex_tracker_find_issue",
 		"yandex_tracker_issue_summary",
+		"subagent_tracker",
 		"issues_find",
 		"issue_get",
 		"issue_get_comments",
@@ -22,6 +23,7 @@ export const TOOL_GROUPS: Record<string, string[]> = {
 		"jira_issue_get",
 		"jira_issue_get_comments",
 		"jira_sprint_issues",
+		"subagent_jira",
 	],
 	"group:posthog": [
 		"actions-get-all",
@@ -56,6 +58,7 @@ export const TOOL_GROUPS: Record<string, string[]> = {
 		"survey-stats",
 		"surveys-get-all",
 		"surveys-global-stats",
+		"subagent_posthog",
 	],
 	"group:memory": [
 		"memory_read",
@@ -63,6 +66,7 @@ export const TOOL_GROUPS: Record<string, string[]> = {
 		"memory_write",
 		"memory_search",
 		"session_history",
+		"subagent_memory",
 	],
 	"group:yandex-wiki": [
 		"yandex_wiki_find_page",
@@ -117,6 +121,14 @@ export const TOOL_GROUPS: Record<string, string[]> = {
 	],
 	"group:ui": ["ui_publish"],
 	"group:image": ["gemini_image_generate"],
+	"group:subagent": [
+		"subagent_route",
+		"subagent_tracker",
+		"subagent_jira",
+		"subagent_posthog",
+		"subagent_web",
+		"subagent_memory",
+	],
 	"group:runtime-skills": [],
 };
 
