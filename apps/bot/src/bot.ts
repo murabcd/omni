@@ -2074,6 +2074,41 @@ export async function createBot(options: CreateBotOptions) {
 						scheduleEdit();
 					}
 				} else if (
+					value.type === "file" ||
+					value.type === "file-delta"
+				) {
+					const file = value as {
+						mediaType?: unknown;
+						url?: unknown;
+						filename?: unknown;
+					};
+					const url = typeof file.url === "string" ? file.url : "";
+					const mediaType =
+						typeof file.mediaType === "string" ? file.mediaType : "";
+					if (url) {
+						try {
+							if (mediaType.startsWith("image/")) {
+								await retryTelegramCall(
+									() => ctx.api.sendPhoto(chatId, url),
+									"sendPhoto_stream",
+								);
+							} else {
+								await retryTelegramCall(
+									() =>
+										ctx.api.sendDocument(
+											chatId,
+											new InputFile(url, file.filename as string | undefined),
+										),
+									"sendDocument_stream",
+								);
+							}
+						} catch (error) {
+							logDebug("telegram stream file send failed", {
+								error: String(error),
+							});
+						}
+					}
+				} else if (
 					value.type === "source-url" ||
 					value.type === "source-document"
 				) {

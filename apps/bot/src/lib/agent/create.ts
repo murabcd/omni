@@ -1005,8 +1005,12 @@ export function createAgentToolsFactory(
 					}
 
 					const images: Array<{ mediaType: string; url: string }> = [];
+					const isTelegram = Boolean(
+						options?.ctx && "api" in options.ctx && options.ctx.chat?.id,
+					);
 
 					if (
+						!isTelegram &&
 						deps.browserEnabled &&
 						deps.uiScreenshotEnabled !== false &&
 						url &&
@@ -1034,10 +1038,6 @@ export function createAgentToolsFactory(
 									url: stored.url,
 								});
 							}
-							await deps.browserSendFile?.({
-								ctx: options?.ctx,
-								path: screenshotPath,
-							});
 						} catch (error) {
 							deps.logDebug("ui screenshot failed", { error: String(error) });
 						} finally {
@@ -1143,41 +1143,21 @@ export function createAgentToolsFactory(
 								const buffer =
 									file.uint8Array ??
 									(file.base64 ? decodeBase64Payload(file.base64) : null);
-								if (deps.imageStore && buffer) {
-									const stored = await deps.imageStore.putImage({
-										buffer,
-										mediaType,
-										filename,
-										chatId: options?.chatId,
-										userId: options?.ctx?.from?.id?.toString(),
-									});
-									images.push({
-										mediaType: stored.mediaType,
-										url: stored.url,
-										filename: stored.filename ?? filename,
-									});
-									const ctxAny = options?.ctx as
-										| (BotContext & {
-												replyWithPhoto?: (
-													photo: string,
-													options?: Record<string, unknown>,
-												) => Promise<unknown>;
-										  })
-										| undefined;
-									if (ctxAny?.replyWithPhoto) {
-										try {
-											await ctxAny.replyWithPhoto(stored.url);
-										} catch (error) {
-											deps.logDebug(
-												"gemini_image_generate telegram send error",
-												{
-													error: String(error),
-												},
-											);
-										}
-									}
-									continue;
-								}
+							if (deps.imageStore && buffer) {
+								const stored = await deps.imageStore.putImage({
+									buffer,
+									mediaType,
+									filename,
+									chatId: options?.chatId,
+									userId: options?.ctx?.from?.id?.toString(),
+								});
+								images.push({
+									mediaType: stored.mediaType,
+									url: stored.url,
+									filename: stored.filename ?? filename,
+								});
+								continue;
+							}
 								if (buffer) {
 									images.push(
 										toFilePart({
@@ -1519,10 +1499,6 @@ export function createAgentToolsFactory(
 								error: String(error),
 							});
 						}
-						await deps.browserSendFile?.({
-							ctx: options?.ctx,
-							path: resolvedPath,
-						});
 						await fs.unlink(resolvedPath).catch(() => undefined);
 						return { ...result, saved: true, images };
 					},
