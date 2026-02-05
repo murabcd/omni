@@ -1633,15 +1633,17 @@ export function createAgentToolsFactory(
 							mediaType: "image/png",
 							filename: `mermaid-${Date.now()}.png`,
 						});
+						const imageMeta = {
+							url: stored.url,
+							mediaType: stored.mediaType,
+							filename: stored.filename,
+						};
 						return {
 							ok: true,
 							theme: themeName,
 							svg,
-							image: {
-								url: stored.url,
-								mediaType: stored.mediaType,
-								filename: stored.filename,
-							},
+							image: imageMeta,
+							images: [imageMeta],
 						};
 					} catch (error) {
 						return { error: String(error) };
