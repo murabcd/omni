@@ -28,6 +28,7 @@
 		"dotenv": "^16.6.1",
 		"firecrawl-aisdk": "^0.8.1",
 		"grammy": "^1.39.3",
+		"jsonrepair": "^3.13.2",
 		"mammoth": "^1.11.0",
 		"markdown-it": "^14.1.0",
 		"sharp": "^0.34.5",

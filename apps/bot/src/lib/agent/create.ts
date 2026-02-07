@@ -34,6 +34,7 @@ import {
 	searchTool,
 	statusTool,
 } from "firecrawl-aisdk";
+import { jsonrepair } from "jsonrepair";
 import { z } from "zod";
 import type { ModelConfig } from "../../models-core.js";
 import type { RuntimeSkill } from "../../skills-core.js";
@@ -126,11 +127,24 @@ type UiJsonPatch = {
 	value?: unknown;
 };
 
+function parseJsonWithRepair<T>(value: string): T | null {
+	try {
+		return JSON.parse(value) as T;
+	} catch {}
+
+	try {
+		return JSON.parse(jsonrepair(value)) as T;
+	} catch {
+		return null;
+	}
+}
+
 function parseUiPatchLine(line: string): UiJsonPatch | null {
 	try {
 		const trimmed = line.trim();
 		if (!trimmed || trimmed.startsWith("//")) return null;
-		return JSON.parse(trimmed) as UiJsonPatch;
+		const parsed = parseJsonWithRepair<UiJsonPatch>(trimmed);
+		return parsed ?? null;
 	} catch {
 		return null;
 	}
@@ -976,6 +990,12 @@ export function createAgentToolsFactory(
 							currentTree = applyUiPatch(currentTree, patch);
 						}
 						resolvedTree = currentTree;
+					}
+					if (typeof resolvedTree === "string") {
+						const parsedTree = parseJsonWithRepair<UITree>(resolvedTree);
+						if (parsedTree) {
+							resolvedTree = parsedTree;
+						}
 					}
 
 					const treeParse = omniUiCatalog.validateTree(resolvedTree);
