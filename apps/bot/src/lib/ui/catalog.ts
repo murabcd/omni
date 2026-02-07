@@ -17,6 +17,15 @@ export const omniUiCatalog = createCatalog({
 			hasChildren: true,
 			description: "A card container with optional title",
 		},
+		Avatar: {
+			props: z.object({
+				src: z.string().nullable(),
+				alt: z.string().nullable(),
+				fallback: z.string().nullable(),
+				size: z.enum(["sm", "md", "lg"]).nullable(),
+			}),
+			description: "User avatar image with fallback",
+		},
 		Grid: {
 			props: z.object({
 				columns: z.number().min(1).max(4).nullable(),
@@ -34,6 +43,14 @@ export const omniUiCatalog = createCatalog({
 			hasChildren: true,
 			description: "Flex stack for horizontal or vertical layouts",
 		},
+		Carousel: {
+			props: z.object({
+				orientation: z.enum(["horizontal", "vertical"]).nullable(),
+				showControls: z.boolean().nullable(),
+			}),
+			hasChildren: true,
+			description: "Carousel slider for child content",
+		},
 		Metric: {
 			props: z.object({
 				label: z.string(),
@@ -46,6 +63,16 @@ export const omniUiCatalog = createCatalog({
 			}),
 			description:
 				"Display a single metric with optional trend indicator and progress",
+		},
+		Pagination: {
+			props: z.object({
+				page: z.number().min(1),
+				pageCount: z.number().min(1),
+				action: z.union([z.string(), ActionSchema]).nullable(),
+				siblingCount: z.number().min(0).max(3).nullable(),
+				showEdges: z.boolean().nullable(),
+			}),
+			description: "Pagination control with action on page change",
 		},
 		Chart: {
 			props: z.object({
@@ -203,6 +230,24 @@ export const omniUiCatalog = createCatalog({
 			}),
 			hasChildren: true,
 			description: "Tooltip for wrapped content",
+		},
+		Keyboard: {
+			props: z.object({
+				text: z.string().nullable(),
+				keys: z.array(z.string()).nullable(),
+			}),
+			description: "Keyboard shortcut hint (single or grouped keys)",
+		},
+		Toggle: {
+			props: z.object({
+				label: z.string().nullable(),
+				pressed: z.boolean().nullable(),
+				bindPath: z.string().nullable(),
+				variant: z.enum(["default", "outline"]).nullable(),
+				size: z.enum(["sm", "md", "lg"]).nullable(),
+				action: z.union([z.string(), ActionSchema]).nullable(),
+			}),
+			description: "Toggle button with optional binding or action",
 		},
 		Collapsible: {
 			props: z.object({
