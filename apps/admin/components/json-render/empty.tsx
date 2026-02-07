@@ -2,6 +2,13 @@
 
 import { type ComponentRenderProps } from "@json-render/react";
 import { Button as UiButton } from "@/components/ui/button";
+import {
+	Empty as UiEmpty,
+	EmptyContent,
+	EmptyDescription,
+	EmptyHeader,
+	EmptyTitle,
+} from "@/components/ui/empty";
 
 export function Empty({ element, onAction }: ComponentRenderProps) {
 	const { title, description, action, actionLabel } = element.props as {
@@ -12,20 +19,21 @@ export function Empty({ element, onAction }: ComponentRenderProps) {
 	};
 
 	return (
-		<div className="py-10 text-center">
-			<h3 className="mb-2 text-base font-semibold">{title}</h3>
-			{description && (
-				<p className="text-sm text-muted-foreground">{description}</p>
-			)}
+		<UiEmpty>
+			<EmptyHeader>
+				<EmptyTitle>{title}</EmptyTitle>
+				{description && <EmptyDescription>{description}</EmptyDescription>}
+			</EmptyHeader>
 			{action && actionLabel && (
-				<UiButton
-					type="button"
-					className="mt-4"
-					onClick={() => onAction?.({ name: action })}
-				>
-					{actionLabel}
-				</UiButton>
+				<EmptyContent>
+					<UiButton
+						type="button"
+						onClick={() => onAction?.({ name: action })}
+					>
+						{actionLabel}
+					</UiButton>
+				</EmptyContent>
 			)}
-		</div>
+		</UiEmpty>
 	);
 }

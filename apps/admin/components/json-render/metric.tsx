@@ -2,14 +2,18 @@
 
 import { type ComponentRenderProps, useData } from "@json-render/react";
 import { getByPath } from "@json-render/core";
+import { Progress } from "@/components/ui/progress";
 
 export function Metric({ element }: ComponentRenderProps) {
-	const { label, valuePath, format, trend, trendValue } = element.props as {
+	const { label, valuePath, format, trend, trendValue, progress, progressLabel } =
+		element.props as {
 		label: string;
 		valuePath: string;
 		format?: string | null;
 		trend?: string | null;
 		trendValue?: string | null;
+		progress?: number | null;
+		progressLabel?: string | null;
 	};
 
 	const { data } = useData();
@@ -36,6 +40,16 @@ export function Metric({ element }: ComponentRenderProps) {
 				{label}
 			</span>
 			<span style={{ fontSize: 32, fontWeight: 600 }}>{displayValue}</span>
+			{typeof progress === "number" && Number.isFinite(progress) && (
+				<div className="flex flex-col gap-2 pt-2">
+					<Progress value={Math.max(0, Math.min(100, progress))} />
+					{progressLabel && (
+						<span className="text-xs text-muted-foreground">
+							{progressLabel}
+						</span>
+					)}
+				</div>
+			)}
 			{(trend || trendValue) && (
 				<span
 					style={{

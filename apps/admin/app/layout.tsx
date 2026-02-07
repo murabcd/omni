@@ -17,6 +17,11 @@ export const metadata = {
 	description: "Omni gateway control panel",
 };
 
+export const viewport = {
+	width: "device-width",
+	initialScale: 1,
+};
+
 export default function RootLayout({
 	children,
 }: Readonly<{

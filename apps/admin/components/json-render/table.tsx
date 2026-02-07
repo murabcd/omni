@@ -56,28 +56,30 @@ export function Table({ element }: ComponentRenderProps) {
 	return (
 		<div className="space-y-3">
 			{title && <h4 className="text-sm font-semibold">{title}</h4>}
-			<UiTable>
-				<TableHeader>
-					<TableRow>
-						{columns.map((col) => (
-							<TableHead key={col.key} className="uppercase tracking-wider">
-								{col.label}
-							</TableHead>
-						))}
-					</TableRow>
-				</TableHeader>
-				<TableBody>
-					{tableData.map((row, i) => (
-						<TableRow key={i}>
+			<div className="overflow-x-auto">
+				<UiTable>
+					<TableHeader>
+						<TableRow>
 							{columns.map((col) => (
-								<TableCell key={col.key}>
-									{formatCell(row[col.key], col.format)}
-								</TableCell>
+								<TableHead key={col.key} className="uppercase tracking-wider">
+									{col.label}
+								</TableHead>
 							))}
 						</TableRow>
-					))}
-				</TableBody>
-			</UiTable>
+					</TableHeader>
+					<TableBody>
+						{tableData.map((row, i) => (
+							<TableRow key={i}>
+								{columns.map((col) => (
+									<TableCell key={col.key}>
+										{formatCell(row[col.key], col.format)}
+									</TableCell>
+								))}
+							</TableRow>
+						))}
+					</TableBody>
+				</UiTable>
+			</div>
 		</div>
 	);
 }

@@ -41,17 +41,19 @@ export const omniUiCatalog = createCatalog({
 				format: z.enum(["number", "currency", "percent"]).nullable(),
 				trend: z.enum(["up", "down", "neutral"]).nullable(),
 				trendValue: z.string().nullable(),
+				progress: z.number().min(0).max(100).nullable(),
+				progressLabel: z.string().nullable(),
 			}),
-			description: "Display a single metric with optional trend indicator",
+			description:
+				"Display a single metric with optional trend indicator and progress",
 		},
 		Chart: {
 			props: z.object({
-				type: z.enum(["bar", "line", "pie", "area"]),
 				dataPath: z.string(),
 				title: z.string().nullable(),
 				height: z.number().nullable(),
 			}),
-			description: "Display a chart from array data",
+			description: "Display a bar chart from array data",
 		},
 		Table: {
 			props: z.object({

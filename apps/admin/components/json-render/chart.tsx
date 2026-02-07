@@ -2,6 +2,13 @@
 
 import { type ComponentRenderProps, useData } from "@json-render/react";
 import { getByPath } from "@json-render/core";
+import { Bar, BarChart, CartesianGrid, XAxis } from "recharts";
+import {
+	ChartContainer,
+	ChartTooltip,
+	ChartTooltipContent,
+	type ChartConfig,
+} from "@/components/ui/chart";
 
 export function Chart({ element }: ComponentRenderProps) {
 	const { title, dataPath, height } = element.props as {
@@ -22,9 +29,13 @@ export function Chart({ element }: ComponentRenderProps) {
 		);
 	}
 
-	const values = chartData
-		.map((d) => (typeof d.value === "number" ? d.value : Number(d.value)))
-		.filter((value) => Number.isFinite(value));
+	const normalizedData = chartData
+		.map((d) => ({
+			...d,
+			value: typeof d.value === "number" ? d.value : Number(d.value),
+		}))
+		.filter((d) => Number.isFinite(d.value));
+	const values = normalizedData.map((d) => d.value);
 
 	if (values.length === 0) {
 		return (
@@ -43,6 +54,12 @@ export function Chart({ element }: ComponentRenderProps) {
 		);
 	}
 	const chartHeight = height ?? 120;
+	const chartConfig: ChartConfig = {
+		value: {
+			label: title ?? "Value",
+			color: "hsl(var(--chart-1))",
+		},
+	};
 
 	return (
 		<div>
@@ -51,40 +68,26 @@ export function Chart({ element }: ComponentRenderProps) {
 					{title}
 				</h4>
 			)}
-			<div
-				style={{
-					display: "flex",
-					gap: 8,
-					alignItems: "flex-end",
-					height: chartHeight,
-				}}
+			<ChartContainer
+				className="aspect-auto"
+				style={{ height: chartHeight }}
+				config={chartConfig}
 			>
-				{chartData.map((d, i) => (
-					<div
-						key={i}
-						style={{
-							flex: 1,
-							display: "flex",
-							flexDirection: "column",
-							alignItems: "center",
-							gap: 4,
-						}}
-					>
-						<div
-							style={{
-								width: "100%",
-								height: `${(d.value / maxValue) * 100}%`,
-								background: "var(--foreground)",
-								borderRadius: "4px 4px 0 0",
-								minHeight: 4,
-							}}
-						/>
-						<span style={{ fontSize: 12, color: "var(--muted-foreground)" }}>
-							{d.label}
-						</span>
-					</div>
-				))}
-			</div>
+				<BarChart
+					data={normalizedData}
+					margin={{ top: 8, right: 0, left: 0, bottom: 0 }}
+				>
+					<CartesianGrid vertical={false} />
+					<XAxis
+						dataKey="label"
+						tickLine={false}
+						axisLine={false}
+						tickMargin={8}
+					/>
+					<ChartTooltip content={<ChartTooltipContent />} />
+					<Bar dataKey="value" fill="var(--color-value)" radius={[4, 4, 0, 0]} />
+				</BarChart>
+			</ChartContainer>
 		</div>
 	);
 }
