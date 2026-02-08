@@ -32,6 +32,9 @@
 - [Cloudflare R2](https://developers.cloudflare.com/r2/)
 	- Stores generated images for admin chat + Telegram
 	- Serves public image URLs for outbound messages
+- [Voice agents](https://openai.github.io/openai-agents-js/guides/voice-agents)
+	- Admin UI `/realtime` page
+	- Live tool access during voice sessions
 
 ## Model Providers
 
