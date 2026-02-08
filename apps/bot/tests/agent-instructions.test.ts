@@ -1,5 +1,5 @@
+import { buildAgentInstructions } from "@omni/prompts";
 import { describe, expect, it } from "vitest";
-import { buildAgentInstructions } from "../src/lib/prompts/agent-instructions.js";
 
 const base = {
 	question: "пример",
@@ -68,6 +68,7 @@ describe("agent instructions prompt modes", () => {
 		const instructions = buildAgentInstructions({
 			...base,
 			toolLines: "ui_publish - create UI",
+			uiCatalogPrompt: "Card",
 		});
 		expect(instructions).toContain("ui_publish");
 		expect(instructions).toContain("UI catalog");

@@ -5,7 +5,11 @@
 		"moduleResolution": "NodeNext",
 		"allowImportingTsExtensions": true,
 		"types": ["node"],
-		"rootDir": "..",
+		"baseUrl": ".",
+		"paths": {
+			"@omni/prompts": ["../../packages/prompts/src/index.ts"]
+		},
+		"rootDir": "../..",
 		"strict": true,
 		"esModuleInterop": true,
 		"forceConsistentCasingInFileNames": true,

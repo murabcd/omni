@@ -20,6 +20,9 @@
     "paths": {
       "@/*": [
         "./*"
+      ],
+      "@omni/prompts": [
+        "../../packages/prompts/src/index.ts"
       ]
     },
     "plugins": [

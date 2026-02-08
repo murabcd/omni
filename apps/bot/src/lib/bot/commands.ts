@@ -96,6 +96,7 @@ type CommandDeps = {
 	posthogEnabled?: boolean;
 	webSearchEnabled?: boolean;
 	memoryEnabled?: boolean;
+	realtimeCallUrl?: string;
 	chatStateStore: ChatStateStore;
 	cronClient?: {
 		list: (params?: {
@@ -190,6 +191,7 @@ export function registerCommands(deps: CommandDeps) {
 		posthogEnabled,
 		webSearchEnabled,
 		memoryEnabled,
+		realtimeCallUrl,
 		chatStateStore,
 		cronClient,
 		taskClient,
@@ -239,6 +241,7 @@ export function registerCommands(deps: CommandDeps) {
 				"— /start — начать сначала\n" +
 				"— /commands — список команд\n" +
 				"— /status — проверить работу бота\n" +
+				"— /call — ссылка на голосовой звонок\n" +
 				"— /task — фоновая задача (status/cancel)\n" +
 				"— /research — режим исследования\n" +
 				"— /cron — управление расписаниями\n" +
@@ -246,6 +249,22 @@ export function registerCommands(deps: CommandDeps) {
 				"— /help — описание возможностей\n\n",
 		);
 	}
+
+	bot.command("call", async (ctx) => {
+		setLogContext(ctx, { command: "/call", message_type: "command" });
+		if (shouldBlockCommand(ctx)) return;
+		if (!realtimeCallUrl) {
+			await sendText(
+				ctx,
+				"Ссылка для звонка не настроена. Укажите ADMIN_UI_BASE_URL.",
+			);
+			return;
+		}
+		await sendText(
+			ctx,
+			`Откройте ссылку, чтобы начать звонок: ${realtimeCallUrl}`,
+		);
+	});
 
 	bot.command("help", (ctx) => {
 		setLogContext(ctx, { command: "/help", message_type: "command" });

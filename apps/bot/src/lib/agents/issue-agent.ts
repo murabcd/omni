@@ -1,6 +1,6 @@
 import { openai } from "@ai-sdk/openai";
+import { buildIssueAgentInstructions } from "@omni/prompts";
 import { stepCountIs, ToolLoopAgent } from "ai";
-import { buildIssueAgentInstructions } from "../prompts/agent-instructions.js";
 import { truncateText } from "../text/normalize.js";
 
 export type IssueAgentOptions = {

@@ -64,6 +64,7 @@ export type BotEnvConfig = {
 	UI_SCREENSHOT_ENABLED: boolean;
 	UI_PUBLISH_URL: string;
 	UI_PUBLISH_TOKEN: string;
+	ADMIN_UI_BASE_URL: string;
 	WORKER_STORAGE_URL: string;
 	WORKER_STORAGE_TIMEOUT_MS: number;
 	WORKER_MEDIA_URL: string;
@@ -222,6 +223,7 @@ export function loadBotEnv(env: BotEnv): BotEnvConfig {
 	const UI_SCREENSHOT_ENABLED = env.UI_SCREENSHOT_ENABLED !== "0";
 	const UI_PUBLISH_URL = env.UI_PUBLISH_URL ?? "";
 	const UI_PUBLISH_TOKEN = env.UI_PUBLISH_TOKEN ?? "";
+	const ADMIN_UI_BASE_URL = env.ADMIN_UI_BASE_URL ?? "";
 	const WORKER_STORAGE_URL = env.WORKER_STORAGE_URL ?? "";
 	const WORKER_STORAGE_TIMEOUT_MS = Number.parseInt(
 		env.WORKER_STORAGE_TIMEOUT_MS ?? "20000",
@@ -345,6 +347,7 @@ export function loadBotEnv(env: BotEnv): BotEnvConfig {
 		UI_SCREENSHOT_ENABLED,
 		UI_PUBLISH_URL,
 		UI_PUBLISH_TOKEN,
+		ADMIN_UI_BASE_URL,
 		WORKER_STORAGE_URL,
 		WORKER_STORAGE_TIMEOUT_MS,
 		WORKER_MEDIA_URL,

@@ -1,4 +1,5 @@
 import { openai } from "@ai-sdk/openai";
+import { buildSystemPrompt } from "@omni/prompts";
 import {
 	type LanguageModel,
 	stepCountIs,
@@ -8,7 +9,6 @@ import {
 } from "ai";
 import { regex } from "arkregex";
 import { z } from "zod";
-import { buildSystemPrompt } from "../prompts/system-prompt.js";
 
 export type OrchestrationAgentId =
 	| "tracker"

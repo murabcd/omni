@@ -3,6 +3,7 @@ import { createGoogleGenerativeAI } from "@ai-sdk/google";
 import { openai } from "@ai-sdk/openai";
 import { sequentialize } from "@grammyjs/runner";
 import { apiThrottler } from "@grammyjs/transformer-throttler";
+import { buildAgentInstructions } from "@omni/prompts";
 import { PostHogAgentToolkit } from "@posthog/agent-toolkit/integrations/ai-sdk";
 import {
 	convertToModelMessages,
@@ -100,7 +101,6 @@ import {
 	filterPosthogTools,
 	POSTHOG_READONLY_TOOL_NAMES,
 } from "./lib/posthog-tools.js";
-import { buildAgentInstructions } from "./lib/prompts/agent-instructions.js";
 import { buildSkillsPrompt } from "./lib/prompts/skills-prompt.js";
 import { formatUserDateTime } from "./lib/prompts/time.js";
 import type { TextStore } from "./lib/storage/text-store.js";
@@ -134,6 +134,7 @@ import {
 	type ToolMeta,
 } from "./lib/tools/registry.js";
 import { createToolServiceClient } from "./lib/tools/tool-service.js";
+import { omniUiCatalogPrompt } from "./lib/ui/catalog.js";
 import { buildWorkspaceDefaults } from "./lib/workspace/defaults.js";
 import {
 	createWorkspaceManager,
@@ -158,6 +159,7 @@ const JIRA_URL_RE = regex.as(
 );
 const FIGMA_URL_RE = regex.as("https?://\\S*figma\\.com/(file|design)/", "i");
 const ISSUE_KEY_RE = regex("\\b[A-Z]{2,10}-\\d+\\b", "g");
+const TRAILING_SLASH_RE = regex("/+$");
 
 export type { BotEnv } from "./lib/config/env.js";
 
@@ -314,7 +316,13 @@ export async function createBot(options: CreateBotOptions) {
 		COMMIT_HASH,
 		REGION,
 		INSTANCE_ID,
+		ADMIN_UI_BASE_URL,
 	} = envConfig;
+
+	const baseAdminUiUrl = ADMIN_UI_BASE_URL.trim();
+	const realtimeCallUrl = baseAdminUiUrl
+		? `${baseAdminUiUrl.replace(TRAILING_SLASH_RE, "")}/realtime`
+		: "";
 
 	const sessionClient = options.sessionClient;
 	const taskClient = options.taskClient;
@@ -1675,6 +1683,7 @@ export async function createBot(options: CreateBotOptions) {
 		posthogEnabled: Boolean(POSTHOG_PERSONAL_API_KEY),
 		webSearchEnabled: WEB_SEARCH_ENABLED,
 		memoryEnabled: Boolean(workspaceStore),
+		realtimeCallUrl,
 		chatStateStore,
 		cronClient: options.cronClient,
 		defaultCronTimezone: CRON_STATUS_TIMEZONE,
@@ -4264,6 +4273,7 @@ export async function createBot(options: CreateBotOptions) {
 			runtimeLine,
 			skillsPrompt,
 			promptMode: params?.promptMode ?? "full",
+			uiCatalogPrompt: omniUiCatalogPrompt,
 		});
 		const projectContextFiles = (PROJECT_CONTEXT ?? []).map((entry) => ({
 			path: entry.path,

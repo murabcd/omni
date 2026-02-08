@@ -1,6 +1,10 @@
-import type { CandidateIssue } from "../context/chat-state-types.js";
-import { omniUiCatalogPrompt } from "../ui/catalog.js";
 import { buildSystemPrompt } from "./system-prompt.js";
+
+export type CandidateIssue = {
+	key: string | null;
+	summary: string;
+	score: number;
+};
 
 export type AgentInstructionOptions = {
 	question: string;
@@ -28,6 +32,7 @@ export type AgentInstructionOptions = {
 	runtimeLine?: string;
 	skillsPrompt?: string;
 	promptMode?: "full" | "minimal" | "none";
+	uiCatalogPrompt?: string;
 };
 
 function buildSoulBlock(params: {
@@ -72,67 +77,10 @@ function buildWorkspaceBlock(options: AgentInstructionOptions): string {
 	return ["# Workspace Context", ...blocks].join("\n");
 }
 
-export function buildAgentInstructions(
-	options: AgentInstructionOptions,
-): string {
-	const promptMode = options.promptMode ?? "full";
-	const recentBlock = options.recentCandidates?.length
-		? [
-				"Recent candidates (most relevant first):",
-				...options.recentCandidates
-					.filter((item) => item.key)
-					.map((item) =>
-						`${item.key} — ${item.summary || "(no summary)"}`.trim(),
-					),
-				"",
-				"Rule: If the user refers to these candidates, do NOT run yandex_tracker_search again.",
-				"Instead, use issue_get and issue_get_comments for the candidate keys.",
-				"",
-			].join("\n")
-		: "";
-
-	const soulBlock = buildSoulBlock({
-		globalSoul: options.globalSoul,
-		channelSoul: options.channelSoul,
-		systemPrompt: options.systemPrompt,
-		workspaceSoul: options.workspaceSnapshot?.soul,
-	});
-	const projectContext = (options.projectContext ?? [])
-		.map((entry) => ({
-			path: entry.path?.trim() ?? "",
-			content: entry.content?.trim() ?? "",
-		}))
-		.filter((entry) => entry.path && entry.content);
-	const projectContextBlock = projectContext.length
-		? [
-				"# Project Context",
-				"These files are injected to provide identity and workspace context.",
-				"",
-				...projectContext.flatMap((entry) => [
-					`## ${entry.path}`,
-					"",
-					entry.content,
-					"",
-				]),
-			].join("\n")
-		: "";
-	const workspaceBlock = buildWorkspaceBlock(options);
-	const skillsPrompt = options.skillsPrompt?.trim();
-	const skillsBlock = skillsPrompt
-		? [
-				"Skills (reference):",
-				"Use the appropriate tools based on these skill areas.",
-				skillsPrompt,
-				"",
-			].join("\n")
-		: "";
-	const timeBlock = options.currentDateTime?.trim()
-		? ["Current Date & Time:", options.currentDateTime.trim(), ""].join("\n")
-		: "";
-	const runtimeBlock = options.runtimeLine?.trim()
-		? ["Runtime:", options.runtimeLine.trim(), ""].join("\n")
-		: "";
-
+function buildToolSections(options: {
+	toolLines: string;
+	uiCatalogPrompt?: string;
+}): string[] {
 	const toolSections: string[] = [
 		"Tool Use:",
 		"- Use the appropriate tool for the task. Summarize results in Russian and do not invent facts.",
@@ -143,9 +91,14 @@ export function buildAgentInstructions(
 
 	if (options.toolLines.includes("yandex_tracker_search")) {
 		toolSections.push(
-			"- Use `yandex_tracker_search` for Yandex Tracker keyword queries, `issue_get` for specific issues.",
+			"- Use `yandex_tracker_search` for Yandex Tracker keyword queries.",
 			"- If search returns ambiguous=true with candidates, ask the user to pick the correct issue key (list up to 3).",
 		);
+		if (options.toolLines.includes("issue_get")) {
+			toolSections.push(
+				"- Use `issue_get` for specific issues when a key is provided.",
+			);
+		}
 	}
 
 	if (options.toolLines.includes("jira_search")) {
@@ -192,53 +145,55 @@ export function buildAgentInstructions(
 			"- Build any UI using the available catalog components (e.g., `Card`, `Avatar`, `Grid`, `Stack`, `Carousel`, `Metric`, `Pagination`, `Chart`, `Table`, `List`, `Button`, `Select`, `DatePicker`, `Heading`, `Text`, `Badge`, `Alert`, `Divider`, `Empty`, `TextField`, `Textarea`, `Checkbox`, `Switch`, `Toggle`, `Tooltip`, `Keyboard`, `Collapsible`, `Dialog`, `AlertDialog`, `Sheet`, `Tabs`, `TabPanel`).",
 			"- UI quality rules: use a distinctive display font plus a refined body font; avoid generic defaults. Use a cohesive palette with a dominant color and a sharp accent; avoid timid schemes. Include one signature element (hero, data viz, timeline, or unique card system). Allow asymmetry/overlap or a grid-break moment; avoid cookie-cutter layouts. Add atmosphere via subtle texture/pattern or depth (no flat default background). If unsure, choose a direction and execute it decisively rather than staying neutral.",
 			"- Responsive layout rules: always design for desktop, tablet, and phone without asking; default to single-column on small screens; avoid horizontal stacks unless necessary; limit tables to 4–6 columns or use badges/short labels; keep headings and labels short; prefer compact charts with short labels.",
-			"- The UI tree MUST be a flat UITree with `root` and `elements` (no nested children objects).",
-			"- Each element must be `{ key, type, props, children? }` and children is an array of element keys.",
+			"- The UI tree MUST be a flat spec with `root` and `elements` (no nested children objects).",
+			"- Each element must be `{ type, props, children? }` and children is an array of element keys.",
 			"- `visible` is a top-level element field, not inside props.",
 			"- Use only the props listed below; do not invent props.",
 			"- Actions support confirmation and callbacks: `{ name, params?, confirm?, onSuccess?, onError? }`.",
 			"UI tree format:",
-			'{\n  "root": "root-key",\n  "elements": {\n    "root-key": {\n      "key": "root-key",\n      "type": "Card",\n      "props": { ... },\n      "children": ["child-1", "child-2"]\n    }\n  }\n}',
-			"JSONL patch format (optional, for streaming):",
-			'- Each line is a patch: {"op":"set|add|replace|remove","path":"/root|/elements/<key>|/elements/<key>/props/...","value":...}',
-			'- Set root: {"op":"set","path":"/root","value":"root-key"}',
-			'- Add element: {"op":"add","path":"/elements/<key>","value":{...element...}}',
+			"{\n  \"root\": \"root-key\",\n  \"elements\": {\n    \"root-key\": {\n      \"type\": \"Card\",\n      \"props\": { ... },\n      \"children\": [\"child-1\", \"child-2\"]\n    }\n  }\n}",
+			"JSONL patch format (optional, SpecStream / RFC 6902):",
+			"- Each line is a patch: {\"op\":\"add|remove|replace|move|copy|test\",\"path\":\"/root|/elements/<key>|/elements/<key>/props/...\",\"value\":...,\"from\":...}",
+			"- Set root: {\"op\":\"add\",\"path\":\"/root\",\"value\":\"root-key\"}",
+			"- Add element: {\"op\":\"add\",\"path\":\"/elements/<key>\",\"value\":{...element...}}",
 			"- If using JSONL patches, pass them to `ui_publish` as `patches` (string with newlines); `tree` is optional.",
 			"Component props:",
-			'- Card: { title: string|null, description: string|null, padding: "sm"|"md"|"lg"|null }, hasChildren',
-			'- Avatar: { src: string|null, alt: string|null, fallback: string|null, size: "sm"|"md"|"lg"|null }',
-			'- Grid: { columns: number(1-4)|null, gap: "sm"|"md"|"lg"|null }, hasChildren',
-			'- Stack: { direction: "horizontal"|"vertical"|null, gap: "sm"|"md"|"lg"|null, align: "start"|"center"|"end"|"stretch"|null }, hasChildren',
-			'- Carousel: { orientation: "horizontal"|"vertical"|null, showControls: boolean|null }, hasChildren',
-			'- Metric: { label: string, valuePath: string, format: "number"|"currency"|"percent"|null, trend: "up"|"down"|"neutral"|null, trendValue: string|null, progress: number(0-100)|null, progressLabel: string|null }',
-			'- Pagination: { page: number(>=1), pageCount: number(>=1), action: string|Action|null, siblingCount: number(0-3)|null, showEdges: boolean|null }',
-			'- Chart: { dataPath: string, title: string|null, height: number|null }',
-			'- Table: { dataPath: string, columns: [{ key: string, label: string, format: "text"|"currency"|"date"|"badge"|null }] }',
+			"- Card: { title: string|null, description: string|null, padding: \"sm\"|\"md\"|\"lg\"|null }, hasChildren",
+			"- Avatar: { src: string|null, alt: string|null, fallback: string|null, size: \"sm\"|\"md\"|\"lg\"|null }",
+			"- Grid: { columns: number(1-4)|null, gap: \"sm\"|\"md\"|\"lg\"|null }, hasChildren",
+			"- Stack: { direction: \"horizontal\"|\"vertical\"|null, gap: \"sm\"|\"md\"|\"lg\"|null, align: \"start\"|\"center\"|\"end\"|\"stretch\"|null }, hasChildren",
+			"- Carousel: { orientation: \"horizontal\"|\"vertical\"|null, showControls: boolean|null }, hasChildren",
+			"- Metric: { label: string, valuePath: string, format: \"number\"|\"currency\"|\"percent\"|null, trend: \"up\"|\"down\"|\"neutral\"|null, trendValue: string|null, progress: number(0-100)|null, progressLabel: string|null }",
+			"- Pagination: { page: number(>=1), pageCount: number(>=1), action: string|Action|null, siblingCount: number(0-3)|null, showEdges: boolean|null }",
+			"- Chart: { dataPath: string, title: string|null, height: number|null }",
+			"- Table: { dataPath: string, columns: [{ key: string, label: string, format: \"text\"|\"currency\"|\"date\"|\"badge\"|null }] }",
 			"- List: { dataPath: string, emptyMessage: string|null }, hasChildren",
-			'- Button: { label: string, variant: "primary"|"secondary"|"danger"|"ghost"|null, size: "sm"|"md"|"lg"|null, action: { name: string, params?: object, confirm?: { title: string, message: string, confirmLabel?: string, cancelLabel?: string, variant?: "default"|"danger" }, onSuccess?: { set?: object, navigate?: string, action?: string }, onError?: { set?: object, action?: string } }, disabled: boolean|null }',
+			"- Button: { label: string, variant: \"primary\"|\"secondary\"|\"danger\"|\"ghost\"|null, size: \"sm\"|\"md\"|\"lg\"|null, action: { name: string, params?: object, confirm?: { title: string, message: string, confirmLabel?: string, cancelLabel?: string, variant?: \"default\"|\"danger\" }, onSuccess?: { set?: object, navigate?: string, action?: string }, onError?: { set?: object, action?: string } }, disabled: boolean|null }",
 			"- Select: { label: string|null, bindPath: string, options: [{ value: string, label: string }], placeholder: string|null }",
 			"- DatePicker: { label: string|null, bindPath: string, placeholder: string|null }",
-			'- Heading: { text: string, level: "h1"|"h2"|"h3"|"h4"|null }',
-			'- Text: { content: string, variant: "body"|"caption"|"label"|null, color: "default"|"muted"|"success"|"warning"|"danger"|null }',
-			'- Badge: { text: string, variant: "default"|"success"|"warning"|"danger"|"info"|null }',
-			'- Alert: { type: "info"|"success"|"warning"|"error", title: string, message: string|null, dismissible: boolean|null }',
+			"- Heading: { text: string, level: \"h1\"|\"h2\"|\"h3\"|\"h4\"|null }",
+			"- Text: { content: string, variant: \"body\"|\"caption\"|\"label\"|null, color: \"default\"|\"muted\"|\"success\"|\"warning\"|\"danger\"|null }",
+			"- Badge: { text: string, variant: \"default\"|\"success\"|\"warning\"|\"danger\"|\"info\"|null }",
+			"- Alert: { type: \"info\"|\"success\"|\"warning\"|\"error\", title: string, message: string|null, dismissible: boolean|null }",
 			"- Divider: { label: string|null }",
 			"- Empty: { title: string, description: string|null, action: string|null, actionLabel: string|null }",
-			'- TextField: { label: string, valuePath: string, placeholder: string|null, type: string|null, checks: [{ fn: string, message: string }]|null, validateOn: "change"|"blur"|"submit"|null }',
+			"- TextField: { label: string, valuePath: string, placeholder: string|null, type: string|null, checks: [{ fn: string, message: string }]|null, validateOn: \"change\"|\"blur\"|\"submit\"|null }",
 			"- Textarea: { label: string|null, valuePath: string, placeholder: string|null, rows: number|null }",
 			"- Checkbox: { label: string|null, checked: boolean|null, bindPath: string|null }",
 			"- Switch: { label: string|null, checked: boolean|null, bindPath: string|null }",
-			'- Toggle: { label: string|null, pressed: boolean|null, bindPath: string|null, variant: "default"|"outline"|null, size: "sm"|"md"|"lg"|null, action: string|Action|null }',
-			'- Tooltip: { text: string, side: "top"|"right"|"bottom"|"left"|null }, hasChildren',
-			'- Keyboard: { text: string|null, keys: [string]|null }',
+			"- Toggle: { label: string|null, pressed: boolean|null, bindPath: string|null, variant: \"default\"|\"outline\"|null, size: \"sm\"|\"md\"|\"lg\"|null, action: string|Action|null }",
+			"- Tooltip: { text: string, side: \"top\"|\"right\"|\"bottom\"|\"left\"|null }, hasChildren",
+			"- Keyboard: { text: string|null, keys: [string]|null }",
 			"- Collapsible: { triggerLabel: string, defaultOpen: boolean|null }, hasChildren",
 			"- Dialog: { triggerLabel: string, title: string, description: string|null }, hasChildren",
 			"- AlertDialog: { triggerLabel: string, title: string, description: string|null, actionLabel: string|null, cancelLabel: string|null, action: string|null }, hasChildren",
-			'- Sheet: { triggerLabel: string, title: string|null, description: string|null, side: "top"|"right"|"bottom"|"left"|null }, hasChildren',
-			'- Tabs: { defaultValue: string|null, value: string|null, orientation: "horizontal"|"vertical"|null }, hasChildren',
+			"- Sheet: { triggerLabel: string, title: string|null, description: string|null, side: \"top\"|\"right\"|\"bottom\"|\"left\"|null }, hasChildren",
+			"- Tabs: { defaultValue: string|null, value: string|null, orientation: \"horizontal\"|\"vertical\"|null }, hasChildren",
 			"- TabPanel: { value: string, label: string }, hasChildren",
-			`UI catalog:\\n${omniUiCatalogPrompt}`,
 		);
+		if (options.uiCatalogPrompt?.trim()) {
+			toolSections.push(`UI catalog:\n${options.uiCatalogPrompt}`);
+		}
 	}
 
 	if (options.toolLines.includes("subagent_")) {
@@ -300,6 +255,90 @@ export function buildAgentInstructions(
 			"- Use cron tools to schedule recurring reports or reminders. Ask for missing cadence/time/timezone; default timezone is Europe/Moscow, but confirm if user mentions a different location/timezone.",
 		);
 	}
+
+	return toolSections;
+}
+
+export function buildToolInstructions(options: {
+	toolLines: string;
+	uiCatalogPrompt?: string;
+}): string {
+	const toolSections = buildToolSections(options);
+	return [
+		...toolSections,
+		"",
+		"Available tools:",
+		options.toolLines || "(none)",
+	].join("\n");
+}
+
+export function buildAgentInstructions(
+	options: AgentInstructionOptions,
+): string {
+	const promptMode = options.promptMode ?? "full";
+	const recentBlock = options.recentCandidates?.length
+		? [
+				"Recent candidates (most relevant first):",
+				...options.recentCandidates
+					.filter((item) => item.key)
+					.map((item) =>
+						`${item.key} — ${item.summary || "(no summary)"}`.trim(),
+					),
+				"",
+				"Rule: If the user refers to these candidates, do NOT run yandex_tracker_search again.",
+				"Instead, use issue_get and issue_get_comments for the candidate keys.",
+				"",
+			].join("\n")
+		: "";
+
+	const soulBlock = buildSoulBlock({
+		globalSoul: options.globalSoul,
+		channelSoul: options.channelSoul,
+		systemPrompt: options.systemPrompt,
+		workspaceSoul: options.workspaceSnapshot?.soul,
+	});
+	const projectContext = (options.projectContext ?? [])
+		.map((entry) => ({
+			path: entry.path?.trim() ?? "",
+			content: entry.content?.trim() ?? "",
+		}))
+		.filter((entry) => entry.path && entry.content);
+	const projectContextBlock = projectContext.length
+		? [
+				"# Project Context",
+				"These files are injected to provide identity and workspace context.",
+				"",
+				...projectContext.flatMap((entry) => [
+					`## ${entry.path}`,
+					"",
+					entry.content,
+					"",
+				]),
+			].join("\n")
+		: "";
+	const workspaceBlock = buildWorkspaceBlock(options);
+	const skillsPrompt = options.skillsPrompt?.trim();
+	const skillsBlock = skillsPrompt
+		? [
+				"Skills (reference):",
+				"Use the appropriate tools based on these skill areas.",
+				skillsPrompt,
+				"",
+			].join("\n")
+		: "";
+	const timeBlock = options.currentDateTime?.trim()
+		? ["Current Date & Time:", options.currentDateTime.trim(), ""].join(
+				"\n",
+			)
+		: "";
+	const runtimeBlock = options.runtimeLine?.trim()
+		? ["Runtime:", options.runtimeLine.trim(), ""].join("\n")
+		: "";
+
+	const toolSections = buildToolSections({
+		toolLines: options.toolLines,
+		uiCatalogPrompt: options.uiCatalogPrompt,
+	});
 
 	if (promptMode === "none") {
 		return `User: ${options.question}`;

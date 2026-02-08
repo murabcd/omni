@@ -31,3 +31,5 @@ export function buildSystemPrompt(options: SystemPromptOptions): string {
 		"Output: Plain text only.",
 	].join("\n");
 }
+
+export type { SystemPromptOptions };
