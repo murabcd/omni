@@ -23,6 +23,7 @@
 /build
 /apps/bot/dist
 /apps/bot/data
+/packages/prompts/dist
 
 # Misc
 .DS_Store
