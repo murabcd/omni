@@ -5,8 +5,9 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { createGoogleGenerativeAI } from "@ai-sdk/google";
 import { openai } from "@ai-sdk/openai";
-import type { UITree } from "@json-render/core";
-import { setByPath } from "@json-render/core";
+import type { Spec, SpecStreamLine } from "@json-render/core";
+import { applySpecStreamPatch, parseSpecStreamLine } from "@json-render/core";
+import { buildAgentInstructions } from "@omni/prompts";
 import {
 	createAgentUIStream,
 	createUIMessageStream,
@@ -67,7 +68,6 @@ import { buildSessionKey } from "../context/session-key.js";
 import { type FilePart, toFilePart } from "../files.js";
 import type { ImageStore } from "../image-store.js";
 import { buildJiraJql, normalizeJiraIssue } from "../jira.js";
-import { buildAgentInstructions } from "../prompts/agent-instructions.js";
 import { buildSkillsPrompt } from "../prompts/skills-prompt.js";
 import { formatUserDateTime } from "../prompts/time.js";
 import type { TextStore } from "../storage/text-store.js";
@@ -93,7 +93,7 @@ import {
 import { sanitizeToolCallIdsForTranscript } from "../tools/tool-call-id.js";
 import type { ToolServiceClient } from "../tools/tool-service.js";
 import { repairToolUseResultPairing } from "../tools/transcript-repair.js";
-import { omniUiCatalog } from "../ui/catalog.js";
+import { omniUiCatalog, omniUiCatalogPrompt } from "../ui/catalog.js";
 import type { WorkspaceManager } from "../workspace/manager.js";
 import { isAllowedMemoryPath, resolveMemoryPath } from "../workspace/memory.js";
 import { resolveWorkspaceId } from "../workspace/paths.js";
@@ -121,12 +121,6 @@ const WIKI_NUMERIC_ID_RE = regex("^\\d+$");
 const WIKI_PATH_LEADING_SLASH_RE = regex("^/+");
 const WIKI_PATH_TRAILING_SLASH_RE = regex("/+$");
 
-type UiJsonPatch = {
-	op: "set" | "add" | "replace" | "remove";
-	path: string;
-	value?: unknown;
-};
-
 function parseJsonWithRepair<T>(value: string): T | null {
 	try {
 		return JSON.parse(value) as T;
@@ -139,68 +133,62 @@ function parseJsonWithRepair<T>(value: string): T | null {
 	}
 }
 
-function parseUiPatchLine(line: string): UiJsonPatch | null {
-	try {
-		const trimmed = line.trim();
-		if (!trimmed || trimmed.startsWith("//")) return null;
-		const parsed = parseJsonWithRepair<UiJsonPatch>(trimmed);
-		return parsed ?? null;
-	} catch {
+type LegacySpecStreamLine =
+	| SpecStreamLine
+	| (Omit<SpecStreamLine, "op"> & { op: "set" });
+
+function normalizeSpecStreamPatch(patch: LegacySpecStreamLine): SpecStreamLine {
+	if (patch.op === "set") {
+		const { op: _op, ...rest } = patch;
+		return { ...rest, op: "add" };
+	}
+	return patch;
+}
+
+function parseSpecStreamLineWithRepair(line: string): SpecStreamLine | null {
+	const trimmed = line.trim();
+	if (!trimmed || trimmed.startsWith("//")) return null;
+	const parsed = parseSpecStreamLine(trimmed);
+	if (parsed) {
+		return normalizeSpecStreamPatch(parsed);
+	}
+	const repaired = parseJsonWithRepair<SpecStreamLine>(trimmed);
+	if (!repaired || !repaired.op || typeof repaired.path !== "string") {
 		return null;
 	}
+	return normalizeSpecStreamPatch(repaired);
 }
 
-function applyUiPatch(
-	tree: { root?: string; elements?: Record<string, unknown> },
-	patch: UiJsonPatch,
-) {
-	const next = {
-		...tree,
-		elements: { ...(tree.elements ?? {}) },
+function normalizeSpecChildren(spec: Spec): Spec {
+	const next: Spec = {
+		...spec,
+		elements: { ...spec.elements },
 	};
-
-	switch (patch.op) {
-		case "set":
-		case "add":
-		case "replace": {
-			if (patch.path === "/root") {
-				next.root = String(patch.value ?? "");
-				return next;
-			}
-			if (patch.path.startsWith("/elements/")) {
-				const pathParts = patch.path.slice("/elements/".length).split("/");
-				const elementKey = pathParts[0];
-				if (!elementKey) return next;
-				if (pathParts.length === 1) {
-					next.elements[elementKey] = patch.value as unknown;
-				} else {
-					const element = next.elements[elementKey];
-					if (element && typeof element === "object") {
-						const propPath = `/${pathParts.slice(1).join("/")}`;
-						const updated = { ...(element as Record<string, unknown>) };
-						setByPath(updated, propPath, patch.value);
-						next.elements[elementKey] = updated;
-					}
-				}
-			}
-			return next;
-		}
-		case "remove": {
-			if (patch.path.startsWith("/elements/")) {
-				const elementKey = patch.path.slice("/elements/".length).split("/")[0];
-				if (elementKey) {
-					const { [elementKey]: _, ...rest } = next.elements;
-					next.elements = rest;
-				}
-			}
-			return next;
-		}
-		default:
-			return next;
+	for (const [key, element] of Object.entries(next.elements)) {
+		const children = Array.isArray(element.children) ? element.children : [];
+		next.elements[key] = { ...element, children };
 	}
+	return next;
 }
 
-function lintUiTree(tree: UITree): string[] {
+function normalizeSpecCandidate(value: unknown): unknown {
+	if (!value || typeof value !== "object") return value;
+	const candidate = value as { elements?: Record<string, unknown> };
+	if (!candidate.elements || typeof candidate.elements !== "object") {
+		return value;
+	}
+	const nextElements: Record<string, unknown> = { ...candidate.elements };
+	for (const [key, element] of Object.entries(nextElements)) {
+		if (!element || typeof element !== "object") continue;
+		const current = element as { children?: unknown };
+		if (!Array.isArray(current.children)) {
+			nextElements[key] = { ...current, children: [] };
+		}
+	}
+	return { ...candidate, elements: nextElements };
+}
+
+function lintUiTree(tree: Spec): string[] {
 	const issues: string[] = [];
 	const { root, elements } = tree;
 
@@ -214,9 +202,6 @@ function lintUiTree(tree: UITree): string[] {
 		if (!element || typeof element !== "object") {
 			issues.push(`element "${key}" is not an object`);
 			continue;
-		}
-		if ((element as { key?: string }).key !== key) {
-			issues.push(`element "${key}" has mismatched key`);
 		}
 		const children = (element as { children?: string[] }).children ?? [];
 		for (const child of children) {
@@ -980,35 +965,39 @@ export function createAgentToolsFactory(
 						const lines = Array.isArray(patches)
 							? patches
 							: patches.split(/\\r?\\n/);
-						let currentTree: {
-							root?: string;
-							elements?: Record<string, unknown>;
-						} = { root: "", elements: {} };
+						const currentTree: Record<string, unknown> = {
+							root: "",
+							elements: {},
+						};
 						for (const line of lines) {
-							const patch = parseUiPatchLine(line);
+							const patch = parseSpecStreamLineWithRepair(line);
 							if (!patch) continue;
-							currentTree = applyUiPatch(currentTree, patch);
+							try {
+								applySpecStreamPatch(currentTree, patch);
+							} catch {}
 						}
 						resolvedTree = currentTree;
 					}
 					if (typeof resolvedTree === "string") {
-						const parsedTree = parseJsonWithRepair<UITree>(resolvedTree);
+						const parsedTree = parseJsonWithRepair<Spec>(resolvedTree);
 						if (parsedTree) {
 							resolvedTree = parsedTree;
 						}
 					}
+					resolvedTree = normalizeSpecCandidate(resolvedTree);
 
-					const treeParse = omniUiCatalog.validateTree(resolvedTree);
+					const treeParse = omniUiCatalog.validate(resolvedTree);
 					if (!treeParse.success) {
 						const issues = treeParse.error
 							? treeParse.error.issues.map(
-									(issue) =>
+									(issue: z.ZodIssue) =>
 										`${issue.path.join(".") || "tree"}: ${issue.message}`,
 								)
 							: ["tree validation failed"];
 						return { error: "ui_tree_invalid", issues };
 					}
-					const lintIssues = lintUiTree(treeParse.data as UITree);
+					const normalizedSpec = normalizeSpecChildren(treeParse.data as Spec);
+					const lintIssues = lintUiTree(normalizedSpec);
 					if (lintIssues.length > 0) {
 						return { error: "ui_tree_invalid", issues: lintIssues };
 					}
@@ -1019,7 +1008,7 @@ export function createAgentToolsFactory(
 						id: "",
 						title: title?.trim() || undefined,
 						notes: notes?.trim() || undefined,
-						tree: treeParse.data,
+						tree: normalizedSpec,
 						data,
 						createdAt,
 					};
@@ -3945,6 +3934,7 @@ export function createAgentFactory(deps: AgentDeps) {
 			runtimeLine,
 			skillsPrompt,
 			promptMode: options?.promptMode,
+			uiCatalogPrompt: omniUiCatalogPrompt,
 		});
 		const agentTools = await deps.createAgentTools({
 			...(options ?? {}),

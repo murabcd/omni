@@ -17,7 +17,7 @@ type UiPayload = {
 	data?: Record<string, unknown>;
 };
 
-type RendererTree = RendererProps["tree"];
+type RendererSpec = RendererProps["spec"];
 
 export function UiRenderer({ payload }: { payload: UiPayload }) {
 	const actions = useMemo(
@@ -71,7 +71,7 @@ export function UiRenderer({ payload }: { payload: UiPayload }) {
 			>
 				<div className="mx-auto max-w-6xl px-6 pb-10">
 					<Renderer
-						tree={payload.tree as RendererTree}
+						spec={payload.tree as RendererSpec}
 						registry={componentRegistry}
 					/>
 				</div>

@@ -1,11 +1,10 @@
-import {
-	ActionSchema,
-	createCatalog,
-	generateCatalogPrompt,
-} from "@json-render/core";
+import { ActionSchema, defineCatalog } from "@json-render/core";
+import { schema } from "@json-render/react";
 import { z } from "zod";
 
-export const omniUiCatalog = createCatalog({
+const defaultActionParams = z.record(z.string(), z.unknown()).optional();
+
+export const omniUiCatalog = defineCatalog(schema, {
 	name: "dashboard",
 	components: {
 		Card: {
@@ -14,7 +13,7 @@ export const omniUiCatalog = createCatalog({
 				description: z.string().nullable(),
 				padding: z.enum(["sm", "md", "lg"]).nullable(),
 			}),
-			hasChildren: true,
+			slots: ["default"],
 			description: "A card container with optional title",
 		},
 		Avatar: {
@@ -24,6 +23,7 @@ export const omniUiCatalog = createCatalog({
 				fallback: z.string().nullable(),
 				size: z.enum(["sm", "md", "lg"]).nullable(),
 			}),
+			slots: [],
 			description: "User avatar image with fallback",
 		},
 		Grid: {
@@ -31,7 +31,7 @@ export const omniUiCatalog = createCatalog({
 				columns: z.number().min(1).max(4).nullable(),
 				gap: z.enum(["sm", "md", "lg"]).nullable(),
 			}),
-			hasChildren: true,
+			slots: ["default"],
 			description: "Grid layout with configurable columns",
 		},
 		Stack: {
@@ -40,7 +40,7 @@ export const omniUiCatalog = createCatalog({
 				gap: z.enum(["sm", "md", "lg"]).nullable(),
 				align: z.enum(["start", "center", "end", "stretch"]).nullable(),
 			}),
-			hasChildren: true,
+			slots: ["default"],
 			description: "Flex stack for horizontal or vertical layouts",
 		},
 		Carousel: {
@@ -48,7 +48,7 @@ export const omniUiCatalog = createCatalog({
 				orientation: z.enum(["horizontal", "vertical"]).nullable(),
 				showControls: z.boolean().nullable(),
 			}),
-			hasChildren: true,
+			slots: ["default"],
 			description: "Carousel slider for child content",
 		},
 		Metric: {
@@ -61,6 +61,7 @@ export const omniUiCatalog = createCatalog({
 				progress: z.number().min(0).max(100).nullable(),
 				progressLabel: z.string().nullable(),
 			}),
+			slots: [],
 			description:
 				"Display a single metric with optional trend indicator and progress",
 		},
@@ -72,6 +73,7 @@ export const omniUiCatalog = createCatalog({
 				siblingCount: z.number().min(0).max(3).nullable(),
 				showEdges: z.boolean().nullable(),
 			}),
+			slots: [],
 			description: "Pagination control with action on page change",
 		},
 		Chart: {
@@ -80,6 +82,7 @@ export const omniUiCatalog = createCatalog({
 				title: z.string().nullable(),
 				height: z.number().nullable(),
 			}),
+			slots: [],
 			description: "Display a bar chart from array data",
 		},
 		Table: {
@@ -93,6 +96,7 @@ export const omniUiCatalog = createCatalog({
 					}),
 				),
 			}),
+			slots: [],
 			description: "Display tabular data",
 		},
 		List: {
@@ -100,7 +104,7 @@ export const omniUiCatalog = createCatalog({
 				dataPath: z.string(),
 				emptyMessage: z.string().nullable(),
 			}),
-			hasChildren: true,
+			slots: ["default"],
 			description: "Render a list from array data",
 		},
 		Button: {
@@ -111,6 +115,7 @@ export const omniUiCatalog = createCatalog({
 				action: z.union([z.string(), ActionSchema]),
 				disabled: z.boolean().nullable(),
 			}),
+			slots: [],
 			description: "Clickable button with action",
 		},
 		Select: {
@@ -125,6 +130,7 @@ export const omniUiCatalog = createCatalog({
 				),
 				placeholder: z.string().nullable(),
 			}),
+			slots: [],
 			description: "Dropdown select input",
 		},
 		DatePicker: {
@@ -133,6 +139,7 @@ export const omniUiCatalog = createCatalog({
 				bindPath: z.string(),
 				placeholder: z.string().nullable(),
 			}),
+			slots: [],
 			description: "Date picker input",
 		},
 		Heading: {
@@ -140,6 +147,7 @@ export const omniUiCatalog = createCatalog({
 				text: z.string(),
 				level: z.enum(["h1", "h2", "h3", "h4"]).nullable(),
 			}),
+			slots: [],
 			description: "Section heading",
 		},
 		Text: {
@@ -150,6 +158,7 @@ export const omniUiCatalog = createCatalog({
 					.enum(["default", "muted", "success", "warning", "danger"])
 					.nullable(),
 			}),
+			slots: [],
 			description: "Text paragraph",
 		},
 		Badge: {
@@ -159,6 +168,7 @@ export const omniUiCatalog = createCatalog({
 					.enum(["default", "success", "warning", "danger", "info"])
 					.nullable(),
 			}),
+			slots: [],
 			description: "Small status badge",
 		},
 		Alert: {
@@ -168,12 +178,14 @@ export const omniUiCatalog = createCatalog({
 				message: z.string().nullable(),
 				dismissible: z.boolean().nullable(),
 			}),
+			slots: [],
 			description: "Alert/notification banner",
 		},
 		Divider: {
 			props: z.object({
 				label: z.string().nullable(),
 			}),
+			slots: [],
 			description: "Visual divider",
 		},
 		Empty: {
@@ -183,6 +195,7 @@ export const omniUiCatalog = createCatalog({
 				action: z.string().nullable(),
 				actionLabel: z.string().nullable(),
 			}),
+			slots: [],
 			description: "Empty state placeholder",
 		},
 		TextField: {
@@ -196,6 +209,7 @@ export const omniUiCatalog = createCatalog({
 					.nullable(),
 				validateOn: z.enum(["change", "blur", "submit"]).nullable(),
 			}),
+			slots: [],
 			description: "Text field input",
 		},
 		Textarea: {
@@ -205,6 +219,7 @@ export const omniUiCatalog = createCatalog({
 				placeholder: z.string().nullable(),
 				rows: z.number().nullable(),
 			}),
+			slots: [],
 			description: "Multiline text input",
 		},
 		Checkbox: {
@@ -213,6 +228,7 @@ export const omniUiCatalog = createCatalog({
 				checked: z.boolean().nullable(),
 				bindPath: z.string().nullable(),
 			}),
+			slots: [],
 			description: "Checkbox toggle",
 		},
 		Switch: {
@@ -221,6 +237,7 @@ export const omniUiCatalog = createCatalog({
 				checked: z.boolean().nullable(),
 				bindPath: z.string().nullable(),
 			}),
+			slots: [],
 			description: "Switch toggle",
 		},
 		Tooltip: {
@@ -228,7 +245,7 @@ export const omniUiCatalog = createCatalog({
 				text: z.string(),
 				side: z.enum(["top", "right", "bottom", "left"]).nullable(),
 			}),
-			hasChildren: true,
+			slots: ["default"],
 			description: "Tooltip for wrapped content",
 		},
 		Keyboard: {
@@ -236,6 +253,7 @@ export const omniUiCatalog = createCatalog({
 				text: z.string().nullable(),
 				keys: z.array(z.string()).nullable(),
 			}),
+			slots: [],
 			description: "Keyboard shortcut hint (single or grouped keys)",
 		},
 		Toggle: {
@@ -247,6 +265,7 @@ export const omniUiCatalog = createCatalog({
 				size: z.enum(["sm", "md", "lg"]).nullable(),
 				action: z.union([z.string(), ActionSchema]).nullable(),
 			}),
+			slots: [],
 			description: "Toggle button with optional binding or action",
 		},
 		Collapsible: {
@@ -254,7 +273,7 @@ export const omniUiCatalog = createCatalog({
 				triggerLabel: z.string(),
 				defaultOpen: z.boolean().nullable(),
 			}),
-			hasChildren: true,
+			slots: ["default"],
 			description: "Collapsible disclosure section",
 		},
 		Dialog: {
@@ -263,7 +282,7 @@ export const omniUiCatalog = createCatalog({
 				title: z.string(),
 				description: z.string().nullable(),
 			}),
-			hasChildren: true,
+			slots: ["default"],
 			description: "Modal dialog",
 		},
 		AlertDialog: {
@@ -275,7 +294,7 @@ export const omniUiCatalog = createCatalog({
 				cancelLabel: z.string().nullable(),
 				action: z.string().nullable(),
 			}),
-			hasChildren: true,
+			slots: ["default"],
 			description: "Confirmation dialog",
 		},
 		Sheet: {
@@ -285,7 +304,7 @@ export const omniUiCatalog = createCatalog({
 				description: z.string().nullable(),
 				side: z.enum(["top", "right", "bottom", "left"]).nullable(),
 			}),
-			hasChildren: true,
+			slots: ["default"],
 			description: "Slide-over sheet",
 		},
 		Tabs: {
@@ -294,7 +313,7 @@ export const omniUiCatalog = createCatalog({
 				value: z.string().nullable(),
 				orientation: z.enum(["horizontal", "vertical"]).nullable(),
 			}),
-			hasChildren: true,
+			slots: ["default"],
 			description: "Tabs container; use TabPanel children",
 		},
 		TabPanel: {
@@ -302,17 +321,29 @@ export const omniUiCatalog = createCatalog({
 				value: z.string(),
 				label: z.string(),
 			}),
-			hasChildren: true,
+			slots: ["default"],
 			description: "Tab panel content (child of Tabs)",
 		},
 	},
 	actions: {
-		export_report: { description: "Export the current dashboard to PDF" },
-		refresh_data: { description: "Refresh all metrics and charts" },
-		view_details: { description: "View detailed information" },
-		apply_filter: { description: "Apply the current filter settings" },
+		export_report: {
+			params: defaultActionParams,
+			description: "Export the current dashboard to PDF",
+		},
+		refresh_data: {
+			params: defaultActionParams,
+			description: "Refresh all metrics and charts",
+		},
+		view_details: {
+			params: defaultActionParams,
+			description: "View detailed information",
+		},
+		apply_filter: {
+			params: defaultActionParams,
+			description: "Apply the current filter settings",
+		},
 	},
 	validation: "strict",
 });
 
-export const omniUiCatalogPrompt = generateCatalogPrompt(omniUiCatalog);
+export const omniUiCatalogPrompt = omniUiCatalog.prompt();
