@@ -304,10 +304,56 @@ type ToolRequest = {
 	};
 };
 
+type ToolCatalogEntry = {
+	name: string;
+	description?: string;
+	parameters?: Record<string, unknown>;
+};
+
 async function handleToolCall(body: ToolRequest): Promise<unknown> {
 	const toolName = body.tool?.trim() ?? "";
 	if (!toolName) {
 		return { error: "missing_tool" };
+	}
+	const normalizedInput = { ...(body.input ?? {}) } as Record<string, unknown>;
+	if (
+		toolName === "yandex_tracker_search" ||
+		toolName === "yandex_tracker_find_issue" ||
+		toolName === "jira_search"
+	) {
+		const rawQuestion =
+			normalizedInput.question ??
+			normalizedInput.query ??
+			normalizedInput.text ??
+			normalizedInput.search ??
+			normalizedInput.prompt ??
+			normalizedInput.q;
+		if (typeof rawQuestion === "string") {
+			normalizedInput.question = rawQuestion;
+		} else if (Array.isArray(rawQuestion)) {
+			normalizedInput.question = rawQuestion
+				.map((item) => String(item))
+				.join(" ");
+		} else if (rawQuestion && typeof rawQuestion === "object") {
+			const nested =
+				(rawQuestion as { text?: unknown; query?: unknown; value?: unknown })
+					.text ??
+				(rawQuestion as { text?: unknown; query?: unknown; value?: unknown })
+					.query ??
+				(rawQuestion as { text?: unknown; query?: unknown; value?: unknown })
+					.value;
+			if (typeof nested === "string") {
+				normalizedInput.question = nested;
+			}
+		}
+		if (typeof normalizedInput.question !== "string") {
+			return { error: "missing_question" };
+		}
+		delete normalizedInput.query;
+		delete normalizedInput.text;
+		delete normalizedInput.search;
+		delete normalizedInput.prompt;
+		delete normalizedInput.q;
 	}
 	const ctx = {
 		chat: {
@@ -337,9 +383,28 @@ async function handleToolCall(body: ToolRequest): Promise<unknown> {
 	if (!toolDef?.execute) {
 		return { error: "tool_not_found" };
 	}
-	return await toolDef.execute(body.input ?? {}, {
+	return await toolDef.execute(normalizedInput, {
 		toolCallId: body.context?.requestId ?? "tool-service",
 		messages: [],
+	});
+}
+
+async function listToolCatalog(): Promise<ToolCatalogEntry[]> {
+	const tools = await createAgentTools();
+	return Object.entries(tools).map(([name, toolDef]) => {
+		const description =
+			typeof toolDef?.description === "string"
+				? toolDef.description
+				: undefined;
+		const parameters = (toolDef as { parameters?: unknown }).parameters;
+		return {
+			name,
+			description,
+			parameters:
+				parameters && typeof parameters === "object"
+					? (parameters as Record<string, unknown>)
+					: undefined,
+		};
 	});
 }
 
@@ -348,6 +413,23 @@ const server = http.createServer(async (req, res) => {
 	if (url.pathname === "/health") {
 		res.writeHead(200, { "Content-Type": "application/json" });
 		res.end(JSON.stringify({ ok: true }));
+		return;
+	}
+	if (url.pathname === "/catalog" && req.method === "GET") {
+		const secret = req.headers["x-omni-tool-secret"];
+		if (!secret || secret !== TOOL_SERVICE_SECRET) {
+			res.writeHead(403, { "Content-Type": "application/json" });
+			res.end(JSON.stringify({ error: "forbidden" }));
+			return;
+		}
+		try {
+			const tools = await listToolCatalog();
+			res.writeHead(200, { "Content-Type": "application/json" });
+			res.end(JSON.stringify({ tools }));
+		} catch (error) {
+			res.writeHead(500, { "Content-Type": "application/json" });
+			res.end(JSON.stringify({ error: String(error) }));
+		}
 		return;
 	}
 	if (url.pathname !== "/tool" || req.method !== "POST") {
