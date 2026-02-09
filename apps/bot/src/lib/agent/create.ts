@@ -1627,15 +1627,21 @@ export function createAgentToolsFactory(
 					diagram: z.string().min(1),
 					theme: z.string().optional(),
 					transparent: z.boolean().optional(),
+					font: z.string().optional(),
 				}),
-				execute: async ({ diagram, theme, transparent }) => {
+				execute: async ({ diagram, theme, transparent, font }) => {
 					try {
 						const { renderMermaid, THEMES } = await import("beautiful-mermaid");
 						const themeName = theme?.trim() || "github-dark";
 						const themeConfig =
 							THEMES[themeName] ?? THEMES["github-dark"] ?? undefined;
+						const fontFamily =
+							font?.trim() ||
+							process.env.MERMAID_FONT_FAMILY ||
+							"Noto Sans, DejaVu Sans, Arial, sans-serif";
 						const svg = await renderMermaid(diagram, {
 							...(themeConfig ?? {}),
+							font: fontFamily,
 							transparent: Boolean(transparent),
 						});
 						const sharpModule = await import("sharp");

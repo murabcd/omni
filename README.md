@@ -42,6 +42,7 @@ This app ships with [OpenAI](https://openai.com/) as the default provider. Howev
 
 - Primary model (`gpt-5.2`): default model for production responses
 - Fallback model (`gpt-4.1`): used if the primary model is unavailable
+- Voice model (`gpt-realtime`): used if the for the rialtime conversation
 
 
 ## Connectors
