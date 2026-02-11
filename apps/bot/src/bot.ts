@@ -7,6 +7,7 @@ import { buildAgentInstructions } from "@omni/prompts";
 import { PostHogAgentToolkit } from "@posthog/agent-toolkit/integrations/ai-sdk";
 import {
 	convertToModelMessages,
+	generateText,
 	type ToolLoopAgent,
 	type ToolSet,
 	tool,
@@ -88,6 +89,7 @@ import {
 	appendHistoryMessage,
 	clearHistoryMessages as clearSessionHistory,
 	formatHistoryForPrompt,
+	type HistoryMessage,
 	loadHistoryMessages,
 } from "./lib/context/session-history.js";
 import { buildSessionKey } from "./lib/context/session-key.js";
@@ -264,6 +266,12 @@ export async function createBot(options: CreateBotOptions) {
 		DEBUG_LOGS,
 		TRACKER_API_BASE_URL,
 		HISTORY_MAX_MESSAGES,
+		HISTORY_SUMMARY_TRIGGER,
+		HISTORY_SUMMARY_TAIL,
+		HISTORY_SUMMARY_MAX,
+		HISTORY_SUMMARY_MAX_CHARS,
+		AGENT_MAX_MESSAGES,
+		AGENT_RECENT_MESSAGES,
 		COMMENTS_CACHE_TTL_MS,
 		COMMENTS_CACHE_MAX,
 		COMMENTS_FETCH_CONCURRENCY,
@@ -1497,6 +1505,8 @@ export async function createBot(options: CreateBotOptions) {
 		releaseVersion: RELEASE_VERSION,
 		region: REGION,
 		instanceId: INSTANCE_ID,
+		agentMaxMessages: AGENT_MAX_MESSAGES,
+		agentRecentMessages: AGENT_RECENT_MESSAGES,
 	});
 
 	function isSprintQuery(text: string) {
@@ -1543,24 +1553,82 @@ export async function createBot(options: CreateBotOptions) {
 		const workspaceSnapshot = workspaceManager
 			? await workspaceManager.loadSnapshot(workspaceId)
 			: undefined;
-		const historyMessages =
-			workspaceStore && Number.isFinite(HISTORY_MAX_MESSAGES)
-				? await loadHistoryMessages(
-						workspaceStore,
-						workspaceId,
-						sessionKey,
-						HISTORY_MAX_MESSAGES,
-					)
-				: [];
-		const historyText = historyMessages.length
-			? formatHistoryForPrompt(historyMessages)
+		const historyMessages = workspaceStore
+			? await loadHistoryMessages(
+					workspaceStore,
+					workspaceId,
+					sessionKey,
+					HISTORY_SUMMARY_MAX,
+				)
+			: [];
+		const historyTail = Number.isFinite(HISTORY_MAX_MESSAGES)
+			? historyMessages.slice(-HISTORY_MAX_MESSAGES)
+			: historyMessages;
+		const historyText = historyTail.length
+			? formatHistoryForPrompt(historyTail)
 			: "";
 		return {
 			workspaceId,
 			sessionKey,
 			workspaceSnapshot,
+			historyMessages,
 			historyText,
 		};
+	}
+
+	async function maybeUpdateHistorySummary(params: {
+		historyMessages: HistoryMessage[];
+		chatState: ChatState | null;
+		updateChatState: (updater: (state: ChatState) => void) => void;
+		modelId: string;
+		isAdminChat: boolean;
+	}): Promise<string | null> {
+		const {
+			historyMessages,
+			chatState,
+			updateChatState,
+			modelId,
+			isAdminChat,
+		} = params;
+		if (!chatState || historyMessages.length === 0) {
+			return null;
+		}
+		const summaryCutoff = Math.max(
+			0,
+			historyMessages.length - HISTORY_SUMMARY_TAIL,
+		);
+		if (summaryCutoff < HISTORY_SUMMARY_TRIGGER) {
+			return chatState.historySummary ?? null;
+		}
+		if (chatState.historySummaryMessageCount === summaryCutoff) {
+			return chatState.historySummary ?? null;
+		}
+		const messagesToSummarize = historyMessages.slice(0, summaryCutoff);
+		const historyBlock = truncateText(
+			formatHistoryForPrompt(messagesToSummarize),
+			HISTORY_SUMMARY_MAX_CHARS,
+		);
+		const system = isAdminChat
+			? "Summarize the conversation for future context. Be concise, factual, and list decisions, constraints, and open questions."
+			: "Сделай краткую сводку диалога для дальнейшего контекста. Будь лаконичен, фиксируй решения, ограничения и открытые вопросы.";
+		try {
+			const { text } = await generateText({
+				model: openai(modelId),
+				system,
+				prompt: historyBlock,
+			});
+			const summary = text?.trim() ?? "";
+			if (!summary) return chatState.historySummary ?? null;
+			updateChatState((state) => {
+				state.historySummary = summary;
+				state.historySummaryMessageCount = summaryCutoff;
+				state.historySummaryUpdatedAt = Date.now();
+			});
+			return summary;
+		} catch (error) {
+			logDebug("history summary failed", { error: String(error) });
+			return chatState.historySummary ?? null;
+		}
 	}
 
 	function extractJiraIssueKeysFromUrls(text: string): string[] {
@@ -2715,15 +2783,30 @@ export async function createBot(options: CreateBotOptions) {
 				runAbortController = new AbortController();
 				registerInFlight(chatId, runAbortController);
 			}
-			const { workspaceId, sessionKey, workspaceSnapshot, historyText } =
-				await buildConversationContext({
-					ctx,
-					chatId: chatId || "unknown",
-					workspaceId: ctx.state.workspaceIdOverride,
-					sessionKey: ctx.state.sessionKeyOverride,
-				});
+			const {
+				workspaceId,
+				sessionKey,
+				workspaceSnapshot,
+				historyMessages,
+				historyText,
+			} = await buildConversationContext({
+				ctx,
+				chatId: chatId || "unknown",
+				workspaceId: ctx.state.workspaceIdOverride,
+				sessionKey: ctx.state.sessionKeyOverride,
+			});
 			const userName = ctx.from?.first_name?.trim() || undefined;
 			chatState = chatId ? await chatStateStore.get(chatId) : null;
+			const historySummary = await maybeUpdateHistorySummary({
+				historyMessages,
+				chatState,
+				updateChatState,
+				modelId: activeModelConfig.id,
+				isAdminChat,
+			});
+			const historyTextWithSummary = historySummary
+				? `${isAdminChat ? "Conversation summary" : "Сводка диалога"}:\n${historySummary}\n\n${historyText}`
+				: historyText;
 			const turnDepth = ctx.state.turnDepth ?? 0;
 			const baseChatType =
 				(ctx.chat?.type as "private" | "group" | "supergroup" | "channel") ??
@@ -2940,7 +3023,7 @@ export async function createBot(options: CreateBotOptions) {
 							ctx,
 							webSearchEnabled: allowWebSearch,
 							recentCandidates: chatState?.lastCandidates ?? [],
-							history: historyText,
+							history: historyTextWithSummary,
 						},
 					);
 					const result = await generateAgentWithFiles(
@@ -3613,7 +3696,7 @@ export async function createBot(options: CreateBotOptions) {
 							});
 						},
 						recentCandidates: chatState?.lastCandidates,
-						history: historyText,
+						history: historyTextWithSummary,
 						workspaceSnapshot,
 						chatId,
 						userName,
@@ -3785,15 +3868,30 @@ export async function createBot(options: CreateBotOptions) {
 				}
 			}
 			chatId = ctx.chat?.id?.toString() ?? "";
-			const { workspaceId, sessionKey, workspaceSnapshot, historyText } =
-				await buildConversationContext({
-					ctx,
-					chatId: chatId || "unknown",
-					workspaceId: ctx.state.workspaceIdOverride,
-					sessionKey: ctx.state.sessionKeyOverride,
-				});
+			const {
+				workspaceId,
+				sessionKey,
+				workspaceSnapshot,
+				historyMessages,
+				historyText,
+			} = await buildConversationContext({
+				ctx,
+				chatId: chatId || "unknown",
+				workspaceId: ctx.state.workspaceIdOverride,
+				sessionKey: ctx.state.sessionKeyOverride,
+			});
 			const userName = ctx.from?.first_name?.trim() || undefined;
 			chatState = chatId ? await chatStateStore.get(chatId) : null;
+			const historySummary = await maybeUpdateHistorySummary({
+				historyMessages,
+				chatState,
+				updateChatState,
+				modelId: activeModelConfig.id,
+				isAdminChat: chatId === "admin",
+			});
+			const historyTextWithSummary = historySummary
+				? `${chatId === "admin" ? "Conversation summary" : "Сводка диалога"}:\n${historySummary}\n\n${historyText}`
+				: historyText;
 			const turnDepth = ctx.state.turnDepth ?? 0;
 			const baseChatType =
 				(ctx.chat?.type as "private" | "group" | "supergroup" | "channel") ??
@@ -4186,7 +4284,7 @@ export async function createBot(options: CreateBotOptions) {
 					});
 				},
 				recentCandidates: chatState?.lastCandidates,
-				history: historyText,
+				history: historyTextWithSummary,
 				workspaceSnapshot,
 				chatId,
 				userName,

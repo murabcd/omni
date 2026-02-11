@@ -14,6 +14,7 @@ import {
 	generateText,
 	type LanguageModel,
 	type ModelMessage,
+	pruneMessages,
 	stepCountIs,
 	ToolLoopAgent,
 	type ToolSet,
@@ -118,6 +119,8 @@ const GEMINI_IMAGE_ASPECT_RATIOS = [
 ] as const;
 
 const WIKI_NUMERIC_ID_RE = regex("^\\d+$");
+const AGENT_MAX_MESSAGES = 120;
+const AGENT_RECENT_MESSAGES = 40;
 const WIKI_PATH_LEADING_SLASH_RE = regex("^/+");
 const WIKI_PATH_TRAILING_SLASH_RE = regex("/+$");
 
@@ -458,6 +461,8 @@ export type AgentDeps = {
 	releaseVersion?: string;
 	region?: string;
 	instanceId?: string;
+	agentMaxMessages?: number;
+	agentRecentMessages?: number;
 };
 
 // buildSkillsPrompt and formatUserDateTime moved to prompts helpers
@@ -4181,6 +4186,15 @@ export function createAgentFactory(deps: AgentDeps) {
 				globalSoul: deps.soulPrompt,
 			}) ?? {};
 		const mergedTools = { ...agentTools, ...subagentTools };
+		const maxMessages =
+			Number.isFinite(deps.agentMaxMessages) && (deps.agentMaxMessages ?? 0) > 0
+				? (deps.agentMaxMessages as number)
+				: AGENT_MAX_MESSAGES;
+		const recentMessages =
+			Number.isFinite(deps.agentRecentMessages) &&
+			(deps.agentRecentMessages ?? 0) > 0
+				? (deps.agentRecentMessages as number)
+				: AGENT_RECENT_MESSAGES;
 		return new ToolLoopAgent({
 			model: openai(modelConfig.id),
 			instructions,
@@ -4193,6 +4207,24 @@ export function createAgentFactory(deps: AgentDeps) {
 					messages as unknown as Array<Record<string, unknown>>,
 				);
 				const repaired = repairToolUseResultPairing(sanitized);
+				const pruned = pruneMessages({
+					messages: repaired.messages as unknown as ModelMessage[],
+					reasoning: "before-last-message",
+					toolCalls: "before-last-2-messages",
+					emptyMessages: "remove",
+				});
+				const trimmed = (() => {
+					if (pruned.length <= maxMessages) return pruned;
+					const hasSystem = pruned[0]?.role === "system";
+					const keepCount = Math.min(
+						recentMessages,
+						maxMessages - (hasSystem ? 1 : 0),
+					);
+					if (hasSystem) {
+						return [pruned[0], ...pruned.slice(-keepCount)];
+					}
+					return pruned.slice(-keepCount);
+				})();
 				if (
 					deps.debugLogs &&
 					(repaired.added.length > 0 ||
@@ -4209,7 +4241,7 @@ export function createAgentFactory(deps: AgentDeps) {
 				}
 				return {
 					...params,
-					messages: repaired.messages as unknown as ModelMessage[],
+					messages: trimmed as unknown as ModelMessage[],
 				};
 			},
 			onStepFinish: ({ toolCalls }) => {

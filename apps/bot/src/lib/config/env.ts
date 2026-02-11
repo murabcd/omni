@@ -27,6 +27,12 @@ export type BotEnvConfig = {
 	DEBUG_LOGS: boolean;
 	TRACKER_API_BASE_URL: string;
 	HISTORY_MAX_MESSAGES: number;
+	HISTORY_SUMMARY_TRIGGER: number;
+	HISTORY_SUMMARY_TAIL: number;
+	HISTORY_SUMMARY_MAX: number;
+	HISTORY_SUMMARY_MAX_CHARS: number;
+	AGENT_MAX_MESSAGES: number;
+	AGENT_RECENT_MESSAGES: number;
 	COMMENTS_CACHE_TTL_MS: number;
 	COMMENTS_CACHE_MAX: number;
 	COMMENTS_FETCH_CONCURRENCY: number;
@@ -145,6 +151,30 @@ export function loadBotEnv(env: BotEnv): BotEnvConfig {
 		env.TRACKER_API_BASE_URL ?? "https://api.tracker.yandex.net";
 	const HISTORY_MAX_MESSAGES = Number.parseInt(
 		env.HISTORY_MAX_MESSAGES ?? "20",
+		10,
+	);
+	const HISTORY_SUMMARY_TRIGGER = Number.parseInt(
+		env.HISTORY_SUMMARY_TRIGGER ?? "60",
+		10,
+	);
+	const HISTORY_SUMMARY_TAIL = Number.parseInt(
+		env.HISTORY_SUMMARY_TAIL ?? "20",
+		10,
+	);
+	const HISTORY_SUMMARY_MAX = Number.parseInt(
+		env.HISTORY_SUMMARY_MAX ?? "200",
+		10,
+	);
+	const HISTORY_SUMMARY_MAX_CHARS = Number.parseInt(
+		env.HISTORY_SUMMARY_MAX_CHARS ?? "12000",
+		10,
+	);
+	const AGENT_MAX_MESSAGES = Number.parseInt(
+		env.AGENT_MAX_MESSAGES ?? "120",
+		10,
+	);
+	const AGENT_RECENT_MESSAGES = Number.parseInt(
+		env.AGENT_RECENT_MESSAGES ?? "40",
 		10,
 	);
 	const COMMENTS_CACHE_TTL_MS = Number.parseInt(
@@ -310,6 +340,12 @@ export function loadBotEnv(env: BotEnv): BotEnvConfig {
 		DEBUG_LOGS,
 		TRACKER_API_BASE_URL,
 		HISTORY_MAX_MESSAGES,
+		HISTORY_SUMMARY_TRIGGER,
+		HISTORY_SUMMARY_TAIL,
+		HISTORY_SUMMARY_MAX,
+		HISTORY_SUMMARY_MAX_CHARS,
+		AGENT_MAX_MESSAGES,
+		AGENT_RECENT_MESSAGES,
 		COMMENTS_CACHE_TTL_MS,
 		COMMENTS_CACHE_MAX,
 		COMMENTS_FETCH_CONCURRENCY,

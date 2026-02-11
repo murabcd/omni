@@ -93,6 +93,28 @@ back into the chat as a new turn. See `docs/tools/subagents.md`.
 The bot replies to the triggering message in Telegram (uses `reply_to_message_id`)
 so conversations stay threaded in groups and channels.
 
+## History and compaction
+
+Omni keeps a short tail of recent messages for context and can generate a summary
+of older turns when history grows. Tune via env:
+
+```
+HISTORY_MAX_MESSAGES=20
+HISTORY_SUMMARY_TRIGGER=60
+HISTORY_SUMMARY_TAIL=20
+HISTORY_SUMMARY_MAX=200
+HISTORY_SUMMARY_MAX_CHARS=12000
+AGENT_MAX_MESSAGES=120
+AGENT_RECENT_MESSAGES=40
+```
+
+- `HISTORY_MAX_MESSAGES` controls how many recent messages are included verbatim.
+- `HISTORY_SUMMARY_TRIGGER` starts summarizing once history reaches this size.
+- `HISTORY_SUMMARY_TAIL` keeps the last N messages out of the summary.
+- `HISTORY_SUMMARY_MAX` caps how many messages are loaded for summary.
+- `HISTORY_SUMMARY_MAX_CHARS` limits summary prompt size.
+- `AGENT_MAX_MESSAGES` and `AGENT_RECENT_MESSAGES` cap model context after pruning.
+
 ## Webhook reliability (optional)
 
 When using the Cloudflare Worker webhook, it acknowledges webhooks immediately

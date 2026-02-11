@@ -32,6 +32,9 @@ export type ChatState = {
 	lastCandidates: CandidateIssue[];
 	lastPrimaryKey: string | null;
 	lastUpdatedAt: number;
+	historySummary?: string;
+	historySummaryMessageCount?: number;
+	historySummaryUpdatedAt?: number;
 	pendingAttachmentRequest?: PendingAttachmentRequest;
 	research?: ResearchState;
 };
@@ -41,6 +44,9 @@ export function createEmptyChatState(): ChatState {
 		lastCandidates: [],
 		lastPrimaryKey: null,
 		lastUpdatedAt: 0,
+		historySummary: undefined,
+		historySummaryMessageCount: undefined,
+		historySummaryUpdatedAt: undefined,
 		pendingAttachmentRequest: undefined,
 		research: undefined,
 	};
