@@ -122,6 +122,7 @@ export const TOOL_GROUPS: Record<string, string[]> = {
 	"group:ui": ["ui_publish"],
 	"group:image": ["gemini_image_generate"],
 	"group:subagent": [
+		"subagent_orchestrate",
 		"subagent_route",
 		"subagent_tracker",
 		"subagent_jira",

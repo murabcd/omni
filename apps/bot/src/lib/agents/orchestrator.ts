@@ -155,8 +155,12 @@ export function buildSubagentToolset(params: {
 	const tools: ToolSet = {};
 	const modelFactory =
 		params.getModel ??
-		((provider: "openai" | "google", modelId: string) =>
-			provider === "google" ? openai(modelId) : openai(modelId));
+		((provider: "openai" | "google", modelId: string) => {
+			if (provider === "google") {
+				throw new Error("subagent_google_provider_missing");
+			}
+			return openai(modelId);
+		});
 	const defaultProvider = params.defaultSubagentModelProvider ?? "openai";
 	const defaultMaxSteps = params.defaultMaxSteps ?? 3;
 	const defaultTimeoutMs = params.defaultTimeoutMs ?? 20_000;
@@ -397,6 +401,7 @@ export async function routeRequest(
 	const routerAgent = new ToolLoopAgent({
 		model: openai(modelId),
 		tools: { route: buildRouterTool() },
+		toolChoice: { type: "tool", toolName: "route" },
 		stopWhen: stepCountIs(1),
 	});
 	const routerPrompt = `User prompt: ${prompt}\nGroup chat: ${
@@ -405,9 +410,12 @@ export async function routeRequest(
 	const result = await routerAgent.generate({
 		prompt: routerPrompt,
 	});
-	const toolResults = (result as { toolResults?: Array<{ result?: unknown }> })
-		.toolResults;
-	const payload = toolResults?.[0]?.result;
+	const toolResults = (
+		result as {
+			toolResults?: Array<{ result?: unknown; output?: unknown }>;
+		}
+	).toolResults;
+	const payload = toolResults?.[0]?.output ?? toolResults?.[0]?.result;
 	const parsed = ROUTER_SCHEMA.safeParse(payload);
 	if (!parsed.success || !parsed.data?.agents) return { agents: [] };
 	return { agents: parsed.data.agents };
@@ -476,7 +484,12 @@ export async function runOrchestration(
 			override.provider ?? context.defaultSubagentModelProvider ?? "openai";
 		const modelFactory =
 			context.getModel ??
-			((prov, id) => (prov === "google" ? openai(id) : openai(id)));
+			((prov, id) => {
+				if (prov === "google") {
+					throw new Error("subagent_google_provider_missing");
+				}
+				return openai(id);
+			});
 		const agent = new ToolLoopAgent({
 			model: modelFactory(provider, modelId),
 			instructions: resolvedInstructions,

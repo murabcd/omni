@@ -198,9 +198,11 @@ function buildToolSections(options: {
 	}
 
 	if (options.toolLines.includes("subagent_")) {
-		toolSections.push(
-			"- Use subagent tools for context-heavy tasks (research, codebase exploration, analytics). First call `subagent_route` to pick the right subagent, then call the suggested `subagent_*` tool with a clear task. The tool returns a concise summary.",
-		);
+		const usesOrchestrate = options.toolLines.includes("subagent_orchestrate");
+		const instruction = usesOrchestrate
+			? "- Use subagent tools for context-heavy tasks (research, codebase exploration, analytics). Prefer `subagent_orchestrate` to route and run multiple subagents in parallel when the right source is unclear. Otherwise, call `subagent_route` first, then call the suggested `subagent_*` tool with a clear task. Each tool returns a concise summary."
+			: "- Use subagent tools for context-heavy tasks (research, codebase exploration, analytics). First call `subagent_route` to pick the right subagent, then call the suggested `subagent_*` tool with a clear task. The tool returns a concise summary.";
+		toolSections.push(instruction);
 	}
 
 	if (

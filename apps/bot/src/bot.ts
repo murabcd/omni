@@ -9,11 +9,13 @@ import {
 	convertToModelMessages,
 	type ToolLoopAgent,
 	type ToolSet,
+	tool,
 	experimental_transcribe as transcribe,
 	type UIMessageChunk,
 } from "ai";
 import { regex } from "arkregex";
 import { API_CONSTANTS, Bot, InlineKeyboard, InputFile } from "grammy";
+import { z } from "zod";
 import {
 	type AgentToolCall,
 	type AgentToolResult,
@@ -30,6 +32,8 @@ import {
 import {
 	buildSubagentToolset,
 	type OrchestrationAgentId,
+	routeRequest,
+	runOrchestration,
 } from "./lib/agents/orchestrator.js";
 import {
 	buildJiraTools,
@@ -861,6 +865,15 @@ export async function createBot(options: CreateBotOptions) {
 		// memory tools are registered in agentTools only (shared list via registry)
 		register(
 			{
+				name: "subagent_orchestrate",
+				description: "Route and run multiple subagents in parallel.",
+				source: "core",
+				origin: "orchestration",
+			},
+			agentTools,
+		);
+		register(
+			{
 				name: "subagent_route",
 				description: "Recommend which subagent should run for a request.",
 				source: "core",
@@ -1231,20 +1244,21 @@ export async function createBot(options: CreateBotOptions) {
 			clearTimeout(timer);
 		};
 	}
-	const { resolveOrchestrationPolicy } = createOrchestrationHelpers({
-		allowAgentsRaw: ORCHESTRATION_ALLOW_AGENTS,
-		denyAgentsRaw: ORCHESTRATION_DENY_AGENTS,
-		subagentMaxSteps: ORCHESTRATION_SUBAGENT_MAX_STEPS,
-		subagentMaxToolCalls: ORCHESTRATION_SUBAGENT_MAX_TOOL_CALLS,
-		subagentTimeoutMs: ORCHESTRATION_SUBAGENT_TIMEOUT_MS,
-		parallelism: ORCHESTRATION_PARALLELISM,
-		agentConfigOverrides: AGENT_CONFIG_OVERRIDES,
-		agentDefaultMaxSteps: AGENT_DEFAULT_MAX_STEPS,
-		agentDefaultTimeoutMs: AGENT_DEFAULT_TIMEOUT_MS,
-		logger,
-		isGroupChat,
-		getActiveModelId: () => activeModelConfig.id,
-	});
+	const { resolveOrchestrationPolicy, buildOrchestrationSummary } =
+		createOrchestrationHelpers({
+			allowAgentsRaw: ORCHESTRATION_ALLOW_AGENTS,
+			denyAgentsRaw: ORCHESTRATION_DENY_AGENTS,
+			subagentMaxSteps: ORCHESTRATION_SUBAGENT_MAX_STEPS,
+			subagentMaxToolCalls: ORCHESTRATION_SUBAGENT_MAX_TOOL_CALLS,
+			subagentTimeoutMs: ORCHESTRATION_SUBAGENT_TIMEOUT_MS,
+			parallelism: ORCHESTRATION_PARALLELISM,
+			agentConfigOverrides: AGENT_CONFIG_OVERRIDES,
+			agentDefaultMaxSteps: AGENT_DEFAULT_MAX_STEPS,
+			agentDefaultTimeoutMs: AGENT_DEFAULT_TIMEOUT_MS,
+			logger,
+			isGroupChat,
+			getActiveModelId: () => activeModelConfig.id,
+		});
 
 	function getModelConfig(ref: string) {
 		return modelsConfig.models[ref];
@@ -1373,6 +1387,7 @@ export async function createBot(options: CreateBotOptions) {
 		const policy = resolveOrchestrationPolicy(params.ctx);
 		const allowed = policy.allowAgents ? new Set(policy.allowAgents) : null;
 		const denied = new Set<OrchestrationAgentId>(policy.denyAgents ?? []);
+		const isGroup = params.ctx ? isGroupChat(params.ctx) : false;
 		const shouldInclude = (agentId: OrchestrationAgentId) => {
 			if (denied.has(agentId)) return false;
 			if (allowed && !allowed.has(agentId)) return false;
@@ -1399,6 +1414,42 @@ export async function createBot(options: CreateBotOptions) {
 			if (Object.keys(agentTools).length === 0) continue;
 			filtered[agentId] = agentTools;
 		}
+		const orchestrationTool = tool({
+			description:
+				"Route and run relevant subagents in parallel to answer a context-heavy request.",
+			inputSchema: z.object({
+				prompt: z.string().min(1).describe("User request to route and answer"),
+			}),
+			execute: async ({ prompt }) => {
+				const plan = await routeRequest(prompt, params.modelId, isGroup);
+				const result = await runOrchestration(plan, {
+					prompt,
+					modelId: params.modelId,
+					toolsByAgent: filtered,
+					isGroupChat: isGroup,
+					log: (event) => logger.info(event),
+					promptMode: "minimal",
+					promptContext: {
+						modelRef: params.modelRef,
+						modelName: params.modelName,
+						reasoning: params.reasoning,
+						globalSoul: params.globalSoul,
+					},
+					getModel: getSubagentModel,
+					defaultSubagentModelProvider: subagentProvider,
+					defaultSubagentModelId: subagentModelId,
+					allowAgents: policy.allowAgents,
+					denyAgents: policy.denyAgents,
+					parallelism: policy.parallelism,
+					agentOverrides: policy.agentOverrides,
+					defaultMaxSteps: policy.defaultMaxSteps,
+					defaultTimeoutMs: policy.defaultTimeoutMs,
+					budgets: policy.budgets,
+					hooks: policy.hooks,
+				});
+				return buildOrchestrationSummary(result);
+			},
+		});
 		const subagentTools = buildSubagentToolset({
 			toolsByAgent: filtered,
 			modelId: params.modelId,
@@ -1417,11 +1468,16 @@ export async function createBot(options: CreateBotOptions) {
 			defaultTimeoutMs: policy.defaultTimeoutMs,
 			hooks: policy.hooks,
 		});
+		const mergedSubagentTools = {
+			...subagentTools,
+			subagent_orchestrate: orchestrationTool,
+		};
 		const mergedPolicy = mergeToolPolicies(
 			toolPolicy,
 			resolveChatToolPolicy(params.ctx),
 		);
-		return filterToolMapByPolicy(subagentTools, mergedPolicy).tools as ToolSet;
+		return filterToolMapByPolicy(mergedSubagentTools, mergedPolicy)
+			.tools as ToolSet;
 	}
 
 	const createAgent = createAgentFactory({
