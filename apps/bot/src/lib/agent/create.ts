@@ -1631,10 +1631,231 @@ export function createAgentToolsFactory(
 				}),
 				execute: async ({ diagram, theme, transparent, font }) => {
 					try {
+						const CSS_VAR_RE = regex("--([a-zA-Z0-9_-]+)\\s*:\\s*([^;]+)", "g");
+						const SVG_STYLE_RE = regex(
+							"<svg[^>]*\\sstyle=(\"([^\"]*)\"|'([^']*)')",
+							"i",
+						);
+						const VAR_FN_RE = regex(
+							"var\\(--([a-zA-Z0-9_-]+)(?:,\\s*([^\\)]+))?\\)",
+							"g",
+						);
+						const VAR_FN_SINGLE_RE = regex(
+							"var\\(--([a-zA-Z0-9_-]+)(?:,\\s*([^\\)]+))?\\)",
+						);
+
+						const parseHex = (value: string) => {
+							const hex = value.trim().toLowerCase();
+							if (!hex.startsWith("#")) {
+								return null;
+							}
+							const raw = hex.slice(1);
+							if (raw.length === 3) {
+								const r = parseInt(raw[0] + raw[0], 16);
+								const g = parseInt(raw[1] + raw[1], 16);
+								const b = parseInt(raw[2] + raw[2], 16);
+								return { r, g, b };
+							}
+							if (raw.length === 6) {
+								const r = parseInt(raw.slice(0, 2), 16);
+								const g = parseInt(raw.slice(2, 4), 16);
+								const b = parseInt(raw.slice(4, 6), 16);
+								return { r, g, b };
+							}
+							return null;
+						};
+
+						const toHex = (r: number, g: number, b: number) => {
+							const clamp = (v: number) =>
+								Math.max(0, Math.min(255, Math.round(v)));
+							const to2 = (v: number) => clamp(v).toString(16).padStart(2, "0");
+							return `#${to2(r)}${to2(g)}${to2(b)}`;
+						};
+
+						const splitColorAndPercent = (input: string) => {
+							const trimmed = input.trim();
+							const percentMatch = trimmed.match(
+								regex("\\s+([0-9]+(?:\\.[0-9]+)?)%\\s*$"),
+							);
+							if (percentMatch) {
+								const percent = Number(percentMatch[1]);
+								const color = trimmed.slice(0, percentMatch.index).trim();
+								return { color, percent };
+							}
+							return { color: trimmed, percent: null as number | null };
+						};
+
+						const resolveVar = (name: string, vars: Map<string, string>) => {
+							const value = vars.get(name);
+							return value?.trim() || null;
+						};
+
+						const resolveColorValue = (
+							value: string,
+							vars: Map<string, string>,
+						): string | null => {
+							const varMatch = value.match(VAR_FN_SINGLE_RE);
+							if (varMatch) {
+								const resolved = resolveVar(String(varMatch[1]), vars);
+								if (resolved) {
+									return resolved;
+								}
+								const fallback = varMatch[2]?.trim();
+								return fallback ? resolveColorValue(fallback, vars) : null;
+							}
+							if (value.includes("color-mix(")) {
+								const start = value.indexOf("color-mix(");
+								const end = value.lastIndexOf(")");
+								if (start === -1 || end === -1 || end <= start) {
+									return null;
+								}
+								const inner = value.slice(start + "color-mix(".length, end);
+								const parts = inner.split(",").map((part) => part.trim());
+								if (parts.length < 3) {
+									return null;
+								}
+								const left = splitColorAndPercent(parts[1]);
+								const right = splitColorAndPercent(parts[2]);
+								const leftColor =
+									resolveColorValue(left.color, vars) ?? left.color;
+								const rightColor =
+									resolveColorValue(right.color, vars) ?? right.color;
+								const leftRgb = parseHex(leftColor);
+								const rightRgb = parseHex(rightColor);
+								if (!leftRgb || !rightRgb) {
+									return null;
+								}
+								const leftPct = left.percent ?? 50;
+								const rightPct = right.percent ?? Math.max(0, 100 - leftPct);
+								const total = leftPct + rightPct || 100;
+								const lr = leftRgb.r * (leftPct / total);
+								const lg = leftRgb.g * (leftPct / total);
+								const lb = leftRgb.b * (leftPct / total);
+								const rr = rightRgb.r * (rightPct / total);
+								const rg = rightRgb.g * (rightPct / total);
+								const rb = rightRgb.b * (rightPct / total);
+								return toHex(lr + rr, lg + rg, lb + rb);
+							}
+							const hex = parseHex(value);
+							return hex ? value.trim() : null;
+						};
+
+						const mixColors = (
+							fgHex: string,
+							bgHex: string,
+							fgPercent: number,
+						) => {
+							const fgRgb = parseHex(fgHex);
+							const bgRgb = parseHex(bgHex);
+							if (!fgRgb || !bgRgb) {
+								return null;
+							}
+							const fgWeight = Math.max(0, Math.min(100, fgPercent)) / 100;
+							const bgWeight = 1 - fgWeight;
+							return toHex(
+								fgRgb.r * fgWeight + bgRgb.r * bgWeight,
+								fgRgb.g * fgWeight + bgRgb.g * bgWeight,
+								fgRgb.b * fgWeight + bgRgb.b * bgWeight,
+							);
+						};
+
+						const inlineSvgCssVars = (svg: string) => {
+							const styleMatch = svg.match(SVG_STYLE_RE);
+							const styleText = styleMatch?.[2] ?? styleMatch?.[3];
+							if (!styleText) {
+								return svg;
+							}
+							const vars = new Map<string, string>();
+							for (const match of styleText.matchAll(CSS_VAR_RE)) {
+								const name = match[1]?.trim();
+								const value = match[2]?.trim();
+								if (name && value) {
+									vars.set(name, value);
+								}
+							}
+							const styleStart = svg.indexOf("<style");
+							const styleOpenEnd =
+								styleStart === -1 ? -1 : svg.indexOf(">", styleStart);
+							const styleClose =
+								styleStart === -1 ? -1 : svg.indexOf("</style>");
+							const styleBlock =
+								styleOpenEnd !== -1 && styleClose !== -1
+									? svg.slice(styleOpenEnd + 1, styleClose)
+									: "";
+							if (styleBlock) {
+								const svgRuleStart = styleBlock.indexOf("svg");
+								const svgRuleOpen =
+									svgRuleStart === -1
+										? -1
+										: styleBlock.indexOf("{", svgRuleStart);
+								const svgRuleClose =
+									svgRuleOpen === -1
+										? -1
+										: styleBlock.indexOf("}", svgRuleOpen);
+								const svgRules =
+									svgRuleOpen !== -1 && svgRuleClose !== -1
+										? styleBlock.slice(svgRuleOpen + 1, svgRuleClose)
+										: "";
+								if (svgRules) {
+									for (const match of svgRules.matchAll(CSS_VAR_RE)) {
+										const name = match[1]?.trim();
+										const rawValue = match[2]?.trim();
+										if (!name || !rawValue || vars.has(name)) {
+											continue;
+										}
+										const resolved = resolveColorValue(rawValue, vars);
+										if (resolved) {
+											vars.set(name, resolved);
+										}
+									}
+								}
+							}
+							const bg = vars.get("bg");
+							const fg = vars.get("fg");
+							if (bg && fg) {
+								const derived = [
+									["_text", fg],
+									["_text-sec", vars.get("muted") ?? mixColors(fg, bg, 60)],
+									["_text-muted", vars.get("muted") ?? mixColors(fg, bg, 40)],
+									["_text-faint", mixColors(fg, bg, 25)],
+									["_line", vars.get("line") ?? mixColors(fg, bg, 30)],
+									["_arrow", vars.get("accent") ?? mixColors(fg, bg, 50)],
+									["_node-fill", vars.get("surface") ?? mixColors(fg, bg, 3)],
+									["_node-stroke", vars.get("border") ?? mixColors(fg, bg, 20)],
+									["_group-fill", bg],
+									["_group-hdr", mixColors(fg, bg, 5)],
+									["_inner-stroke", mixColors(fg, bg, 12)],
+									["_key-badge", mixColors(fg, bg, 10)],
+								] as const;
+								for (const [name, value] of derived) {
+									if (!vars.has(name) && typeof value === "string" && value) {
+										vars.set(name, value);
+									}
+								}
+							}
+							if (vars.size === 0) {
+								return svg;
+							}
+							return svg.replace(VAR_FN_RE, (raw, name, fallback) => {
+								const resolved = vars.get(String(name));
+								if (resolved) {
+									return resolved;
+								}
+								return fallback?.trim() || raw;
+							});
+						};
+
 						const { renderMermaid, THEMES } = await import("beautiful-mermaid");
-						const themeName = theme?.trim() || "github-dark";
+						const rawTheme = theme?.trim() || "";
+						const themeName = rawTheme.toLowerCase();
+						const resolvedTheme =
+							themeName === "default" || themeName === "light"
+								? "github-light"
+								: themeName === "dark"
+									? "github-dark"
+									: rawTheme || "github-dark";
 						const themeConfig =
-							THEMES[themeName] ?? THEMES["github-dark"] ?? undefined;
+							THEMES[resolvedTheme] ?? THEMES["github-dark"] ?? undefined;
 						const fontFamily =
 							font?.trim() ||
 							process.env.MERMAID_FONT_FAMILY ||
@@ -1646,7 +1867,10 @@ export function createAgentToolsFactory(
 						});
 						const sharpModule = await import("sharp");
 						const sharp = sharpModule.default ?? sharpModule;
-						const pngBuffer = await sharp(Buffer.from(svg)).png().toBuffer();
+						const rasterSvg = inlineSvgCssVars(svg);
+						const pngBuffer = await sharp(Buffer.from(rasterSvg))
+							.png()
+							.toBuffer();
 						if (!deps.imageStore) {
 							return {
 								ok: false,
@@ -1666,7 +1890,7 @@ export function createAgentToolsFactory(
 						};
 						return {
 							ok: true,
-							theme: themeName,
+							theme: resolvedTheme,
 							svg,
 							image: imageMeta,
 							images: [imageMeta],
