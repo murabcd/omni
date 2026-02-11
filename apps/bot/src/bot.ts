@@ -266,10 +266,11 @@ export async function createBot(options: CreateBotOptions) {
 		DEBUG_LOGS,
 		TRACKER_API_BASE_URL,
 		HISTORY_MAX_MESSAGES,
-		HISTORY_SUMMARY_TRIGGER,
-		HISTORY_SUMMARY_TAIL,
-		HISTORY_SUMMARY_MAX,
-		HISTORY_SUMMARY_MAX_CHARS,
+		OBSERVATIONS_TRIGGER,
+		OBSERVATIONS_TAIL,
+		OBSERVATIONS_MAX_MESSAGES,
+		OBSERVATIONS_MAX_CHARS,
+		OBSERVATIONS_ASYNC,
 		AGENT_MAX_MESSAGES,
 		AGENT_RECENT_MESSAGES,
 		COMMENTS_CACHE_TTL_MS,
@@ -1558,7 +1559,7 @@ export async function createBot(options: CreateBotOptions) {
 					workspaceStore,
 					workspaceId,
 					sessionKey,
-					HISTORY_SUMMARY_MAX,
+					OBSERVATIONS_MAX_MESSAGES,
 				)
 			: [];
 		const historyTail = Number.isFinite(HISTORY_MAX_MESSAGES)
@@ -1576,7 +1577,7 @@ export async function createBot(options: CreateBotOptions) {
 		};
 	}
 
-	async function maybeUpdateHistorySummary(params: {
+	async function maybeUpdateObservations(params: {
 		historyMessages: HistoryMessage[];
 		chatState: ChatState | null;
 		updateChatState: (updater: (state: ChatState) => void) => void;
@@ -1593,42 +1594,108 @@ export async function createBot(options: CreateBotOptions) {
 		if (!chatState || historyMessages.length === 0) {
 			return null;
 		}
-		const summaryCutoff = Math.max(
-			0,
-			historyMessages.length - HISTORY_SUMMARY_TAIL,
-		);
-		if (summaryCutoff < HISTORY_SUMMARY_TRIGGER) {
-			return chatState.historySummary ?? null;
+		const cutoff = Math.max(0, historyMessages.length - OBSERVATIONS_TAIL);
+		if (cutoff < OBSERVATIONS_TRIGGER) {
+			return chatState.observations ?? null;
 		}
-		if (chatState.historySummaryMessageCount === summaryCutoff) {
-			return chatState.historySummary ?? null;
+		const lastObserved = chatState.observationsMessageCount ?? 0;
+		if (lastObserved >= cutoff) {
+			return chatState.observations ?? null;
 		}
-		const messagesToSummarize = historyMessages.slice(0, summaryCutoff);
+		const messagesToObserve = historyMessages.slice(lastObserved, cutoff);
+		if (messagesToObserve.length === 0) {
+			return chatState.observations ?? null;
+		}
 		const historyBlock = truncateText(
-			formatHistoryForPrompt(messagesToSummarize),
-			HISTORY_SUMMARY_MAX_CHARS,
+			formatHistoryForPrompt(messagesToObserve),
+			OBSERVATIONS_MAX_CHARS,
 		);
 		const system = isAdminChat
-			? "Summarize the conversation for future context. Be concise, factual, and list decisions, constraints, and open questions."
-			: "Сделай краткую сводку диалога для дальнейшего контекста. Будь лаконичен, фиксируй решения, ограничения и открытые вопросы.";
+			? [
+					"You are an observer. Convert messages into log-style observations.",
+					"Format:",
+					"Date: YYYY-MM-DD",
+					"🔴 HH:MM observation",
+					"🟡 HH:MM observation",
+					"🟢 HH:MM observation",
+					"Rules: Keep concise. Preserve names, constraints, decisions, deadlines.",
+					"Use 🔴 for critical, 🟡 for relevant, 🟢 for informational.",
+					"Return the FULL observation log (existing + new).",
+				].join("\n")
+			: [
+					"Ты наблюдатель. Сжимай диалог в лог наблюдений.",
+					"Формат:",
+					"Date: YYYY-MM-DD",
+					"🔴 HH:MM observation",
+					"🟡 HH:MM observation",
+					"🟢 HH:MM observation",
+					"Правила: кратко, фиксируй имена, решения, ограничения, сроки.",
+					"🔴 критично, 🟡 важно, 🟢 справочно.",
+					"Верни ПОЛНЫЙ лог (старые + новые).",
+				].join("\n");
+		const existing = chatState.observations?.trim();
+		const prompt = existing
+			? `Existing observations:\n${existing}\n\nNew messages:\n${historyBlock}`
+			: `New messages:\n${historyBlock}`;
 		try {
 			const { text } = await generateText({
 				model: openai(modelId),
 				system,
-				prompt: historyBlock,
+				prompt,
 			});
-			const summary = text?.trim() ?? "";
-			if (!summary) return chatState.historySummary ?? null;
+			let observations = text?.trim() ?? "";
+			if (!observations) return chatState.observations ?? null;
+			if (observations.length > OBSERVATIONS_MAX_CHARS * 1.5) {
+				observations = observations.slice(0, OBSERVATIONS_MAX_CHARS * 1.5);
+			}
+			if (observations.length > OBSERVATIONS_MAX_CHARS) {
+				const reflectPrompt = isAdminChat
+					? [
+							"Reduce the observation log.",
+							"Keep critical and recent items.",
+							"Preserve dates and emojis.",
+							"Return a shorter log only.",
+						].join("\n")
+					: [
+							"Сократи лог наблюдений.",
+							"Оставь критичное и недавнее.",
+							"Сохрани даты и эмодзи.",
+							"Верни только сокращённый лог.",
+						].join("\n");
+				const { text: reflected } = await generateText({
+					model: openai(modelId),
+					system: reflectPrompt,
+					prompt: observations,
+				});
+				const next = reflected?.trim();
+				if (next) observations = next;
+			}
 			updateChatState((state) => {
-				state.historySummary = summary;
-				state.historySummaryMessageCount = summaryCutoff;
-				state.historySummaryUpdatedAt = Date.now();
+				state.observations = observations;
+				state.observationsMessageCount = cutoff;
+				state.observationsUpdatedAt = Date.now();
 			});
-			return summary;
+			return observations;
 		} catch (error) {
-			logDebug("history summary failed", { error: String(error) });
-			return chatState.historySummary ?? null;
+			logDebug("observations update failed", { error: String(error) });
+			return chatState.observations ?? null;
 		}
+	}
+
+	function resolveObservationsForTurn(params: {
+		historyMessages: HistoryMessage[];
+		chatState: ChatState | null;
+		updateChatState: (updater: (state: ChatState) => void) => void;
+		modelId: string;
+		isAdminChat: boolean;
+		asyncMode: boolean;
+	}): Promise<string | null> | string | null {
+		const { asyncMode, chatState } = params;
+		if (!asyncMode) {
+			return maybeUpdateObservations(params);
+		}
+		void maybeUpdateObservations(params);
+		return chatState?.observations ?? null;
 	}
 
 	function extractJiraIssueKeysFromUrls(text: string): string[] {
@@ -2797,15 +2864,16 @@ export async function createBot(options: CreateBotOptions) {
 			});
 			const userName = ctx.from?.first_name?.trim() || undefined;
 			chatState = chatId ? await chatStateStore.get(chatId) : null;
-			const historySummary = await maybeUpdateHistorySummary({
+			const observations = await resolveObservationsForTurn({
 				historyMessages,
 				chatState,
 				updateChatState,
 				modelId: activeModelConfig.id,
 				isAdminChat,
+				asyncMode: OBSERVATIONS_ASYNC,
 			});
-			const historyTextWithSummary = historySummary
-				? `${isAdminChat ? "Conversation summary" : "Сводка диалога"}:\n${historySummary}\n\n${historyText}`
+			const historyTextWithSummary = observations
+				? `${isAdminChat ? "Observations" : "Наблюдения"}:\n${observations}\n\n${historyText}`
 				: historyText;
 			const turnDepth = ctx.state.turnDepth ?? 0;
 			const baseChatType =
@@ -3882,15 +3950,16 @@ export async function createBot(options: CreateBotOptions) {
 			});
 			const userName = ctx.from?.first_name?.trim() || undefined;
 			chatState = chatId ? await chatStateStore.get(chatId) : null;
-			const historySummary = await maybeUpdateHistorySummary({
+			const observations = await resolveObservationsForTurn({
 				historyMessages,
 				chatState,
 				updateChatState,
 				modelId: activeModelConfig.id,
 				isAdminChat: chatId === "admin",
+				asyncMode: OBSERVATIONS_ASYNC,
 			});
-			const historyTextWithSummary = historySummary
-				? `${chatId === "admin" ? "Conversation summary" : "Сводка диалога"}:\n${historySummary}\n\n${historyText}`
+			const historyTextWithSummary = observations
+				? `${chatId === "admin" ? "Observations" : "Наблюдения"}:\n${observations}\n\n${historyText}`
 				: historyText;
 			const turnDepth = ctx.state.turnDepth ?? 0;
 			const baseChatType =
