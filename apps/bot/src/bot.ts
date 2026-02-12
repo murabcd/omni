@@ -1611,15 +1611,35 @@ export async function createBot(options: CreateBotOptions) {
 		return candidate;
 	}
 
-	function maybeRenameDefaultTopic(params: {
+	async function maybeRenameDefaultTopic(params: {
 		chatState: ChatState | null;
 		updateChatState: (updater: (state: ChatState) => void) => void;
 		activeTopic?: string;
 		messageText: string;
+		modelId: string;
 	}) {
-		const { chatState, updateChatState, activeTopic, messageText } = params;
+		const { chatState, updateChatState, activeTopic, messageText, modelId } =
+			params;
 		if (!chatState || activeTopic !== DEFAULT_TOPIC_SLUG) return activeTopic;
-		const next = normalizeTopic(messageText);
+		let titleText = "";
+		try {
+			const { text } = await withTimeout(
+				generateText({
+					model: openai(modelId),
+					system: [
+						"Generate a short chat title (2-5 words) summarizing the user's message.",
+						"Output ONLY the title text. No prefixes, no quotes.",
+					].join("\n"),
+					prompt: messageText,
+				}),
+				2_000,
+				"chat title",
+			);
+			titleText = text?.trim() ?? "";
+		} catch (error) {
+			logDebug("chat title generation failed", { error: String(error) });
+		}
+		const next = normalizeTopic(titleText || messageText);
 		if (!next || next === DEFAULT_TOPIC_SLUG) return activeTopic;
 		const existing = new Set(Object.keys(chatState.topics ?? {}));
 		const unique = ensureUniqueTopic(next, existing);
@@ -2949,11 +2969,12 @@ export async function createBot(options: CreateBotOptions) {
 					? resolveActiveTopic(chatState)
 					: undefined;
 			if (ctx.chat?.type === "private") {
-				activeTopic = maybeRenameDefaultTopic({
+				activeTopic = await maybeRenameDefaultTopic({
 					chatState,
 					updateChatState,
 					activeTopic,
 					messageText: effectiveText,
+					modelId: activeModelConfig.id,
 				});
 			}
 			const {
@@ -4051,11 +4072,12 @@ export async function createBot(options: CreateBotOptions) {
 					? resolveActiveTopic(chatState)
 					: undefined;
 			if (ctx.chat?.type === "private") {
-				activeTopic = maybeRenameDefaultTopic({
+				activeTopic = await maybeRenameDefaultTopic({
 					chatState,
 					updateChatState,
 					activeTopic,
 					messageText: effectiveText,
+					modelId: activeModelConfig.id,
 				});
 			}
 			const {

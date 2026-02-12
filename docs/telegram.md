@@ -52,7 +52,7 @@ TOOL_RATE_LIMITS=web_search:10/60
 ## Chat contexts (DM only)
 
 After `/start`, Omni creates a default chat named `untitled chat`.
-After your first message, it is renamed based on that message.
+After your first message, it is renamed to a short title generated from that message.
 Use `/new <name>` to create additional chats (without a name it starts as `untitled chat`),
 and `/resume <name>` to switch.
 
