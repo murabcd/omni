@@ -295,6 +295,7 @@ export type CreateAgentToolsOptions = {
 	recentCandidates?: CandidateIssue[];
 	history?: string;
 	chatId?: string;
+	topic?: string;
 	ctx?: BotContext;
 	modelId?: string;
 	webSearchEnabled?: boolean;
@@ -416,6 +417,7 @@ export type CreateAgentOptions = {
 		contextFiles?: Array<{ path: string; content: string }>;
 	};
 	chatId?: string;
+	topic?: string;
 	userName?: string;
 	onToolStep?: (toolNames: string[]) => Promise<void> | void;
 	onToolStart?: (toolName: string) => void;
@@ -606,6 +608,7 @@ export function createAgentToolsFactory(
 			channel: "telegram",
 			chatType: options?.ctx?.chat?.type ?? "private",
 			chatId: options?.chatId ?? "unknown",
+			topic: options?.topic,
 		});
 
 		registerTool(

@@ -3,7 +3,10 @@ import type { Bot, InlineKeyboard } from "grammy";
 import type { ModelsFile } from "../../models-core.js";
 import type { RuntimeSkill } from "../../skills-core.js";
 import type { ChannelConfig } from "../channels.js";
-import type { ChatStateStore } from "../context/chat-state.js";
+import {
+	type ChatStateStore,
+	createEmptyChatState,
+} from "../context/chat-state.js";
 import { buildSessionKey } from "../context/session-key.js";
 import type { ApprovalStore } from "../tools/approvals.js";
 import type { ToolPolicy } from "../tools/policy.js";
@@ -142,6 +145,11 @@ type CommandDeps = {
 
 export function registerCommands(deps: CommandDeps) {
 	const HELP_STATUS_CMD_RE = regex("^cmd:(help|commands|status)$");
+	const TOPIC_SPACE_RE = regex("\\s+", "g");
+	const TOPIC_INVALID_RE = regex("[^a-z0-9_\\-\\u0400-\\u052f]+", "g");
+	const TOPIC_DASH_RE = regex("-+", "g");
+	const TOPIC_TRIM_RE = regex("(^-+)|(-+$)", "g");
+	const DEFAULT_NEW_CHAT = "untitled chat";
 	const {
 		bot,
 		startGreeting,
@@ -202,9 +210,45 @@ export function registerCommands(deps: CommandDeps) {
 		setChatTimezone,
 	} = deps;
 
+	const normalizeTopic = (value: string): string | null => {
+		const trimmed = value.trim();
+		if (!trimmed) return null;
+		let out = trimmed.toLowerCase();
+		out = out.replace(TOPIC_SPACE_RE, "-");
+		out = out.replace(TOPIC_INVALID_RE, "-");
+		out = out.replace(TOPIC_DASH_RE, "-");
+		out = out.replace(TOPIC_TRIM_RE, "");
+		return out || null;
+	};
+
+	const ensureUniqueTopic = (base: string, existing: Set<string>) => {
+		if (!existing.has(base)) return base;
+		let counter = 2;
+		let candidate = `${base}-${counter}`;
+		while (existing.has(candidate)) {
+			counter += 1;
+			candidate = `${base}-${counter}`;
+		}
+		return candidate;
+	};
+
 	bot.command("start", (ctx) => {
 		setLogContext(ctx, { command: "/start", message_type: "command" });
 		void clearHistoryMessages(ctx);
+		if (ctx.chat?.type === "private") {
+			const chatId = ctx.chat?.id?.toString() ?? "";
+			if (chatId) {
+				const defaultTopic =
+					normalizeTopic(DEFAULT_NEW_CHAT) ?? "untitled-chat";
+				void chatStateStore.set(chatId, {
+					...createEmptyChatState(),
+					activeTopic: defaultTopic,
+					topics: {
+						[defaultTopic]: {},
+					},
+				});
+			}
+		}
 		return sendText(ctx, startGreeting, { reply_markup: startKeyboard });
 	});
 
@@ -242,6 +286,10 @@ export function registerCommands(deps: CommandDeps) {
 				"— /commands — список команд\n" +
 				"— /status — проверить работу бота\n" +
 				"— /call — ссылка на голосовой звонок\n" +
+				"— /new — новый чат\n" +
+				"— /resume — вернуться к чату (/resume list — список)\n" +
+				"— /tool list — список инструментов\n" +
+				"— /skill list — список runtime-skills\n" +
 				"— /task — фоновая задача (status/cancel)\n" +
 				"— /research — режим исследования\n" +
 				"— /cron — управление расписаниями\n" +
@@ -264,6 +312,97 @@ export function registerCommands(deps: CommandDeps) {
 			ctx,
 			`Откройте ссылку, чтобы начать звонок: ${realtimeCallUrl}`,
 		);
+	});
+
+	bot.command("new", async (ctx) => {
+		setLogContext(ctx, { command: "/new", message_type: "command" });
+		if (shouldBlockCommand(ctx)) return;
+		if (ctx.chat?.type !== "private") {
+			return sendText(ctx, "Чаты доступны только в личных чатах.");
+		}
+		const raw = ctx.message?.text ?? "";
+		const args = raw.split(" ").slice(1);
+		const input = args.join(" ").trim();
+		const chatId = ctx.chat?.id?.toString() ?? "";
+		if (!chatId) return sendText(ctx, "Не удалось определить чат.");
+		const chatState = await chatStateStore.get(chatId);
+		const current = chatState.activeTopic?.trim();
+		const next = input
+			? normalizeTopic(input)
+			: normalizeTopic(DEFAULT_NEW_CHAT);
+		if (!next) return sendText(ctx, "Название чата пустое.");
+		const existing = new Set(Object.keys(chatState.topics ?? {}));
+		const unique = ensureUniqueTopic(next, existing);
+		if (current && unique === current) {
+			return sendText(ctx, `Уже в чате: ${current}`);
+		}
+		if (current) {
+			const stack = chatState.topicStack ?? [];
+			stack.push(current);
+			chatState.topicStack = stack;
+		}
+		chatState.activeTopic = unique;
+		chatState.topics = chatState.topics ?? {};
+		chatState.topics[unique] = chatState.topics[unique] ?? {};
+		await chatStateStore.set(chatId, chatState);
+		return sendText(ctx, `Создал новый чат: ${unique}`);
+	});
+
+	bot.command("resume", async (ctx) => {
+		setLogContext(ctx, { command: "/resume", message_type: "command" });
+		if (shouldBlockCommand(ctx)) return;
+		if (ctx.chat?.type !== "private") {
+			return sendText(ctx, "Чаты доступны только в личных чатах.");
+		}
+		const raw = ctx.message?.text ?? "";
+		const args = raw.split(" ").slice(1);
+		const input = args.join(" ").trim();
+		const chatId = ctx.chat?.id?.toString() ?? "";
+		if (!chatId) return sendText(ctx, "Не удалось определить чат.");
+		const chatState = await chatStateStore.get(chatId);
+		const current = chatState.activeTopic?.trim();
+		if (input.toLowerCase() === "list") {
+			const stack = chatState.topicStack ?? [];
+			const known = new Set([...stack, ...Object.keys(chatState.topics ?? {})]);
+			if (current) known.add(current);
+			const lines = [
+				`Текущий чат: ${current ?? "(нет)"}`,
+				known.size > 0
+					? `Чаты: ${Array.from(known).join(", ")}`
+					: "Чаты: (пусто)",
+			];
+			return sendText(ctx, lines.join("\n"));
+		}
+		if (!input) {
+			const stack = chatState.topicStack ?? [];
+			const previous = stack.pop();
+			if (!previous) return sendText(ctx, "История чатов пуста.");
+			chatState.topicStack = stack;
+			chatState.activeTopic = previous;
+			chatState.topics = chatState.topics ?? {};
+			chatState.topics[previous] = chatState.topics[previous] ?? {};
+			await chatStateStore.set(chatId, chatState);
+			return sendText(ctx, `Вернулся в чат: ${previous}`);
+		}
+		const target = normalizeTopic(input);
+		if (!target) return sendText(ctx, "Название чата пустое.");
+		if (current && target === current) {
+			return sendText(ctx, `Уже в чате: ${current}`);
+		}
+		if (!chatState.topics?.[target]) {
+			return sendText(
+				ctx,
+				"Чат не найден. Создай новый через /new <название>.",
+			);
+		}
+		if (current) {
+			const stack = chatState.topicStack ?? [];
+			stack.push(current);
+			chatState.topicStack = stack;
+		}
+		chatState.activeTopic = target;
+		await chatStateStore.set(chatId, chatState);
+		return sendText(ctx, `Переключил чат: ${target}`);
 	});
 
 	bot.command("help", (ctx) => {
@@ -330,11 +469,15 @@ export function registerCommands(deps: CommandDeps) {
 		if (!text) return sendText(ctx, "Пустой запрос.");
 		const chatId = ctx.chat?.id?.toString() ?? "";
 		if (!chatId) return sendText(ctx, "Не удалось определить чат.");
+		const chatState = await chatStateStore.get(chatId);
+		const activeTopic =
+			ctx.chat?.type === "private" ? chatState.activeTopic?.trim() : undefined;
 		const chatType = ctx.chat?.type ?? "private";
 		const sessionKey = buildSessionKey({
 			channel: "telegram",
 			chatType,
 			chatId,
+			...(activeTopic ? { topic: activeTopic } : {}),
 		});
 		const created = (await taskClient.create({
 			sessionKey,
@@ -430,8 +573,14 @@ export function registerCommands(deps: CommandDeps) {
 		}
 	}
 
-	bot.command("tools", (ctx) => {
-		setLogContext(ctx, { command: "/tools", message_type: "command" });
+	bot.command("tool", async (ctx) => {
+		setLogContext(ctx, { command: "/tool", message_type: "command" });
+		const text = ctx.message?.text ?? "";
+		const [, sub] = text.split(" ");
+		if (!sub || sub.toLowerCase() !== "list") {
+			await sendText(ctx, "Использование: /tool list");
+			return;
+		}
 		return handleTools(ctx);
 	});
 
@@ -539,8 +688,8 @@ export function registerCommands(deps: CommandDeps) {
 		await sendText(ctx, "Неизвестная подкоманда /model");
 	});
 
-	bot.command("skills", async (ctx) => {
-		setLogContext(ctx, { command: "/skills", message_type: "command" });
+	bot.command("skill", async (ctx) => {
+		setLogContext(ctx, { command: "/skill", message_type: "command" });
 		const channelSkills = filterSkillsForChannel({
 			skills: runtimeSkills,
 			channelConfig: ctx.state.channelConfig,
@@ -549,20 +698,6 @@ export function registerCommands(deps: CommandDeps) {
 			skills: runtimeSkills,
 			channelConfig: ctx.state.channelConfig,
 		});
-		if (!channelSkills.length) {
-			await sendText(ctx, "Нет доступных runtime-skills.");
-			return;
-		}
-		const supported = new Set(channelSupported.map((skill) => skill.name));
-		const lines = channelSkills.map((skill) => {
-			const suffix = supported.has(skill.name) ? "" : " (заблокировано)";
-			return `${skill.name}${suffix}`;
-		});
-		await sendText(ctx, `Доступные runtime-skills:\n${lines.join("\n")}`);
-	});
-
-	bot.command("skill", async (ctx) => {
-		setLogContext(ctx, { command: "/skill", message_type: "command" });
 		if (
 			isGroupChat(ctx) &&
 			shouldRequireMentionForChannel({
@@ -577,15 +712,28 @@ export function registerCommands(deps: CommandDeps) {
 			}
 		}
 		const text = ctx.message?.text ?? "";
-		const [, skillName, ...rest] = text.split(" ");
-		if (!skillName) {
-			await sendText(ctx, "Использование: /skill <name> <json>");
+		const [, sub, ...rest] = text.split(" ");
+		if (!sub) {
+			await sendText(
+				ctx,
+				"Использование: /skill list\nили /skill <name> <json>",
+			);
 			return;
 		}
-		const channelSupported = filterSkillsForChannel({
-			skills: runtimeSkills,
-			channelConfig: ctx.state.channelConfig,
-		});
+		if (sub.toLowerCase() === "list") {
+			if (!channelSkills.length) {
+				await sendText(ctx, "Нет доступных runtime-skills.");
+				return;
+			}
+			const supported = new Set(channelSupported.map((skill) => skill.name));
+			const lines = channelSkills.map((skill) => {
+				const suffix = supported.has(skill.name) ? "" : " (заблокировано)";
+				return `${skill.name}${suffix}`;
+			});
+			await sendText(ctx, `Доступные runtime-skills:\n${lines.join("\n")}`);
+			return;
+		}
+		const skillName = sub;
 		const skill = channelSupported.find((item) => item.name === skillName);
 		if (!skill) {
 			await sendText(ctx, `Неизвестный skill: ${skillName}`);

@@ -166,6 +166,11 @@ const JIRA_URL_RE = regex.as(
 const FIGMA_URL_RE = regex.as("https?://\\S*figma\\.com/(file|design)/", "i");
 const ISSUE_KEY_RE = regex("\\b[A-Z]{2,10}-\\d+\\b", "g");
 const TRAILING_SLASH_RE = regex("/+$");
+const TOPIC_SPACE_RE = regex("\\s+", "g");
+const TOPIC_INVALID_RE = regex("[^a-z0-9_\\-\\u0400-\\u052f]+", "g");
+const TOPIC_DASH_RE = regex("-+", "g");
+const TOPIC_TRIM_RE = regex("(^-+)|(-+$)", "g");
+const DEFAULT_TOPIC_SLUG = "untitled-chat";
 
 export type { BotEnv } from "./lib/config/env.js";
 
@@ -1542,6 +1547,7 @@ export async function createBot(options: CreateBotOptions) {
 		chatId: string;
 		workspaceId?: string;
 		sessionKey?: string;
+		topic?: string;
 	}) {
 		const workspaceId = params.workspaceId ?? resolveWorkspaceId(params.chatId);
 		const sessionKey =
@@ -1550,6 +1556,7 @@ export async function createBot(options: CreateBotOptions) {
 				channel: "telegram",
 				chatType: params.ctx.chat?.type ?? "private",
 				chatId: params.chatId,
+				topic: params.topic,
 			});
 		const workspaceSnapshot = workspaceManager
 			? await workspaceManager.loadSnapshot(workspaceId)
@@ -1577,12 +1584,64 @@ export async function createBot(options: CreateBotOptions) {
 		};
 	}
 
+	function normalizeTopic(value: string): string | null {
+		const trimmed = value.trim();
+		if (!trimmed) return null;
+		let out = trimmed.toLowerCase();
+		out = out.replace(TOPIC_SPACE_RE, "-");
+		out = out.replace(TOPIC_INVALID_RE, "-");
+		out = out.replace(TOPIC_DASH_RE, "-");
+		out = out.replace(TOPIC_TRIM_RE, "");
+		return out || null;
+	}
+
+	function resolveActiveTopic(chatState: ChatState | null): string | undefined {
+		const active = chatState?.activeTopic?.trim();
+		return active || undefined;
+	}
+
+	function ensureUniqueTopic(base: string, existing: Set<string>) {
+		if (!existing.has(base)) return base;
+		let counter = 2;
+		let candidate = `${base}-${counter}`;
+		while (existing.has(candidate)) {
+			counter += 1;
+			candidate = `${base}-${counter}`;
+		}
+		return candidate;
+	}
+
+	function maybeRenameDefaultTopic(params: {
+		chatState: ChatState | null;
+		updateChatState: (updater: (state: ChatState) => void) => void;
+		activeTopic?: string;
+		messageText: string;
+	}) {
+		const { chatState, updateChatState, activeTopic, messageText } = params;
+		if (!chatState || activeTopic !== DEFAULT_TOPIC_SLUG) return activeTopic;
+		const next = normalizeTopic(messageText);
+		if (!next || next === DEFAULT_TOPIC_SLUG) return activeTopic;
+		const existing = new Set(Object.keys(chatState.topics ?? {}));
+		const unique = ensureUniqueTopic(next, existing);
+		updateChatState((state) => {
+			const topics = state.topics ?? {};
+			if (topics[DEFAULT_TOPIC_SLUG]) {
+				delete topics[DEFAULT_TOPIC_SLUG];
+			}
+			state.activeTopic = unique;
+			topics[unique] = topics[unique] ?? {};
+			state.topics = topics;
+		});
+		return unique;
+	}
+
 	async function maybeUpdateObservations(params: {
 		historyMessages: HistoryMessage[];
 		chatState: ChatState | null;
 		updateChatState: (updater: (state: ChatState) => void) => void;
 		modelId: string;
 		isAdminChat: boolean;
+		topic?: string;
 	}): Promise<string | null> {
 		const {
 			historyMessages,
@@ -1590,21 +1649,29 @@ export async function createBot(options: CreateBotOptions) {
 			updateChatState,
 			modelId,
 			isAdminChat,
+			topic,
 		} = params;
 		if (!chatState || historyMessages.length === 0) {
 			return null;
 		}
+		const topicState = topic
+			? chatState.topics?.[topic]
+			: {
+					observations: chatState.fallbackObservations,
+					observationsMessageCount: chatState.fallbackObservationsMessageCount,
+					observationsUpdatedAt: chatState.fallbackObservationsUpdatedAt,
+				};
 		const cutoff = Math.max(0, historyMessages.length - OBSERVATIONS_TAIL);
 		if (cutoff < OBSERVATIONS_TRIGGER) {
-			return chatState.observations ?? null;
+			return topicState?.observations ?? null;
 		}
-		const lastObserved = chatState.observationsMessageCount ?? 0;
+		const lastObserved = topicState?.observationsMessageCount ?? 0;
 		if (lastObserved >= cutoff) {
-			return chatState.observations ?? null;
+			return topicState?.observations ?? null;
 		}
 		const messagesToObserve = historyMessages.slice(lastObserved, cutoff);
 		if (messagesToObserve.length === 0) {
-			return chatState.observations ?? null;
+			return topicState?.observations ?? null;
 		}
 		const historyBlock = truncateText(
 			formatHistoryForPrompt(messagesToObserve),
@@ -1633,7 +1700,7 @@ export async function createBot(options: CreateBotOptions) {
 					"🔴 критично, 🟡 важно, 🟢 справочно.",
 					"Верни ПОЛНЫЙ лог (старые + новые).",
 				].join("\n");
-		const existing = chatState.observations?.trim();
+		const existing = topicState?.observations?.trim();
 		const prompt = existing
 			? `Existing observations:\n${existing}\n\nNew messages:\n${historyBlock}`
 			: `New messages:\n${historyBlock}`;
@@ -1644,7 +1711,7 @@ export async function createBot(options: CreateBotOptions) {
 				prompt,
 			});
 			let observations = text?.trim() ?? "";
-			if (!observations) return chatState.observations ?? null;
+			if (!observations) return topicState?.observations ?? null;
 			if (observations.length > OBSERVATIONS_MAX_CHARS * 1.5) {
 				observations = observations.slice(0, OBSERVATIONS_MAX_CHARS * 1.5);
 			}
@@ -1671,14 +1738,23 @@ export async function createBot(options: CreateBotOptions) {
 				if (next) observations = next;
 			}
 			updateChatState((state) => {
-				state.observations = observations;
-				state.observationsMessageCount = cutoff;
-				state.observationsUpdatedAt = Date.now();
+				if (topic) {
+					state.topics = state.topics ?? {};
+					const next = state.topics[topic] ?? {};
+					next.observations = observations;
+					next.observationsMessageCount = cutoff;
+					next.observationsUpdatedAt = Date.now();
+					state.topics[topic] = next;
+					return;
+				}
+				state.fallbackObservations = observations;
+				state.fallbackObservationsMessageCount = cutoff;
+				state.fallbackObservationsUpdatedAt = Date.now();
 			});
 			return observations;
 		} catch (error) {
 			logDebug("observations update failed", { error: String(error) });
-			return chatState.observations ?? null;
+			return topicState?.observations ?? null;
 		}
 	}
 
@@ -1689,13 +1765,17 @@ export async function createBot(options: CreateBotOptions) {
 		modelId: string;
 		isAdminChat: boolean;
 		asyncMode: boolean;
+		topic?: string;
 	}): Promise<string | null> | string | null {
 		const { asyncMode, chatState } = params;
 		if (!asyncMode) {
 			return maybeUpdateObservations(params);
 		}
 		void maybeUpdateObservations(params);
-		return chatState?.observations ?? null;
+		if (params.topic) {
+			return chatState?.topics?.[params.topic]?.observations ?? null;
+		}
+		return chatState?.fallbackObservations ?? null;
 	}
 
 	function extractJiraIssueKeysFromUrls(text: string): string[] {
@@ -1810,13 +1890,26 @@ export async function createBot(options: CreateBotOptions) {
 		if (!workspaceStore) return;
 		const chatId = ctx.chat?.id?.toString() ?? "";
 		if (!chatId) return;
+		const chatState = await chatStateStore.get(chatId);
+		const isPrivate = ctx.chat?.type === "private";
+		const activeTopic = isPrivate ? resolveActiveTopic(chatState) : undefined;
 		const workspaceId = resolveWorkspaceId(chatId);
 		const sessionKey = buildSessionKey({
 			channel: "telegram",
 			chatType: ctx.chat?.type ?? "private",
 			chatId,
+			...(activeTopic ? { topic: activeTopic } : {}),
 		});
 		await clearSessionHistory(workspaceStore, workspaceId, sessionKey);
+		if (activeTopic) {
+			await chatStateStore.set(chatId, {
+				...chatState,
+				topics: {
+					...(chatState.topics ?? {}),
+					[activeTopic]: {},
+				},
+			});
+		}
 	};
 
 	registerCommands({
@@ -2850,6 +2943,19 @@ export async function createBot(options: CreateBotOptions) {
 				runAbortController = new AbortController();
 				registerInFlight(chatId, runAbortController);
 			}
+			chatState = chatId ? await chatStateStore.get(chatId) : null;
+			let activeTopic =
+				ctx.chat?.type === "private"
+					? resolveActiveTopic(chatState)
+					: undefined;
+			if (ctx.chat?.type === "private") {
+				activeTopic = maybeRenameDefaultTopic({
+					chatState,
+					updateChatState,
+					activeTopic,
+					messageText: effectiveText,
+				});
+			}
 			const {
 				workspaceId,
 				sessionKey,
@@ -2861,9 +2967,9 @@ export async function createBot(options: CreateBotOptions) {
 				chatId: chatId || "unknown",
 				workspaceId: ctx.state.workspaceIdOverride,
 				sessionKey: ctx.state.sessionKeyOverride,
+				...(activeTopic ? { topic: activeTopic } : {}),
 			});
 			const userName = ctx.from?.first_name?.trim() || undefined;
-			chatState = chatId ? await chatStateStore.get(chatId) : null;
 			const observations = await resolveObservationsForTurn({
 				historyMessages,
 				chatState,
@@ -2871,6 +2977,7 @@ export async function createBot(options: CreateBotOptions) {
 				modelId: activeModelConfig.id,
 				isAdminChat,
 				asyncMode: OBSERVATIONS_ASYNC,
+				topic: activeTopic,
 			});
 			const historyTextWithSummary = observations
 				? `${isAdminChat ? "Observations" : "Наблюдения"}:\n${observations}\n\n${historyText}`
@@ -3088,6 +3195,7 @@ export async function createBot(options: CreateBotOptions) {
 						modelConfig,
 						{
 							chatId,
+							...(activeTopic ? { topic: activeTopic } : {}),
 							ctx,
 							webSearchEnabled: allowWebSearch,
 							recentCandidates: chatState?.lastCandidates ?? [],
@@ -3767,6 +3875,7 @@ export async function createBot(options: CreateBotOptions) {
 						history: historyTextWithSummary,
 						workspaceSnapshot,
 						chatId,
+						...(activeTopic ? { topic: activeTopic } : {}),
 						userName,
 						onToolStart: (toolName) => {
 							onToolStart?.(toolName);
@@ -3936,6 +4045,19 @@ export async function createBot(options: CreateBotOptions) {
 				}
 			}
 			chatId = ctx.chat?.id?.toString() ?? "";
+			chatState = chatId ? await chatStateStore.get(chatId) : null;
+			let activeTopic =
+				ctx.chat?.type === "private"
+					? resolveActiveTopic(chatState)
+					: undefined;
+			if (ctx.chat?.type === "private") {
+				activeTopic = maybeRenameDefaultTopic({
+					chatState,
+					updateChatState,
+					activeTopic,
+					messageText: effectiveText,
+				});
+			}
 			const {
 				workspaceId,
 				sessionKey,
@@ -3947,9 +4069,9 @@ export async function createBot(options: CreateBotOptions) {
 				chatId: chatId || "unknown",
 				workspaceId: ctx.state.workspaceIdOverride,
 				sessionKey: ctx.state.sessionKeyOverride,
+				...(activeTopic ? { topic: activeTopic } : {}),
 			});
 			const userName = ctx.from?.first_name?.trim() || undefined;
-			chatState = chatId ? await chatStateStore.get(chatId) : null;
 			const observations = await resolveObservationsForTurn({
 				historyMessages,
 				chatState,
@@ -3957,6 +4079,7 @@ export async function createBot(options: CreateBotOptions) {
 				modelId: activeModelConfig.id,
 				isAdminChat: chatId === "admin",
 				asyncMode: OBSERVATIONS_ASYNC,
+				topic: activeTopic,
 			});
 			const historyTextWithSummary = observations
 				? `${chatId === "admin" ? "Observations" : "Наблюдения"}:\n${observations}\n\n${historyText}`
@@ -4356,6 +4479,7 @@ export async function createBot(options: CreateBotOptions) {
 				history: historyTextWithSummary,
 				workspaceSnapshot,
 				chatId,
+				...(activeTopic ? { topic: activeTopic } : {}),
 				userName,
 				onToolStart: (toolName) => {
 					reportTaskStep(toolName);
@@ -4414,7 +4538,7 @@ export async function createBot(options: CreateBotOptions) {
 		setLogContext(ctx, { message_type: "other" });
 		return sendText(
 			ctx,
-			"Попробуйте /tools, чтобы увидеть доступные инструменты.",
+			"Попробуйте /tool list, чтобы увидеть доступные инструменты.",
 		);
 	});
 

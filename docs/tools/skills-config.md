@@ -14,7 +14,7 @@ apps/bot/skills/**/skill.json
 There is no separate global config file. Each skill defines:
 
 - `name` — used by `/skill <name>`
-- `description` — shown by `/skills`
+- `description` — shown by `/skill list`
 - `tool` — `yandex-tracker.<tool_name>`
 - `args` — optional default arguments
 - `timeoutMs` — optional per-skill timeout

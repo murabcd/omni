@@ -28,13 +28,22 @@ export type ResearchState = {
 	createdAt: number;
 };
 
+export type TopicState = {
+	observations?: string;
+	observationsMessageCount?: number;
+	observationsUpdatedAt?: number;
+};
+
 export type ChatState = {
 	lastCandidates: CandidateIssue[];
 	lastPrimaryKey: string | null;
 	lastUpdatedAt: number;
-	observations?: string;
-	observationsMessageCount?: number;
-	observationsUpdatedAt?: number;
+	fallbackObservations?: string;
+	fallbackObservationsMessageCount?: number;
+	fallbackObservationsUpdatedAt?: number;
+	activeTopic?: string;
+	topicStack?: string[];
+	topics?: Record<string, TopicState>;
 	pendingAttachmentRequest?: PendingAttachmentRequest;
 	research?: ResearchState;
 };
@@ -44,9 +53,12 @@ export function createEmptyChatState(): ChatState {
 		lastCandidates: [],
 		lastPrimaryKey: null,
 		lastUpdatedAt: 0,
-		observations: undefined,
-		observationsMessageCount: undefined,
-		observationsUpdatedAt: undefined,
+		fallbackObservations: undefined,
+		fallbackObservationsMessageCount: undefined,
+		fallbackObservationsUpdatedAt: undefined,
+		activeTopic: undefined,
+		topicStack: undefined,
+		topics: undefined,
 		pendingAttachmentRequest: undefined,
 		research: undefined,
 	};

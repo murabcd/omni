@@ -33,7 +33,7 @@ Example `skill.json`:
 
 ## Usage in Telegram
 
-- `/skills` — list available runtime skills
+- `/skill list` — list available runtime skills
 - `/skill <name> <json>` — run a skill with optional JSON overrides
 
 Example:

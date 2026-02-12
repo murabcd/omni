@@ -37,7 +37,7 @@ Omni applies a chat-scoped tool policy:
 - 1‑1 chats: all tools are available (web + memory included).
 - Group chats: `web_search`, `memory_read`, `memory_append`, `memory_write`, `memory_search`, and `session_history` are disabled.
 
-Use `/tools` to see the active tool list for the current chat.
+Use `/tool list` to see the active tool list for the current chat.
 
 You can further restrict tools by chat type with:
 
@@ -48,6 +48,13 @@ TOOL_ALLOWLIST_GROUP=
 TOOL_DENYLIST_GROUP=
 TOOL_RATE_LIMITS=web_search:10/60
 ```
+
+## Chat contexts (DM only)
+
+After `/start`, Omni creates a default chat named `untitled chat`.
+After your first message, it is renamed based on that message.
+Use `/new <name>` to create additional chats (without a name it starts as `untitled chat`),
+and `/resume <name>` to switch.
 
 ## Background tasks
 

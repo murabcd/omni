@@ -2,7 +2,7 @@
 summary: "Tool visibility and conflict handling in Omni"
 read_when:
   - Adding tools or changing tool availability
-  - Debugging missing tools in /tools
+  - Debugging missing tools in /tool list
 ---
 # Tool policy and conflicts
 
@@ -15,9 +15,9 @@ Omni builds a tool registry at runtime and applies these rules:
 - Tool availability can be filtered by a global allow/deny policy (see Environment variables).
 - Tool availability can also be filtered by chat type using chat‑specific allow/deny lists.
 - Group chats always deny `group:web` and `group:memory` unless explicitly overridden in code.
-- The agent prompt uses the same tool list as `/tools` (there is no helper-only split); use allow/deny policies to restrict exposure.
+- The agent prompt uses the same tool list as `/tool list` (there is no helper-only split); use allow/deny policies to restrict exposure.
 
-The `/tools` command shows active tools and also lists conflicts and policy‑suppressed tools.
+The `/tool list` command shows active tools and also lists conflicts and policy‑suppressed tools.
 
 ## Environment variables
 
@@ -64,7 +64,7 @@ TOOL_DENYLIST_CHAT_TOOLS=-1001234567890:group:web
 
 ## Conflict diagnostics
 
-When a conflict occurs, Omni logs a `tool_conflict` event and skips the duplicate tool. Use `/tools` to see the conflicts summary.
+When a conflict occurs, Omni logs a `tool_conflict` event and skips the duplicate tool. Use `/tool list` to see the conflicts summary.
 
 ## Tool status messages
 
