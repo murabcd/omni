@@ -10,11 +10,11 @@
 		"check": "biome check --write"
 	},
 	"dependencies": {
-		"croner": "^9.0.0"
+		"croner": "catalog:"
 	},
 	"devDependencies": {
 		"@cloudflare/workers-types": "^4.20260124.0",
-		"@types/node": "^22.15.21",
-		"vitest": "^4.0.18"
+		"@types/node": "catalog:tooling",
+		"vitest": "catalog:tooling"
 	}
 }
