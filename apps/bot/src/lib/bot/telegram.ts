@@ -5,12 +5,14 @@ import { markdownToTelegramHtml } from "../telegram/format.js";
 
 type SendTextContext = {
 	reply: (text: string, options?: Record<string, unknown>) => Promise<unknown>;
+	chat?: { id?: number | string };
 };
 
 type TelegramHelpersOptions = {
 	textChunkLimit: number;
 	logDebug: (message: string, data?: unknown) => void;
 	linkPreviewEnabled?: boolean;
+	onSentMessage?: (chatId: number | string, messageId: number) => void;
 };
 
 type RetryConfig = {
@@ -37,7 +39,8 @@ const TELEGRAM_PARSE_ERR_RE = regex.as(
 );
 
 export function createTelegramHelpers(options: TelegramHelpersOptions) {
-	const { textChunkLimit, logDebug, linkPreviewEnabled } = options;
+	const { textChunkLimit, logDebug, linkPreviewEnabled, onSentMessage } =
+		options;
 
 	function formatError(error: unknown) {
 		if (typeof error === "string") return error;
@@ -146,18 +149,34 @@ export function createTelegramHelpers(options: TelegramHelpersOptions) {
 
 		try {
 			if (formatted.length <= limit) {
-				await retryTelegram(
+				const sent = await retryTelegram(
 					() => ctx.reply(formatted, replyWithPreview),
 					"sendMessage",
 				);
+				const chatId = ctx.chat?.id;
+				const messageId =
+					sent && typeof sent === "object" && "message_id" in sent
+						? (sent as { message_id?: number }).message_id
+						: undefined;
+				if (chatId != null && messageId != null) {
+					onSentMessage?.(chatId, messageId);
+				}
 				return;
 			}
 			for (let i = 0; i < formatted.length; i += limit) {
 				const chunk = formatted.slice(i, i + limit);
-				await retryTelegram(
+				const sent = await retryTelegram(
 					() => ctx.reply(chunk, replyWithPreview),
 					"sendMessage",
 				);
+				const chatId = ctx.chat?.id;
+				const messageId =
+					sent && typeof sent === "object" && "message_id" in sent
+						? (sent as { message_id?: number }).message_id
+						: undefined;
+				if (chatId != null && messageId != null) {
+					onSentMessage?.(chatId, messageId);
+				}
 			}
 			return;
 		} catch (error) {
@@ -174,18 +193,34 @@ export function createTelegramHelpers(options: TelegramHelpersOptions) {
 				? { ...plainOptions, link_preview_options: { is_disabled: true } }
 				: plainOptions;
 		if (text.length <= limit) {
-			await retryTelegram(
+			const sent = await retryTelegram(
 				() => ctx.reply(text, plainWithPreview),
 				"sendMessage_plain",
 			);
+			const chatId = ctx.chat?.id;
+			const messageId =
+				sent && typeof sent === "object" && "message_id" in sent
+					? (sent as { message_id?: number }).message_id
+					: undefined;
+			if (chatId != null && messageId != null) {
+				onSentMessage?.(chatId, messageId);
+			}
 			return;
 		}
 		for (let i = 0; i < text.length; i += limit) {
 			const chunk = text.slice(i, i + limit);
-			await retryTelegram(
+			const sent = await retryTelegram(
 				() => ctx.reply(chunk, plainWithPreview),
 				"sendMessage_plain",
 			);
+			const chatId = ctx.chat?.id;
+			const messageId =
+				sent && typeof sent === "object" && "message_id" in sent
+					? (sent as { message_id?: number }).message_id
+					: undefined;
+			if (chatId != null && messageId != null) {
+				onSentMessage?.(chatId, messageId);
+			}
 		}
 	}
 

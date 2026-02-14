@@ -36,6 +36,7 @@ import {
 	searchTool,
 	statusTool,
 } from "firecrawl-aisdk";
+import type { ReactionType, ReactionTypeEmoji } from "grammy/types";
 import { jsonrepair } from "jsonrepair";
 import { z } from "zod";
 import type { ModelConfig } from "../../models-core.js";
@@ -72,6 +73,7 @@ import { buildJiraJql, normalizeJiraIssue } from "../jira.js";
 import { buildSkillsPrompt } from "../prompts/skills-prompt.js";
 import { formatUserDateTime } from "../prompts/time.js";
 import type { TextStore } from "../storage/text-store.js";
+import type { ResolvedTelegramReactionLevel } from "../telegram/reactions.js";
 import { extractKeywords } from "../text/normalize.js";
 import {
 	isToolAllowedForSender,
@@ -123,6 +125,7 @@ const AGENT_MAX_MESSAGES = 120;
 const AGENT_RECENT_MESSAGES = 40;
 const WIKI_PATH_LEADING_SLASH_RE = regex("^/+");
 const WIKI_PATH_TRAILING_SLASH_RE = regex("/+$");
+const TELEGRAM_REACTION_INVALID_RE = regex.as("REACTION_INVALID", "i");
 
 function parseJsonWithRepair<T>(value: string): T | null {
 	try {
@@ -347,6 +350,7 @@ export type AgentToolsDeps = {
 	uiScreenshotEnabled?: boolean;
 	defaultTrackerQueue: string;
 	cronStatusTimezone: string;
+	telegramReactionLevel?: ResolvedTelegramReactionLevel;
 	resolveChatTimezone?: (
 		ctx?: BotContext,
 		chatId?: string,
@@ -779,6 +783,68 @@ export function createAgentToolsFactory(
 							})
 							.slice(0, limit ?? 10);
 						return { query, matches };
+					},
+				}),
+			);
+		}
+
+		if (deps.telegramReactionLevel?.agentReactionsEnabled) {
+			registerTool(
+				{
+					name: "telegram_react",
+					description: "Add or remove a reaction on a Telegram message.",
+					source: "core",
+					origin: "telegram",
+				},
+				tool({
+					description: "Add or remove a reaction on a Telegram message.",
+					inputSchema: z.object({
+						chatId: z
+							.union([z.string(), z.number()])
+							.describe("Target Telegram chat id"),
+						messageId: z.number().int().describe("Target message id"),
+						emoji: z.string().optional().describe("Emoji reaction"),
+						remove: z.boolean().optional().describe("Remove the reaction"),
+					}),
+					execute: async ({ chatId, messageId, emoji, remove }) => {
+						const level = deps.telegramReactionLevel;
+						if (!level?.agentReactionsEnabled) {
+							throw new Error(
+								"Telegram reactions are disabled (set TELEGRAM_REACTION_LEVEL to minimal or extensive).",
+							);
+						}
+						const ctx = options?.ctx;
+						if (!ctx?.api?.setMessageReaction) {
+							throw new Error(
+								"Telegram reactions are unavailable in this bot.",
+							);
+						}
+						const trimmedEmoji = (emoji ?? "").trim();
+						const reactions: ReactionType[] =
+							remove || !trimmedEmoji
+								? []
+								: [
+										{
+											type: "emoji",
+											emoji: trimmedEmoji as ReactionTypeEmoji["emoji"],
+										},
+									];
+						try {
+							await ctx.api.setMessageReaction(chatId, messageId, reactions);
+						} catch (err) {
+							const msg = err instanceof Error ? err.message : String(err);
+							if (TELEGRAM_REACTION_INVALID_RE.test(msg)) {
+								return {
+									ok: false,
+									warning: `Reaction unavailable: ${trimmedEmoji}`,
+								};
+							}
+							throw err;
+						}
+						if (!remove && trimmedEmoji) {
+							return { ok: true, added: trimmedEmoji };
+						}
+						return { ok: true, removed: true };
 					},
 				}),
 			);

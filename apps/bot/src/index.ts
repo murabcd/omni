@@ -244,7 +244,11 @@ async function startBotWithRetry() {
 	let attempts = 0;
 	while (!stopRequested) {
 		try {
-			await bot.start({ allowed_updates: allowedUpdates });
+			await bot.start(
+				{ allowed_updates: allowedUpdates } as unknown as Parameters<
+					typeof bot.start
+				>[0],
+			);
 			return;
 		} catch (error) {
 			if (stopRequested) return;

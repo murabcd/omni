@@ -16,6 +16,7 @@ import {
 } from "ai";
 import { regex } from "arkregex";
 import { API_CONSTANTS, Bot, InlineKeyboard, InputFile } from "grammy";
+import type { ReactionTypeEmoji } from "grammy/types";
 import { z } from "zod";
 import {
 	type AgentToolCall,
@@ -112,6 +113,14 @@ import { formatUserDateTime } from "./lib/prompts/time.js";
 import type { TextStore } from "./lib/storage/text-store.js";
 import { decideTaskMode, extractTaskOverride } from "./lib/tasks/router.js";
 import { markdownToTelegramChunks } from "./lib/telegram/format.js";
+import {
+	normalizeTelegramReactionNotificationMode,
+	resolveTelegramReactionLevel,
+} from "./lib/telegram/reactions.js";
+import {
+	recordSentMessage,
+	wasSentByBot,
+} from "./lib/telegram/sent-message-cache.js";
 import {
 	extractIssueKeysFromText,
 	truncateText,
@@ -286,6 +295,8 @@ export async function createBot(options: CreateBotOptions) {
 		TELEGRAM_TEXT_CHUNK_LIMIT,
 		TELEGRAM_LINK_PREVIEW,
 		TELEGRAM_ABORT_ON_NEW_MESSAGE,
+		TELEGRAM_REACTION_NOTIFICATIONS,
+		TELEGRAM_REACTION_LEVEL,
 		ALLOWED_TG_GROUPS,
 		TELEGRAM_GROUP_REQUIRE_MENTION,
 		IMAGE_MAX_BYTES,
@@ -336,6 +347,10 @@ export async function createBot(options: CreateBotOptions) {
 		INSTANCE_ID,
 		ADMIN_UI_BASE_URL,
 	} = envConfig;
+	const reactionNotifications = normalizeTelegramReactionNotificationMode(
+		TELEGRAM_REACTION_NOTIFICATIONS,
+	);
+	const reactionLevel = resolveTelegramReactionLevel(TELEGRAM_REACTION_LEVEL);
 
 	const baseAdminUiUrl = ADMIN_UI_BASE_URL.trim();
 	const realtimeCallUrl = baseAdminUiUrl
@@ -801,6 +816,18 @@ export async function createBot(options: CreateBotOptions) {
 			);
 		}
 
+		if (reactionLevel.agentReactionsEnabled) {
+			register(
+				{
+					name: "telegram_react",
+					description: "Add or remove a reaction on a Telegram message.",
+					source: "core",
+					origin: "telegram",
+				},
+				agentTools,
+			);
+		}
+
 		if (GEMINI_API_KEY) {
 			register(
 				{
@@ -1019,7 +1046,12 @@ export async function createBot(options: CreateBotOptions) {
 			textChunkLimit: TELEGRAM_TEXT_CHUNK_LIMIT,
 			logDebug,
 			linkPreviewEnabled: TELEGRAM_LINK_PREVIEW,
+			onSentMessage: recordSentMessage,
 		});
+	const reactionConfig = {
+		notifications: reactionNotifications,
+		level: reactionLevel,
+	};
 	const inboundDedupe = createInboundDedupe({
 		ttlMs: INBOUND_DEDUPE_TTL_MS,
 		maxPerChat: INBOUND_DEDUPE_MAX,
@@ -1372,6 +1404,7 @@ export async function createBot(options: CreateBotOptions) {
 		posthogPersonalApiKey: POSTHOG_PERSONAL_API_KEY,
 		getPosthogTools,
 		geminiApiKey: GEMINI_API_KEY ?? "",
+		telegramReactionLevel: reactionLevel,
 		cronClient,
 		toolServiceClient: toolServiceClient ?? undefined,
 		trackerClient,
@@ -2292,7 +2325,7 @@ export async function createBot(options: CreateBotOptions) {
 		if (!("api" in ctx) || !ctx.api?.sendDocument) return;
 		for (const file of params.files) {
 			try {
-				await retryTelegramCall(
+				const sent = await retryTelegramCall(
 					() =>
 						ctx.api.sendDocument(
 							chatId,
@@ -2303,6 +2336,13 @@ export async function createBot(options: CreateBotOptions) {
 						),
 					"sendDocument",
 				);
+				const messageId =
+					sent && typeof sent === "object" && "message_id" in sent
+						? (sent as { message_id?: number }).message_id
+						: undefined;
+				if (messageId != null) {
+					recordSentMessage(chatId, messageId);
+				}
 			} catch (error) {
 				logDebug("send attachment failed", { error: String(error) });
 			}
@@ -2320,7 +2360,7 @@ export async function createBot(options: CreateBotOptions) {
 		if (!chatId) return;
 		if (!("api" in ctx) || !ctx.api?.sendDocument) return;
 		try {
-			await retryTelegramCall(
+			const sent = await retryTelegramCall(
 				() =>
 					ctx.api.sendDocument(
 						chatId,
@@ -2328,6 +2368,13 @@ export async function createBot(options: CreateBotOptions) {
 					),
 				"sendDocument",
 			);
+			const messageId =
+				sent && typeof sent === "object" && "message_id" in sent
+					? (sent as { message_id?: number }).message_id
+					: undefined;
+			if (messageId != null) {
+				recordSentMessage(chatId, messageId);
+			}
 		} catch (error) {
 			logDebug("send generated file failed", { error: String(error) });
 		}
@@ -2344,10 +2391,17 @@ export async function createBot(options: CreateBotOptions) {
 		try {
 			const buffer = await fs.readFile(params.path);
 			const filename = params.path.split("/").pop() ?? "screenshot.png";
-			await retryTelegramCall(
+			const sent = await retryTelegramCall(
 				() => ctx.api.sendPhoto(chatId, new InputFile(buffer, filename)),
 				"sendPhoto",
 			);
+			const messageId =
+				sent && typeof sent === "object" && "message_id" in sent
+					? (sent as { message_id?: number }).message_id
+					: undefined;
+			if (messageId != null) {
+				recordSentMessage(chatId, messageId);
+			}
 			await fs.unlink(params.path).catch(() => undefined);
 		} catch (error) {
 			logDebug("send browser screenshot failed", { error: String(error) });
@@ -2444,6 +2498,7 @@ export async function createBot(options: CreateBotOptions) {
 				: undefined;
 		if (!messageId) return null;
 		const chatId = ctx.chat.id;
+		recordSentMessage(chatId, messageId);
 
 		let fullText = "";
 		const sources: Array<{ url?: string }> = [];
@@ -2515,12 +2570,19 @@ export async function createBot(options: CreateBotOptions) {
 					if (url) {
 						try {
 							if (mediaType.startsWith("image/")) {
-								await retryTelegramCall(
+								const sent = await retryTelegramCall(
 									() => ctx.api.sendPhoto(chatId, url),
 									"sendPhoto_stream",
 								);
+								const messageId =
+									sent && typeof sent === "object" && "message_id" in sent
+										? (sent as { message_id?: number }).message_id
+										: undefined;
+								if (messageId != null) {
+									recordSentMessage(chatId, messageId);
+								}
 							} else {
-								await retryTelegramCall(
+								const sent = await retryTelegramCall(
 									() =>
 										ctx.api.sendDocument(
 											chatId,
@@ -2528,6 +2590,13 @@ export async function createBot(options: CreateBotOptions) {
 										),
 									"sendDocument_stream",
 								);
+								const messageId =
+									sent && typeof sent === "object" && "message_id" in sent
+										? (sent as { message_id?: number }).message_id
+										: undefined;
+								if (messageId != null) {
+									recordSentMessage(chatId, messageId);
+								}
 							}
 						} catch (error) {
 							logDebug("telegram stream file send failed", {
@@ -2614,12 +2683,26 @@ export async function createBot(options: CreateBotOptions) {
 		if (chunks.length > 1) {
 			for (const chunk of chunks.slice(1)) {
 				try {
-					await ctx.reply(chunk.html, {
+					const sent = await ctx.reply(chunk.html, {
 						...(replyOptions ?? {}),
 						parse_mode: "HTML",
 					});
+					const messageId =
+						sent && typeof sent === "object" && "message_id" in sent
+							? (sent as { message_id?: number }).message_id
+							: undefined;
+					if (messageId != null) {
+						recordSentMessage(chatId, messageId);
+					}
 				} catch {
-					await ctx.reply(chunk.text, replyOptions);
+					const sent = await ctx.reply(chunk.text, replyOptions);
+					const messageId =
+						sent && typeof sent === "object" && "message_id" in sent
+							? (sent as { message_id?: number }).message_id
+							: undefined;
+					if (messageId != null) {
+						recordSentMessage(chatId, messageId);
+					}
 				}
 			}
 		}
@@ -2801,6 +2884,96 @@ export async function createBot(options: CreateBotOptions) {
 			logDebug("document handling error", { error: String(error) });
 			setLogError(ctx, error);
 			await sendText(ctx, `Ошибка: ${String(error)}`);
+		}
+	});
+
+	bot.on("message_reaction", async (ctx) => {
+		try {
+			if (ctx.state.systemEvent) return;
+			const reaction = ctx.messageReaction;
+			if (!reaction) return;
+
+			const reactionMode = reactionConfig.notifications;
+			if (reactionMode === "off") return;
+
+			const user = reaction.user;
+			if (user?.is_bot) return;
+
+			const chatId = reaction.chat.id;
+			const messageId = reaction.message_id;
+			if (!chatId || !messageId) return;
+
+			if (reactionMode === "own" && !wasSentByBot(chatId, messageId)) {
+				return;
+			}
+
+			const oldEmojis = new Set(
+				reaction.old_reaction
+					.filter((r): r is ReactionTypeEmoji => r.type === "emoji")
+					.map((r) => r.emoji),
+			);
+			const addedReactions = reaction.new_reaction
+				.filter((r): r is ReactionTypeEmoji => r.type === "emoji")
+				.filter((r) => !oldEmojis.has(r.emoji));
+
+			if (addedReactions.length === 0) return;
+
+			const senderName = user
+				? [user.first_name, user.last_name].filter(Boolean).join(" ").trim() ||
+					user.username
+				: undefined;
+			const senderUsername = user?.username ? `@${user.username}` : undefined;
+			let senderLabel = senderName;
+			if (senderName && senderUsername) {
+				senderLabel = `${senderName} (${senderUsername})`;
+			} else if (!senderName && senderUsername) {
+				senderLabel = senderUsername;
+			}
+			if (!senderLabel && user?.id) {
+				senderLabel = `id:${user.id}`;
+			}
+			senderLabel = senderLabel || "unknown";
+
+			const baseChatType =
+				(reaction.chat.type as
+					| "private"
+					| "group"
+					| "supergroup"
+					| "channel") ?? "private";
+			const sessionKey = buildSessionKey({
+				channel: "telegram",
+				chatType: baseChatType,
+				chatId: String(chatId),
+			});
+
+			for (const r of addedReactions) {
+				const emoji = r.emoji;
+				const text = `Telegram reaction added: ${emoji} by ${senderLabel} on msg ${messageId}`;
+				if (options.queueTurn) {
+					await options.queueTurn({
+						sessionKey,
+						chatId: String(chatId),
+						chatType: baseChatType,
+						text,
+						kind: "system",
+						channelConfig: ctx.state.channelConfig,
+						meta: {
+							reaction: emoji,
+							messageId,
+							userId: user?.id,
+						},
+					});
+				} else {
+					await sendText(ctx, text);
+				}
+				logDebug("telegram reaction event queued", {
+					chatId,
+					messageId,
+					emoji,
+				});
+			}
+		} catch (error) {
+			logDebug("telegram reaction handler failed", { error: String(error) });
 		}
 	});
 
@@ -4564,7 +4737,10 @@ export async function createBot(options: CreateBotOptions) {
 		);
 	});
 
-	const allowedUpdates = [...API_CONSTANTS.DEFAULT_UPDATE_TYPES];
+	const allowedUpdates = [...API_CONSTANTS.DEFAULT_UPDATE_TYPES] as string[];
+	if (!allowedUpdates.includes("message_reaction")) {
+		allowedUpdates.push("message_reaction");
+	}
 
 	async function buildPromptReport(params?: {
 		chatId?: string;

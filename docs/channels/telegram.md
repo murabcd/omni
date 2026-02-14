@@ -18,6 +18,8 @@ Optional:
 - `TELEGRAM_TEXT_CHUNK_LIMIT` (default: 4000)
 - `TELEGRAM_LINK_PREVIEW` (default: 1) — set `0` to disable link previews
 - `TELEGRAM_ABORT_ON_NEW_MESSAGE` (default: 0) — set `1` to cancel in-flight runs on new messages
+- `TELEGRAM_REACTION_NOTIFICATIONS` (default: `off`) — `off` | `own` | `all`
+- `TELEGRAM_REACTION_LEVEL` (default: `off`) — `off` | `minimal` | `extensive`
 - `INBOUND_DEDUPE_TTL_MS` (default: 1200000) — TTL for inbound message dedupe
 - `INBOUND_DEDUPE_MAX` (default: 5000) — max dedupe entries per chat
 - `DEBUG_LOGS` (set `1` to enable)

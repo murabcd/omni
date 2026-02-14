@@ -9,6 +9,8 @@ ALLOWED_TG_GROUPS="-1001234567890,-1009876543210"
 TELEGRAM_GROUP_REQUIRE_MENTION=1
 TELEGRAM_LINK_PREVIEW=1
 TELEGRAM_ABORT_ON_NEW_MESSAGE=0
+TELEGRAM_REACTION_NOTIFICATIONS=own
+TELEGRAM_REACTION_LEVEL=minimal
 INBOUND_DEDUPE_TTL_MS=1200000
 INBOUND_DEDUPE_MAX=5000
 ```
@@ -26,6 +28,13 @@ Link previews are enabled by default; set `TELEGRAM_LINK_PREVIEW=0` to disable t
 
 Set `TELEGRAM_ABORT_ON_NEW_MESSAGE=1` to cancel in‑flight runs when a new message arrives
 in the same chat (useful for fast iteration).
+
+Reaction handling:
+- `TELEGRAM_REACTION_NOTIFICATIONS=off|own|all` controls which reaction updates are processed.
+  - `own`: only reactions on bot-sent messages.
+  - `all`: reactions on any message in the chat.
+- `TELEGRAM_REACTION_LEVEL=off|minimal|extensive` enables the agent reaction tool.
+  - `minimal` / `extensive` allows the bot to react via tool calls.
 
 Inbound dedupe uses a per‑chat cache to skip repeated delivery of the same Telegram
 message ID. Tune TTL and size via `INBOUND_DEDUPE_TTL_MS` and `INBOUND_DEDUPE_MAX`.
