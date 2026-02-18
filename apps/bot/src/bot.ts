@@ -2948,28 +2948,14 @@ export async function createBot(options: CreateBotOptions) {
 
 			for (const r of addedReactions) {
 				const emoji = r.emoji;
-				const text = `Telegram reaction added: ${emoji} by ${senderLabel} on msg ${messageId}`;
-				if (options.queueTurn) {
-					await options.queueTurn({
-						sessionKey,
-						chatId: String(chatId),
-						chatType: baseChatType,
-						text,
-						kind: "system",
-						channelConfig: ctx.state.channelConfig,
-						meta: {
-							reaction: emoji,
-							messageId,
-							userId: user?.id,
-						},
-					});
-				} else {
-					await sendText(ctx, text);
-				}
-				logDebug("telegram reaction event queued", {
+				logDebug("telegram reaction observed", {
 					chatId,
 					messageId,
 					emoji,
+					senderLabel,
+					userId: user?.id,
+					chatType: baseChatType,
+					sessionKey,
 				});
 			}
 		} catch (error) {
