@@ -25,8 +25,9 @@
 		"catalog": {
 			"@ai-sdk/google": "^3.0.20",
 			"@ai-sdk/openai": "^3.0.25",
-			"@json-render/core": "0.4.4",
-			"@json-render/react": "0.4.4",
+			"@json-render/core": "0.8.0",
+			"@json-render/react": "0.8.0",
+			"@json-render/shadcn": "0.8.0",
 			"@mendable/firecrawl-js": "^4.12.0",
 			"@posthog/agent-toolkit": "^0.2.4",
 			"ai": "^6.0.69",
@@ -49,12 +50,15 @@
 		}
 	},
 	"dependencies": {
-		"croner": "catalog:"
+		"@json-render/core": "^0.8.0",
+		"@json-render/react": "^0.8.0",
+		"@json-render/shadcn": "^0.8.0",
+		"croner": "^9.1.0"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "2.3.11",
 		"husky": "^9.1.7",
-		"shadcn": "^3.8.4",
-		"turbo": "^2.8.2"
+		"shadcn": "^3.8.5",
+		"turbo": "^2.8.10"
 	}
 }

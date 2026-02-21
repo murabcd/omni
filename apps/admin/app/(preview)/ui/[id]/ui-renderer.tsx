@@ -66,8 +66,8 @@ export function UiRenderer({ payload }: { payload: UiPayload }) {
 
 			<JSONUIProvider
 				registry={componentRegistry}
-				initialData={dataModel}
-				actionHandlers={actions}
+				initialState={dataModel}
+				handlers={actions}
 			>
 				<div className="mx-auto max-w-6xl px-6 pb-10">
 					<Renderer
