@@ -12,6 +12,8 @@ export type WorkspaceDefaults = {
 export type WorkspaceSnapshot = {
 	agents?: string;
 	soul?: string;
+	memoryCore?: string;
+	memoryCorePath?: string;
 	memoryToday?: string;
 	memoryYesterday?: string;
 	memoryTodayPath?: string;

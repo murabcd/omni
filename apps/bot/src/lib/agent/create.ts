@@ -414,6 +414,8 @@ export type CreateAgentOptions = {
 	workspaceSnapshot?: {
 		agents?: string;
 		soul?: string;
+		memoryCore?: string;
+		memoryCorePath?: string;
 		memoryToday?: string;
 		memoryYesterday?: string;
 		memoryTodayPath?: string;
@@ -754,34 +756,26 @@ export function createAgentToolsFactory(
 						limit: z.number().int().min(1).max(20).optional(),
 					}),
 					execute: async ({ query, limit }) => {
-						const snapshot = await workspaceManager.loadSnapshot(workspaceId);
-						const haystack: Array<{ path: string; content: string }> = [];
-						if (snapshot.memoryToday) {
-							haystack.push({
-								path: snapshot.memoryTodayPath ?? "memory/today.md",
-								content: snapshot.memoryToday,
-							});
-						}
-						if (snapshot.memoryYesterday) {
-							haystack.push({
-								path: snapshot.memoryYesterdayPath ?? "memory/yesterday.md",
-								content: snapshot.memoryYesterday,
-							});
-						}
+						const haystack =
+							await workspaceManager.listMemoryFiles(workspaceId);
 						const needle = query.toLowerCase();
-						const matches = haystack
-							.flatMap((entry) => {
-								const lines = entry.content.split("\n");
-								return lines
-									.map((line, index) => ({ line, index }))
-									.filter((line) => line.line.toLowerCase().includes(needle))
-									.map((line) => ({
-										path: entry.path,
-										line: line.index + 1,
-										text: line.line,
-									}));
-							})
-							.slice(0, limit ?? 10);
+						const maxMatches = limit ?? 10;
+						const matches: Array<{ path: string; line: number; text: string }> =
+							[];
+						for (const entry of haystack) {
+							const lines = entry.content.split("\n");
+							for (const [index, line] of lines.entries()) {
+								if (!line.toLowerCase().includes(needle)) continue;
+								matches.push({
+									path: entry.path,
+									line: index + 1,
+									text: line,
+								});
+								if (matches.length >= maxMatches) {
+									return { query, matches };
+								}
+							}
+						}
 						return { query, matches };
 					},
 				}),

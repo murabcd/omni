@@ -150,6 +150,7 @@ import {
 } from "./lib/tools/registry.js";
 import { createToolServiceClient } from "./lib/tools/tool-service.js";
 import { omniUiCatalogPrompt } from "./lib/ui/catalog.js";
+import { appendMemoryConversation } from "./lib/workspace/conversations.js";
 import { buildWorkspaceDefaults } from "./lib/workspace/defaults.js";
 import {
 	createWorkspaceManager,
@@ -3294,11 +3295,18 @@ export async function createBot(options: CreateBotOptions) {
 			};
 			const recordHistory = (role: "user" | "assistant", text: string) => {
 				if (!workspaceStore) return;
-				void appendHistoryMessage(workspaceStore, workspaceId, sessionKey, {
+				const entry = {
 					timestamp: new Date().toISOString(),
 					role,
 					text,
-				});
+				};
+				void appendHistoryMessage(
+					workspaceStore,
+					workspaceId,
+					sessionKey,
+					entry,
+				);
+				void appendMemoryConversation(workspaceStore, workspaceId, entry);
 			};
 			const generateAgentWithFiles = async (
 				agent: ToolLoopAgent,
@@ -4399,11 +4407,18 @@ export async function createBot(options: CreateBotOptions) {
 			};
 			const recordHistory = (role: "user" | "assistant", text: string) => {
 				if (!workspaceStore) return;
-				void appendHistoryMessage(workspaceStore, workspaceId, sessionKey, {
+				const entry = {
 					timestamp: new Date().toISOString(),
 					role,
 					text,
-				});
+				};
+				void appendHistoryMessage(
+					workspaceStore,
+					workspaceId,
+					sessionKey,
+					entry,
+				);
+				void appendMemoryConversation(workspaceStore, workspaceId, entry);
 			};
 			const docxExtracted = await extractDocxFromFileParts(files);
 			const filesForModel = docxExtracted.files;

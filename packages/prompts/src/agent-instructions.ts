@@ -22,6 +22,8 @@ export type AgentInstructionOptions = {
 	workspaceSnapshot?: {
 		agents?: string;
 		soul?: string;
+		memoryCore?: string;
+		memoryCorePath?: string;
 		memoryToday?: string;
 		memoryYesterday?: string;
 		memoryTodayPath?: string;
@@ -59,6 +61,10 @@ function buildWorkspaceBlock(options: AgentInstructionOptions): string {
 	const blocks: string[] = [];
 	if (snapshot.agents?.trim()) {
 		blocks.push("## AGENTS.md", snapshot.agents.trim(), "");
+	}
+	if (snapshot.memoryCore?.trim()) {
+		const path = snapshot.memoryCorePath ?? "memory/core.md";
+		blocks.push(`## ${path}`, snapshot.memoryCore.trim(), "");
 	}
 	if (snapshot.memoryToday?.trim()) {
 		const path = snapshot.memoryTodayPath ?? "memory/today.md";
@@ -179,7 +185,7 @@ function buildToolSections(options: {
 		options.toolLines.includes("memory_search")
 	) {
 		toolSections.push(
-			"- Use `memory_read` to recall, `memory_append` to store durable facts, and `memory_search` to find older notes.",
+			"- Use `memory_read` to recall, `memory_append` to store durable facts in memory/core.md, and `memory_search` to find older notes (memory/notes.md and daily logs).",
 		);
 	}
 

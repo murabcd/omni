@@ -7,6 +7,7 @@ const DEFAULT_AGENTS = [
 	"",
 	"Rules:",
 	"- Read context from AGENTS.md and SOUL.md.",
+	"- Put durable facts in memory/core.md and details in memory/notes.md.",
 	"- Put current notes in memory/YYYY-MM-DD.md.",
 	"- If you change AGENTS.md or SOUL.md, tell the user.",
 ].join("\n");
